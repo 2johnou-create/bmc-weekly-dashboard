@@ -1,0 +1,10 @@
+dist/
+site.tar.gz
+node_modules/
+.env*
+!.env.example
+.dev.vars*
+.sites-runtime/
+output/
+*.log
+.DS_Store
