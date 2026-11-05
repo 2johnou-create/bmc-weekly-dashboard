@@ -7,8 +7,9 @@
     "build": "node scripts/build.mjs",
     "validate": "node scripts/validate-artifact.mjs",
     "test": "node --test tests/*.test.mjs",
-    "dev": "node scripts/dev.mjs"
+    "dev": "node scripts/dev.mjs",
+    "db:generate": "drizzle-kit generate"
   },
-  "devDependencies": { "esbuild": "0.28.1" },
+  "devDependencies": { "esbuild": "0.28.1", "drizzle-kit": "0.31.10", "drizzle-orm": "0.45.2" },
   "engines": { "node": ">=22.13.0" }
 }

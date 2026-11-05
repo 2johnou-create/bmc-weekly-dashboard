@@ -12,6 +12,14 @@ const [source, manifest] = await Promise.all([
   readFile(manifestPath, "utf8"),
 ]);
 JSON.parse(manifest);
+const hosting = JSON.parse(manifest);
+assert.equal(hosting.d1, "DB", "Shared issue notes require the D1 binding.");
+const journal = JSON.parse(await readFile(resolve(projectRoot, "dist/.openai/drizzle/meta/_journal.json"), "utf8"));
+assert.ok(journal.entries.length, "The issue-note schema migration must be packaged.");
+for (const entry of journal.entries) {
+  const sql = await readFile(resolve(projectRoot, `dist/.openai/drizzle/${entry.tag}.sql`), "utf8");
+  assert.ok(sql.trim());
+}
 
 // A data URL forces ESM parsing even though the generated output has no package.json.
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;

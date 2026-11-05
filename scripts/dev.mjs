@@ -1,11 +1,14 @@
 import { createServer } from "node:http";
 import { randomBytes } from "node:crypto";
 import dns from "node:dns";
+import { mkdir } from "node:fs/promises";
+import { localDatabase } from "./local-db.mjs";
 import worker from "../worker/index.js";
 dns.setDefaultResultOrder("ipv4first");
 
 // Local-only session key changes when this preview restarts.
-const env = { ...process.env, SESSION_SECRET: process.env.SESSION_SECRET || randomBytes(48).toString("base64url") };
+await mkdir(".sites-runtime", { recursive: true });
+const env = { ...process.env, SESSION_SECRET: process.env.SESSION_SECRET || randomBytes(48).toString("base64url"), DB: localDatabase(".sites-runtime/issues.sqlite") };
 const host = "127.0.0.1";
 const port = Number(process.env.PORT || 4182);
 createServer(async (incoming, outgoing) => {
