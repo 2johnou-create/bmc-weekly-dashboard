@@ -75,6 +75,19 @@ test("packing adapter retains measured kg/hour and flags incomplete timing cover
   assert.throws(() => mapPacking({ weekStart: "2026-10-26", report: {} }, week));
 });
 
+test("zero timing coverage leaves packing speed unknown", () => {
+  const result = mapPacking({weekStart:"2026-11-02", now:Date.now(), report:{packedKg:100, timedPackedKg:0, kgPerHour:0, kgPerPackingDay:50, timedCoveragePercent:0}}, "2026-11-02");
+  assert.equal(result.kgPerHour, null);
+  assert.equal(result.kgPerDay, 50);
+  assert.equal(result.status, "partial");
+});
+
+test("unconfirmed wholesale plans leave order totals unknown", () => {
+  const result = mapDispatchOrders({schemaVersion:"1.0",weekStart:"2026-11-02",planStatus:"inherited-plan",wholesale:{orders:null,clients:null},issues:{count:0,items:[]}}, "2026-11-02");
+  assert.equal(result.wholesale.orders, null);
+  assert.match(result.wholesale.note, /Confirm this week's/);
+});
+
 test("delivery metrics require matching weekly summary, preserve untimed orders and provisional counts", () => {
   const payload = { schemaVersion: "1.0", weekStart: week, planStatus: "inherited-plan", sourceUpdatedAt: "2026-11-03T01:00:00Z", wholesale: { orders: 12, clients: 10 }, issues: { count: 1, items: [{ label: "Partial handover", status: "Open" }] }, delivery: { shifts: 3, completedShifts: 2, orders: 8, avgMinutes: null, totalMinutes: null } };
   const result = mapDeliverySummary(payload, week);

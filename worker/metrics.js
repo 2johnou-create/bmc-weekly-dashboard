@@ -189,9 +189,10 @@ export function mapRoasting(coffeePayload, productionPayload, weekStart) {
 export function mapPacking(payload, weekStart) {
   if (payload?.weekStart !== weekStart || !object(payload.report)) throw new Error("Packing rates are unavailable for this week.");
   const report = payload.report;
-  const packedKg = nonnegative(report.packedKg), kgPerHour = nonnegative(report.kgPerHour), kgPerDay = nonnegative(report.kgPerPackingDay), coverage = nonnegative(report.timedCoveragePercent);
+  const packedKg = nonnegative(report.packedKg), coverage = nonnegative(report.timedCoveragePercent);
+  const kgPerHour = coverage === 0 ? null : nonnegative(report.kgPerHour), kgPerDay = nonnegative(report.kgPerPackingDay);
   if (packedKg === null) throw new Error("Packing quantities are unavailable.");
-  return { ...base("stockroom", payload.now, "Hourly rate uses timer-linked kilograms and active time, with breaks excluded. Daily rate uses days with recorded packing." + (coverage !== null && coverage < 100 ? ` ${Math.min(100, coverage)}% of packed kilograms were timed.` : ""), kgPerHour === null || coverage === null || coverage < 100 ? "partial" : "live"), kgPerHour, kgPerDay, packedKg, timedCoveragePercent: coverage === null ? null : Math.min(100, coverage) };
+  return { ...base("stockroom", payload.now, (coverage === 0 ? "No packed kilograms are linked to a timer yet. " : "Hourly rate uses timer-linked kilograms and active time, with breaks excluded. ") + "Daily rate uses days with recorded packing." + (coverage !== null && coverage > 0 && coverage < 100 ? ` ${Math.min(100, coverage)}% of packed kilograms were timed.` : ""), kgPerHour === null || coverage === null || coverage < 100 ? "partial" : "live"), kgPerHour, kgPerDay, packedKg, timedCoveragePercent: coverage === null ? null : Math.min(100, coverage) };
 }
 
 // Accept only a bounded weekly summary, never the broad staff Dispatch API.
@@ -211,6 +212,9 @@ export function mapDispatchOrders(payload, weekStart) {
   if (payload?.schemaVersion !== "1.0" || payload.weekStart !== weekStart || payload.planStatus === "missing" || !object(payload.wholesale)) throw new Error("A matching weekly order summary is unavailable.");
   const count = value => Number.isInteger(value) && value >= 0 ? value : null;
   const orders = count(payload.wholesale.orders), clients = count(payload.wholesale.clients);
+  if ((orders === null || clients === null) && payload.planStatus === "inherited-plan") return {
+    wholesale: unavailable("dispatch", { orders: null, clients: null, value: null, currency: "AUD" }, "Confirm this week's wholesale order import in Dispatch. The carried-forward plan is not a confirmed order total."),
+  };
   if (orders === null || clients === null) throw new Error("Weekly order counts are incomplete.");
   const provisional = payload.planStatus === "inherited-plan" || payload.truncated === true;
   const asOf = payload.sourceUpdatedAt || payload.sourceUpdatedAtUtc;
@@ -260,7 +264,7 @@ export async function collectDashboard({ weekStart, stockroomCookie, password, e
   }
   if (results[5].status === "fulfilled") {
     safeMap(["delivery"], () => { metrics.delivery = mapDeliverySummary(results[5].value, week.start); }, "This feed does not supply matching weekly shifts and timing.");
-    safeMap(["wholesale"], () => Object.assign(metrics, mapDispatchOrders(results[5].value, week.start)), "This feed does not supply matching weekly order counts.");
+    safeMap(["wholesale"], () => Object.assign(metrics, mapDispatchOrders(results[5].value, week.start)), "Confirmed wholesale orders are not available for this week.");
   }
   for (const [id, label, keys, url] of [
     ["stockroom", "Stock Take App", ["nonCoffee", "roasted", "packingRate"], SOURCE_ORIGINS.stockroom],

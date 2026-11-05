@@ -2,6 +2,8 @@
 
 A password-protected weekly operations board for Black Market Coffee. The public page contains only the sign-in interface; business figures are returned after the server verifies the existing Stock Take App password.
 
+[Open the live dashboard](https://bmc-weekly-dashboard.misty-jelly-1931.chatgpt.site)
+
 ## Live sources
 
 | Figure | Source and definition |
