@@ -159,33 +159,6 @@ export function mapDemand(payload, weekStart) {
   return { ...base("green", payload.sourceUpdatedAtUtc || payload.updatedAt, "Entered demand for this week, before forecast buffers. Planned demand is separate from actual roasting." + (invalid ? " Some demand rows need review." : ""), invalid ? "partial" : "live"), kg: invalid === demand.length ? null : rounded(kg) };
 }
 
-export function mapRoasting(coffeePayload, productionPayload, weekStart) {
-  const batches = rows(coffeePayload?.batches, 5000);
-  const end = addDays(weekStart, 7);
-  const byDay = Array.from({ length: 7 }, (_, index) => ({ date: addDays(weekStart, index), kg: 0 }));
-  const days = new Map(byDay.map(day => [day.date, day]));
-  let invalid = 0;
-  for (const batch of batches) {
-    if (!validDate(batch.roastDate) || batch.roastDate < weekStart || batch.roastDate >= end || batch.mergedIntoBatchId || batch.archivedAt) continue;
-    const kg = nonnegative(batch.roastedKg);
-    if (kg === null) invalid++;
-    else days.get(batch.roastDate).kg += kg;
-  }
-  const total = byDay.reduce((sum, day) => sum + day.kg, 0);
-  const daysRoasted = byDay.filter(day => day.kg > 0).length;
-  let note = "Recorded roast batches; archived and merged entries are excluded.";
-  const archivedInWeek = rows(coffeePayload?.archivedBatches || [], 5000).filter(batch => validDate(batch.roastDate) && batch.roastDate >= weekStart && batch.roastDate < end && !batch.mergedIntoBatchId).length;
-  if (archivedInWeek) { invalid++; note += ` ${archivedInWeek} archived roast records also exist for this week, so this total is incomplete.`; }
-  if (productionPayload) {
-    if (productionPayload.weekStart !== weekStart) throw new Error("The production report returned a different week.");
-    const reportTotal = rows(productionPayload.roastRows, 1500).reduce((sum, row) => sum + (nonnegative(row.kilograms) ?? 0), 0);
-    if (Math.abs(reportTotal - total) > 0.02) { invalid++; note += " Roast records changed during refresh; refresh to reconcile."; }
-  }
-  const asOf = latest(batches.map(batch => batch.createdAt));
-  const knownTotal = archivedInWeek && total === 0 ? null : rounded(total);
-  return { roasted: { ...base("stockroom", asOf, note, invalid ? "partial" : "live"), kg: knownTotal }, roastingRate: { ...base("stockroom", asOf, "Kilograms per recorded roasting day; this is output, not kilograms per labour hour." + (archivedInWeek ? " Archived records are excluded; this week's output is incomplete." : invalid ? " Some records need review." : ""), invalid ? "partial" : "live"), weekKg: knownTotal, kgPerDay: daysRoasted > 0 ? rounded(total / daysRoasted) : null, days: archivedInWeek && !daysRoasted ? null : daysRoasted, byDay: byDay.map(day => ({ ...day, kg: knownTotal === null ? null : rounded(day.kg) })) } };
-}
-
 export function mapPacking(payload, weekStart) {
   if (payload?.weekStart !== weekStart || !object(payload.report)) throw new Error("Packing rates are unavailable for this week.");
   const report = payload.report;
@@ -223,31 +196,30 @@ export function mapDispatchOrders(payload, weekStart) {
   };
 }
 
-export async function collectDashboard({ weekStart, stockroomCookie, password, env = {} }) {
+export async function collectDashboard({ weekStart, stockroomCookie, password, env = {}, readProduction }) {
   const now = new Date();
   const week = dashboardWeek(weekStart, now);
   const metrics = {
     demand: unavailable("green", { kg: null }, "Weekly demand is not connected."),
-    roasted: unavailable("stockroom", { kg: null }, "Roast records are unavailable."),
+    roasted: unavailable("Cropster", { kg: null }, "Cropster roast records are unavailable."),
     green: unavailable("green", { kg: null, value: null, currency: "AUD", unpricedLots: null }, "Green stock is unavailable."),
     nonCoffee: unavailable("stockroom", { value: null, itemCount: null, categoryCount: null, categories: [], unpricedItems: null, currency: "AUD" }, "Non-coffee stock is unavailable."),
     wholesale: unavailable("wholesale", { orders: null, clients: null, value: null, currency: "AUD" }, "A confirmed wholesale order ledger is not connected."),
     online: unavailable("online", { orders: null, value: null, currency: "AUD" }, "Choose the online order source."),
     issues: unavailable("issues", { count: null, items: [] }, "Choose the customer issue source."),
-    roastingRate: unavailable("stockroom", { weekKg: null, kgPerDay: null, days: null, byDay: [] }, "Roast records are unavailable."),
+    roastingRate: unavailable("Cropster", { weekKg: null, kgPerDay: null, days: null, byDay: [] }, "Cropster roast records are unavailable."),
     packingRate: unavailable("stockroom", { kgPerHour: null, kgPerDay: null, packedKg: null, timedCoveragePercent: null }, "Packing rates are unavailable."),
     delivery: unavailable("dispatch", { shifts: null, completedShifts: null, orders: null, avgMinutes: null, totalMinutes: null }, "The weekly delivery summary is not connected."),
   };
   const sources = [];
-  const results = await Promise.allSettled([
+  const [inventory, production, packing, green, dispatch] = await Promise.allSettled([
     fetchSourceJson(`${SOURCE_ORIGINS.stockroom}/api/inventory`, { Cookie: stockroomCookie || "", Origin: SOURCE_ORIGINS.stockroom }),
-    fetchSourceJson(`${SOURCE_ORIGINS.stockroom}/api/coffee`, { Cookie: stockroomCookie || "", Origin: SOURCE_ORIGINS.stockroom }),
-    fetchSourceJson(`${SOURCE_ORIGINS.stockroom}/api/coffee/production?week=${week.start}&month=${week.start.slice(0, 7)}`, { Cookie: stockroomCookie || "", Origin: SOURCE_ORIGINS.stockroom }),
+    readProduction?.({ weekStart: week.start, env, now }),
     fetchSourceJson(`${SOURCE_ORIGINS.stockroom}/api/coffee/packing-timer?week=${week.start}`, { Cookie: stockroomCookie || "", Origin: SOURCE_ORIGINS.stockroom }),
     fetchSourceJson(`${SOURCE_ORIGINS.green}/api/roaster`, { "x-green-password": env.SOURCE_GREEN_PASSWORD || password || "" }),
     env.DASHBOARD_DISPATCH_URL && env.DISPATCH_READ_TOKEN ? fetchSourceJson(`${env.DASHBOARD_DISPATCH_URL}${env.DASHBOARD_DISPATCH_URL.includes("?") ? "&" : "?"}week=${week.start}`, { Authorization: `Bearer ${env.DISPATCH_READ_TOKEN}` }) : Promise.reject(new Error("The weekly delivery summary is not connected.")),
   ]);
-  if (results[0].status === "rejected" && [401, 403].includes(results[0].reason?.status)) {
+  if (inventory.status === "rejected" && [401, 403].includes(inventory.reason?.status)) {
     const error = new Error("Your Stock Take session has expired. Sign in again.");
     error.status = 401;
     throw error;
@@ -255,19 +227,32 @@ export async function collectDashboard({ weekStart, stockroomCookie, password, e
   const safeMap = (keys, action, failureNote) => {
     try { action(); } catch { for (const key of keys) metrics[key] = { ...metrics[key], status: "unavailable", note: failureNote }; }
   };
-  if (results[0].status === "fulfilled") safeMap(["nonCoffee"], () => { metrics.nonCoffee = mapNonCoffee(results[0].value); }, "The inventory source returned incomplete data.");
-  if (results[1].status === "fulfilled") safeMap(["roasted", "roastingRate"], () => Object.assign(metrics, mapRoasting(results[1].value, results[2].status === "fulfilled" ? results[2].value : null, week.start)), "The roast source returned incomplete data.");
-  if (results[3].status === "fulfilled") safeMap(["packingRate"], () => { metrics.packingRate = mapPacking(results[3].value, week.start); }, "The packing source returned incomplete data.");
-  if (results[4].status === "fulfilled") {
-    safeMap(["green"], () => { metrics.green = mapGreen(results[4].value); }, "The green stock source returned incomplete data.");
-    safeMap(["demand"], () => { metrics.demand = mapDemand(results[4].value, week.start); }, "The demand source returned incomplete data.");
+  if (inventory.status === "fulfilled") safeMap(["nonCoffee"], () => { metrics.nonCoffee = mapNonCoffee(inventory.value); }, "The inventory source returned incomplete data.");
+  if (production.status === "fulfilled" && production.value?.source === "Cropster") {
+    const { roastedKg, byDay, days, asOf, note } = production.value;
+    const kg = nonnegative(roastedKg);
+    const source = base("Cropster", asOf, note, kg === null ? "unavailable" : "live");
+    metrics.roasted = { ...source, kg };
+    metrics.roastingRate = {
+      ...source,
+      weekKg: kg,
+      kgPerDay: kg !== null && days > 0 ? rounded(kg / days) : null,
+      days: days ?? null,
+      byDay: byDay ?? [],
+    };
   }
-  if (results[5].status === "fulfilled") {
-    safeMap(["delivery"], () => { metrics.delivery = mapDeliverySummary(results[5].value, week.start); }, "This feed does not supply matching weekly shifts and timing.");
-    safeMap(["wholesale"], () => Object.assign(metrics, mapDispatchOrders(results[5].value, week.start)), "Confirmed wholesale orders are not available for this week.");
+  if (packing.status === "fulfilled") safeMap(["packingRate"], () => { metrics.packingRate = mapPacking(packing.value, week.start); }, "The packing source returned incomplete data.");
+  if (green.status === "fulfilled") {
+    safeMap(["green"], () => { metrics.green = mapGreen(green.value); }, "The green stock source returned incomplete data.");
+    safeMap(["demand"], () => { metrics.demand = mapDemand(green.value, week.start); }, "The demand source returned incomplete data.");
+  }
+  if (dispatch.status === "fulfilled") {
+    safeMap(["delivery"], () => { metrics.delivery = mapDeliverySummary(dispatch.value, week.start); }, "This feed does not supply matching weekly shifts and timing.");
+    safeMap(["wholesale"], () => Object.assign(metrics, mapDispatchOrders(dispatch.value, week.start)), "Confirmed wholesale orders are not available for this week.");
   }
   for (const [id, label, keys, url] of [
-    ["stockroom", "Stock Take App", ["nonCoffee", "roasted", "packingRate"], SOURCE_ORIGINS.stockroom],
+    ["cropster", "Cropster", ["roasted", "roastingRate"], null],
+    ["stockroom", "Stock Take App", ["nonCoffee", "packingRate"], SOURCE_ORIGINS.stockroom],
     ["green", "Green Forecast", ["green", "demand"], SOURCE_ORIGINS.green],
     ["dispatch", "Dispatch", ["delivery"], SOURCE_ORIGINS.dispatch],
     ["wholesale", "Wholesale delivery jobs", ["wholesale"], SOURCE_ORIGINS.dispatch],

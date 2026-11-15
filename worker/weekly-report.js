@@ -1,4 +1,5 @@
-import { addDays, dashboardWeek, fetchSourceJson, mapNonCoffee, mapRoasting, SOURCE_ORIGINS } from "./metrics.js";
+import { addDays, dashboardWeek, fetchSourceJson, mapNonCoffee, SOURCE_ORIGINS } from "./metrics.js";
+import { readCropsterProduction, unavailableCropsterProduction } from "./cropster-production.js";
 import { readGreenBuy } from "./green-buy.js";
 import { readStockHistory, stockMonthEnds } from "./stock-history.js";
 
@@ -6,36 +7,6 @@ const dispatchPath = "/api/integrations/dashboard/weekly";
 
 function settledValue(result, fallback = null) {
   return result.status === "fulfilled" ? result.value : fallback;
-}
-
-function completedRoast(coffee, weekStart) {
-  if (!coffee) return null;
-  try {
-    return mapRoasting(coffee, null, weekStart).roasted;
-  } catch {
-    return null;
-  }
-}
-
-export function productionFromStockroom(coffee, weekStart) {
-  const current = completedRoast(coffee, weekStart);
-  const prior = completedRoast(coffee, addDays(weekStart, -7));
-  const change = current?.status === "live" && prior?.status === "live" && prior.kg > 0
-    ? Math.round((current.kg - prior.kg) * 1000 / prior.kg) / 10
-    : null;
-  return {
-    status: current?.kg == null ? "unavailable" : "partial",
-    source: "Stockroom roast records",
-    totalKg: null,
-    roastedKg: current?.kg ?? null,
-    scheduledKg: null,
-    previousKg: null,
-    previousRoastedKg: prior?.kg ?? null,
-    changePercent: null,
-    roastedChangePercent: change,
-    note: "Roasted figures are from Stockroom. Cropster schedule data, including Friday, is pending.",
-    asOf: current?.asOf ?? null,
-  };
 }
 
 async function readDispatch(weekStart, env, fetcher) {
@@ -91,14 +62,14 @@ export async function collectWeeklyReport({ weekStart, stockroomCookie, env, now
   const stockroomHeaders = { Cookie: stockroomCookie, Origin: SOURCE_ORIGINS.stockroom };
   // Check Stockroom access before reading other business data.
   const inventory = await fetchSourceJson(SOURCE_ORIGINS.stockroom + "/api/inventory", stockroomHeaders, fetcher);
-  const [coffee, green, history, dispatch, previousDispatch] = await Promise.allSettled([
-    fetchSourceJson(SOURCE_ORIGINS.stockroom + "/api/coffee", stockroomHeaders, fetcher),
+  const [cropster, green, history, dispatch, previousDispatch] = await Promise.allSettled([
+    readCropsterProduction({ weekStart: week.start, env, now, fetcher }),
     readGreenBuy({ weekStart: week.start, env, now, fetcher }),
     readStockHistory({ inventory, stockroomCookie, now, fetcher }),
     readDispatch(week.start, env, fetcher),
     readDispatch(previousWeek, env, fetcher),
   ]);
-  const production = productionFromStockroom(settledValue(coffee), week.start);
+  const production = settledValue(cropster, unavailableCropsterProduction());
   const { greenBuy, greenForecast } = settledValue(green, {
     greenBuy: { status: "unavailable", value: null, kg: null, orders: null, note: "The Green Forecast purchase register is unavailable." },
     greenForecast: { status: "unavailable", value: null, month: null, note: "The Green Forecast purchase plan is unavailable." },
@@ -112,7 +83,7 @@ export async function collectWeeklyReport({ weekStart, stockroomCookie, env, now
     generatedAt: now.toISOString(),
     metrics: { production, greenBuy, greenForecast, stock, wholesale },
     sources: [
-      { label: "Production", note: "Completed kilograms come from recorded Stockroom roasts. Cropster Schedule access is pending." },
+      { label: "Cropster", note: production.note },
       { label: "Green buy", note: "Green Forecast purchase register and monthly purchase forecast." },
       { label: "Stockroom", note: "Current value covers the non-coffee inventory. " + stock.historyNote },
       ...stock.history.filter(month => month.status === "partial" || month.status === "unavailable")

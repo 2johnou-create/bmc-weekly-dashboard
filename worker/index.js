@@ -1,6 +1,7 @@
 import { page } from "./ui.js";
 import { weeklyPage } from "./weekly-ui.js";
 import { collectWeeklyReport } from "./weekly-report.js";
+import { readCropsterProduction } from "./cropster-production.js";
 import { collectDashboard, dashboardWeek, fetchSourceJson, SOURCE_ORIGINS } from "./metrics.js";
 import { readWeeklyDemand } from "./demand.js";
 import { HttpError, readSession, signIn, signOut, clearCookie, requireOrigin } from "./auth.js";
@@ -91,7 +92,7 @@ export default {
         try { week = dashboardWeek(url.searchParams.get("week") || undefined); }
         catch { return json({ error: "Choose this week or an earlier Monday." }, 400); }
         const [data, demand, notes, online] = await Promise.all([
-          collectDashboard({ weekStart: week.start, stockroomCookie: session.stockroomCookie, env }),
+          collectDashboard({ weekStart: week.start, stockroomCookie: session.stockroomCookie, env, readProduction: readCropsterProduction }),
           readWeeklyDemand(week.start, env),
           listIssues(env.DB).then(issuesMetric).catch(notesUnavailable),
           readOnlineOrders(week.start, env).catch(onlineUnavailable),

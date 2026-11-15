@@ -8,7 +8,7 @@ The landing page shows the weekly report. The previous operations view and saved
 
 | Weekly report | Figure |
 | --- | --- |
-| Production | Recorded Stockroom roast output and the previous week's roasted kilograms. The comparison uses the previous full Sydney week. Combined production is pending Cropster Schedule access. |
+| Production | Completed roast output from Cropster for the selected Sydney week and the previous week. Combined production is pending Cropster Schedule access. |
 | Green buy | Purchase register entries grouped by supplier order date. |
 | Monthly forecast green buy spend | Green Forecast's projected purchase value for the current order month. The forecast starts in its current forecast week. |
 | Current holding stock | Non-coffee stock value and the last three completed Sydney month ends. Historical figures use rolled-back quantities and current unit costs. |
@@ -19,13 +19,13 @@ The landing page shows the weekly report. The previous operations view and saved
 | Figure | Source and definition |
 | --- | --- |
 | Weekly demand | Exact-week roast tally from the existing public 2026 Drive folder. The workbook's internal Monday and totals must agree. Copied channel-reference dates are flagged. |
-| Weekly roasted | Active, unmerged Stockroom roast batches dated within the selected Sydney week. |
+| Weekly roasted | Completed Cropster roasted lots dated within the selected Sydney week. |
 | Green stock | Current physical Green Forecast lots: kilograms and remaining kg × price/kg. Supplier-held contracts are excluded. |
 | Non-coffee stock | Current Stockroom inventory: counted stock × pieces per stock unit × unit cost, grouped by category. Missing prices make the known value partial. |
 | Wholesale orders | Confirmed Dispatch delivery jobs, excluding follow-up jobs. This is partial coverage: collection/postal orders and sales values require the main order ledger. |
 | Online orders | CSV exports in the linked Dashboard Folder, counted by unique order number and Sydney placement week. Duplicate line items/files count once; only consistent AUD order totals are summed. |
 | Customer order issues | Notes entered in this dashboard, with current open counts across all weeks. Staff can add, edit, resolve and reopen notes; resolved notes remain available. |
-| Roasting rate | Recorded kg/week and kg per day with recorded roast output; not labour productivity. |
+| Roasting rate | Cropster completed kg per week and per day with recorded roast output. |
 | Packing rate | Stockroom's timer-linked kg per active hour, excluding breaks; kg per day with packing output. Timing coverage is shown. |
 | Delivery | Actual recorded runs and completed deliveries, with measured start-to-handover time excluding recorded breaks. Untimed orders are excluded from the average. |
 
@@ -79,7 +79,7 @@ pnpm validate
 pnpm dev
 ```
 
-Configure `SESSION_SECRET`, `SOURCE_GREEN_PASSWORD`, `DISPATCH_READ_TOKEN` and `DASHBOARD_DISPATCH_URL` in the hosting runtime. Local preview generates a temporary session key when none is supplied. It needs source credentials in its process environment for non-Stockroom feeds. Never commit credentials, cookies, exported operational data or `.env` files.
+Configure `SESSION_SECRET`, `SOURCE_GREEN_PASSWORD`, `DISPATCH_READ_TOKEN` and `DASHBOARD_DISPATCH_URL` in the hosting runtime. For completed roasts, add `CROPSTER_CLIENT_ID` and `CROPSTER_CLIENT_SECRET` from a BMC Cropster service account with the `inventory.roast` scope. The report leaves roast figures blank until the connection is available. The current API connection reads completed roasted lots. Scheduled production requires a Cropster Schedule feed. Local preview generates a temporary session key when none is supplied. Never commit credentials, cookies, exported operational data or `.env` files.
 
 `worker/index.js` handles routes; `issues.js` stores current issue notes; `online-orders.js` reads and summarises the linked order exports; `auth.js` verifies sign-in and seals sessions; `metrics.js` aggregates app reads; `demand.js` discovers and validates weekly workbooks; `ui.js` contains the self-contained interface. The build bundles these modules and vendored MIT-licensed fflate into one ESM Worker and includes the generated SQL migrations under `dist/.openai/drizzle`. Schema changes are defined in `db/schema.js`; run `pnpm db:generate` and review the generated migration before publishing. The local preview applies migrations to `.sites-runtime/issues.sqlite`; hosted Sites applies them to D1. `vendor/fflate.LICENSE` retains the upstream license.
 

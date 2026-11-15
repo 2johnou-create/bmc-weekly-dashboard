@@ -2,23 +2,27 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import worker from "../worker/index.js";
 import { sealSession } from "../worker/auth.js";
-import { collectWeeklyReport, productionFromStockroom, wholesaleDeliveryComparison } from "../worker/weekly-report.js";
+import { collectWeeklyReport, wholesaleDeliveryComparison } from "../worker/weekly-report.js";
 
 const week = "2026-11-09";
 const now = new Date("2026-11-15T02:00:00Z");
 
-test("production includes Friday and only compares like-for-like recorded roast totals", () => {
-  const production = productionFromStockroom({ batches: [
-    { roastDate: "2026-11-06", roastedKg: 80 },
-    { roastDate: "2026-11-09", roastedKg: 50 },
-    { roastDate: "2026-11-13", roastedKg: 70 },
-    { roastDate: "2026-11-16", roastedKg: 100 },
-  ] }, week);
-  assert.equal(production.roastedKg, 120);
-  assert.equal(production.previousRoastedKg, 80);
-  assert.equal(production.roastedChangePercent, 50);
+test("the report leaves production blank when Cropster is disconnected", async () => {
+  const reads = [];
+  const report = await collectWeeklyReport({ weekStart: week, stockroomCookie: "stockroom-test-session", env: {}, now, fetcher: async address => {
+    const path = new URL(address).pathname;
+    reads.push(path);
+    if (path === "/api/inventory") return Response.json({ items: [] });
+    return Response.json({}, { status: 503 });
+  } });
+  const production = report.metrics.production;
+  assert.equal(production.source, "Cropster");
+  assert.equal(production.roastedKg, null);
+  assert.equal(production.previousRoastedKg, null);
+  assert.equal(production.roastedChangePercent, null);
   assert.equal(production.totalKg, null);
   assert.equal(production.changePercent, null);
+  assert.equal(reads.some(path => path === "/api/coffee" || path === "/api/coffee/production"), false);
 });
 
 test("Dispatch handovers never populate the confirmed order fields", () => {

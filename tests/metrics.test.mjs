@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { dashboardWeek, sydneyDate, mapNonCoffee, mapGreen, mapDemand, mapRoasting, mapPacking, mapDeliverySummary, mapDispatchOrders, fetchSourceJson, collectDashboard, SOURCE_ORIGINS } from "../worker/metrics.js";
+import { dashboardWeek, sydneyDate, mapNonCoffee, mapGreen, mapDemand, mapPacking, mapDeliverySummary, mapDispatchOrders, fetchSourceJson, collectDashboard, SOURCE_ORIGINS } from "../worker/metrics.js";
 
 const week = "2026-11-02";
 const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
@@ -43,28 +43,6 @@ test("demand uses only the exact entered week and keeps planning separate from r
   assert.equal(mapDemand(payload, "2026-11-09").kg, null);
   assert.equal(mapDemand(payload, "2026-11-09").status, "unavailable");
   assert.equal(mapDemand({ state: { recipes: [], demand: payload.state.demand } }, week).kg, null);
-});
-
-test("roast output uses active batch dates and divides by recorded roasting days", () => {
-  const coffee = { batches: [
-    { roastDate: week, roastedKg: 100, createdAt: 1793577600000 },
-    { roastDate: "2026-11-04", roastedKg: 50 },
-    { roastDate: "2026-10-30", roastedKg: 900 },
-    { roastDate: week, roastedKg: 400, mergedIntoBatchId: "combined" },
-  ] };
-  const result = mapRoasting(coffee, { weekStart: week, roastRows: [{ kilograms: 150 }] }, week);
-  assert.equal(result.roasted.kg, 150);
-  assert.equal(result.roastingRate.kgPerDay, 75);
-  assert.equal(result.roastingRate.days, 2);
-  assert.equal(result.roastingRate.byDay.length, 7);
-  assert.equal(mapRoasting(coffee, { weekStart: week, roastRows: [{ kilograms: 180 }] }, week).roasted.status, "partial");
-});
-
-test("archived-only historical roasting does not become a false zero", () => {
-  const result = mapRoasting({ batches: [], archivedBatches: [{ roastDate: "2026-09-01", roastedKg: 80 }] }, { weekStart: "2026-08-31", roastRows: [] }, "2026-08-31");
-  assert.equal(result.roasted.status, "partial");
-  assert.equal(result.roasted.kg, null);
-  assert.equal(result.roastingRate.kgPerDay, null);
 });
 
 test("packing adapter retains measured kg/hour and flags incomplete timing coverage", () => {
@@ -123,10 +101,12 @@ test("revoked Stock Take sessions fail the entire dashboard even when Green can 
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test("independent source failures remain unavailable and never become false zeroes", async () => {
+test("source failures remain unavailable and the operations dashboard reads roast output only from Cropster", async () => {
   const originalFetch = globalThis.fetch;
+  const paths = [];
   globalThis.fetch = async url => {
     const path = new URL(url).pathname;
+    paths.push(path);
     if (path === "/api/inventory") return json({ items: [{ category: "Packaging", stock: 4, unitCost: 2, stockUnitQuantity: 1 }] });
     return json({}, 503);
   };
@@ -134,6 +114,8 @@ test("independent source failures remain unavailable and never become false zero
     const result = await collectDashboard({ weekStart: week, stockroomCookie: "bmc_stockroom_session=valid", env: {} });
     assert.equal(result.metrics.nonCoffee.value, 8);
     assert.equal(result.metrics.roasted.kg, null);
+    assert.equal(result.metrics.roasted.source, "Cropster");
+    assert.equal(result.metrics.roastingRate.weekKg, null);
     assert.equal(result.metrics.delivery.shifts, null);
     assert.equal(result.metrics.online.orders, null);
     assert.equal(result.metrics.issues.count, null);
@@ -141,5 +123,13 @@ test("independent source failures remain unavailable and never become false zero
     assert.equal(result.metrics.online.note, "Choose the online order source.");
     assert.equal(result.metrics.demand.status, "unavailable");
     assert.equal(JSON.stringify(result).includes("bmc_stockroom_session"), false);
+    assert.equal(paths.some(path => path === "/api/coffee" || path === "/api/coffee/production"), false);
+    const connected = await collectDashboard({
+      weekStart: week,
+      stockroomCookie: "bmc_stockroom_session=valid",
+      readProduction: async () => ({ source: "Cropster", roastedKg: 120, days: 2, byDay: [] }),
+    });
+    assert.equal(connected.metrics.roasted.kg, 120);
+    assert.equal(connected.metrics.roastingRate.kgPerDay, 60);
   } finally { globalThis.fetch = originalFetch; }
 });
