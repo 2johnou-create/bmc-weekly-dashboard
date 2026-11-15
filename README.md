@@ -4,7 +4,17 @@ A password-protected weekly operations board for Black Market Coffee. The public
 
 [Open the live dashboard](https://bmc-weekly-dashboard.misty-jelly-1931.chatgpt.site)
 
-## Live sources
+The landing page shows the weekly report. The previous operations view and saved customer issue notes are under **Operations details and issue notes**.
+
+| Weekly report | Figure |
+| --- | --- |
+| Production | Recorded Stockroom roast output and the previous week's roasted kilograms. The comparison uses the previous full Sydney week. Combined production is pending Cropster Schedule access. |
+| Green buy | Purchase register entries grouped by supplier order date. |
+| Monthly forecast green buy spend | Green Forecast's projected purchase value for the current order month. The forecast starts in its current forecast week. |
+| Current holding stock | Non-coffee stock value and the last three completed Sydney month ends. Historical figures use rolled-back quantities and current unit costs. |
+| Wholesale delivery orders | Confirmed Dispatch delivery orders for both weeks. Recorded handovers are shown when an order plan awaits confirmation. |
+
+## Operations details sources
 
 | Figure | Source and definition |
 | --- | --- |

@@ -1,4 +1,6 @@
 import { page } from "./ui.js";
+import { weeklyPage } from "./weekly-ui.js";
+import { collectWeeklyReport } from "./weekly-report.js";
 import { collectDashboard, dashboardWeek, fetchSourceJson, SOURCE_ORIGINS } from "./metrics.js";
 import { readWeeklyDemand } from "./demand.js";
 import { HttpError, readSession, signIn, signOut, clearCookie, requireOrigin } from "./auth.js";
@@ -39,24 +41,27 @@ async function activeSession(request, env) {
 }
 function notesUnavailable() { return { status: "unavailable", source: "Entered issue notes", asOf: null, note: "Customer issue notes could not be loaded. Please try again.", count: null, items: [] }; }
 function onlineUnavailable() { return { status: "unavailable", source: "Online orders folder", asOf: null, note: "The online orders folder could not be read. Please try again.", orders: null, value: null, currency: "AUD", url: ONLINE_ORDERS_FOLDER_URL }; }
-let pageHeaders;
-async function htmlHeaders() {
-  if (!pageHeaders) {
-    const scripts = [...page.matchAll(/<script>([\s\S]*?)<\/script>/g)];
+const pageHeaders = new Map();
+async function htmlHeaders(document) {
+  if (!pageHeaders.has(document)) {
+    const scripts = [...document.matchAll(/<script>([\s\S]*?)<\/script>/g)];
     const hashes = await Promise.all(scripts.map(async ([, script]) => {
       const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(script)));
       return `'sha256-${btoa(String.fromCharCode(...bytes))}'`;
     }));
-    pageHeaders = { ...commonHeaders, "Content-Type": "text/html; charset=utf-8", "Content-Security-Policy": `default-src 'self'; script-src ${hashes.join(" ")}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'self' https://chatgpt.com https://*.chatgpt.com` };
+    pageHeaders.set(document, { ...commonHeaders, "Content-Type": "text/html; charset=utf-8", "Content-Security-Policy": `default-src 'self'; script-src ${hashes.join(" ")}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'self' https://chatgpt.com https://*.chatgpt.com` });
   }
-  return pageHeaders;
+  return pageHeaders.get(document);
 }
 
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     try {
-      if (url.pathname === "/" && ["GET", "HEAD"].includes(request.method)) return new Response(request.method === "HEAD" ? null : page, { headers: await htmlHeaders() });
+      if (["/", "/details"].includes(url.pathname) && ["GET", "HEAD"].includes(request.method)) {
+        const document = url.pathname === "/" ? weeklyPage : page;
+        return new Response(request.method === "HEAD" ? null : document, { headers: await htmlHeaders(document) });
+      }
       if (url.pathname === "/favicon.ico") return new Response(null, { status: 204, headers: commonHeaders });
       if (url.pathname === "/robots.txt" && request.method === "GET") return new Response("User-agent: *\nDisallow: /\n", { headers: { ...commonHeaders, "Content-Type": "text/plain" } });
       if (url.pathname === "/online-orders-template.csv" && request.method === "GET") return new Response(ONLINE_ORDERS_CSV_HEADERS, { headers: { ...commonHeaders, "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": 'attachment; filename="online-orders-template.csv"' } });
@@ -97,6 +102,20 @@ export default {
         data.sources = data.sources.map(source => source.id === "green" ? { ...source, status: data.metrics.green.status, note: data.metrics.green.note } : source.id === "issues" ? { id: "issues", label: "Customer issue notes", status: notes.status, asOf: notes.asOf, note: notes.note, url: null } : source.id === "online" ? { id: "online", label: "Online orders folder", status: online.status, asOf: online.asOf, note: online.note, url: ONLINE_ORDERS_FOLDER_URL } : source);
         data.sources.unshift({ id: "demand", label: "Weekly roast tally", status: demand.status, asOf: demand.asOf, note: demand.note, url: demand.url || null });
         return json(data);
+      }
+      if (url.pathname === "/api/weekly-report") {
+        if (request.method !== "GET") return json({ error: "Method not allowed." }, 405, { Allow: "GET" });
+        const session = await readSession(request, env);
+        if (!session) throw new HttpError("Sign in with your Stock Take App password.", 401);
+        let week;
+        try { week = dashboardWeek(url.searchParams.get("week") || undefined); }
+        catch { throw new HttpError("Choose this week or an earlier Monday."); }
+        try {
+          return json(await collectWeeklyReport({ weekStart: week.start, stockroomCookie: session.stockroomCookie, env }));
+        } catch (error) {
+          if ([401, 403].includes(error?.status)) throw new HttpError("Your Stockroom session has ended. Sign in again.", 401);
+          throw new HttpError("Stockroom could not verify your access. Try Refresh.", 503);
+        }
       }
       return json({ error: "Not found." }, 404);
     } catch (error) {

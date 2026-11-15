@@ -10,7 +10,7 @@ const normalize = value => value.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
 const source = "Online orders folder";
 const noData = note => ({ status: "unavailable", orders: null, value: null, currency: "AUD", source, asOf: null, note, url: ONLINE_ORDERS_FOLDER_URL });
 
-function parseCsv(text) {
+export function parseCsv(text) {
   if (typeof text !== "string" || text.length > MAX_BYTES || text.includes("\0")) throw new Error("CSV is not supported.");
   const rows = [], row = [];
   let cell = "", quoted = false, closed = false;
