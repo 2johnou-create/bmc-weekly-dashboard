@@ -7,16 +7,17 @@ const ID = "test_current_tally_123456789";
 const MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const inline = (ref, value) => `<c r="${ref}" t="inlineStr"><is><t>${value}</t></is></c>`;
 const numeric = (ref, value, formula = "") => `<c r="${ref}">${formula ? `<f>${formula}</f>` : ""}<v>${value}</v></c>`;
-function fixture({ serial = 46328, plan = 1255.75, tally = 1255.75, single = 40.25, olderNotes = false, omitTotal = false, shared = false, extraFiles = {} } = {}) {
+function fixture({ serial = 46328, dateText = null, plan = 1255.75, tally = 1255.75, single = 40.25, olderNotes = false, omitTotal = false, shared = false, extraFiles = {} } = {}) {
   const label = shared ? '<c r="B2" t="s"><v>0</v></c>' : inline("B2", "Week commencing:");
-  const roastTally = `<worksheet><sheetData>${label}${numeric("C2", serial)}${inline("B41", "BLEND TOTAL")}${omitTotal ? "" : numeric("J41", tally - single)}${inline("B67", "SINGLE ORIGIN TOTAL")}${omitTotal ? "" : numeric("J67", single)}${olderNotes ? inline("B76", "* Online: retail sales 5–11 Oct, subscriptions excluded.") : ""}</sheetData></worksheet>`;
+  const date = dateText === null ? numeric("C2", serial) : '<c r="C2" t="s"><v>1</v></c>';
+  const roastTally = `<worksheet><sheetData>${label}${date}${inline("B41", "BLEND TOTAL")}${omitTotal ? "" : numeric("J41", tally - single)}${inline("B67", "SINGLE ORIGIN TOTAL")}${omitTotal ? "" : numeric("J67", single)}${olderNotes ? inline("B76", "* Online: retail sales 5–11 Oct, subscriptions excluded.") : ""}</sheetData></worksheet>`;
   const roastPlan = `<worksheet><sheetData>${inline("B4", "Blend / Origin")}${inline("C4", "Demand (kg)&#10;from tally")}${inline("B5", "Liberty")}${numeric("C5", plan - single)}${inline("B6", "Single origin")}${numeric("C6", single)}${omitTotal ? "" : numeric("C17", plan, "SUM(C5:C16)")}</sheetData></worksheet>`;
   const files = {
     "xl/workbook.xml": '<workbook xmlns:r="relationships"><sheets><sheet name="1. Roast Tally" sheetId="1" r:id="rId1"/><sheet name="3. Roast Planning" sheetId="2" r:id="rId2"/></sheets></workbook>',
     "xl/_rels/workbook.xml.rels": '<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Target="/xl/worksheets/sheet2.xml"/></Relationships>',
     "xl/worksheets/sheet1.xml": roastTally,
     "xl/worksheets/sheet2.xml": roastPlan,
-    ...(shared ? { "xl/sharedStrings.xml": '<sst><si><r><t>Week </t></r><r><t>commencing:</t></r></si></sst>' } : {}),
+    ...(shared || dateText !== null ? { "xl/sharedStrings.xml": `<sst><si><r><t>Week </t></r><r><t>commencing:</t></r></si><si><t>${dateText || ""}</t></si></sst>` } : {}),
     ...extraFiles,
   };
   return zipSync(Object.fromEntries(Object.entries(files).map(([path, text]) => [path, strToU8(text)])));
@@ -67,6 +68,13 @@ test("a matching filename cannot bypass the workbook's internal week", async () 
   const result = await readWeeklyDemand("2026-11-02", { fetch: fetcher });
   assert.equal(result.status, "unavailable");
   assert.equal(result.kg, null);
+  assert.match(result.note, /date differs from its filename/);
+  assert.ok(result.url.endsWith(`/${ID}/edit`));
+});
+
+test("accepts a verified written Monday and rejects a copied date", () => {
+  assert.equal(parseWeeklyDemandWorkbook(fixture({ dateText: "Monday 2 November 2026" }), "2026-11-02").kg, 1255.75);
+  assert.throws(() => parseWeeklyDemandWorkbook(fixture({ dateText: "Monday 19 October 2026" }), "2026-11-02"), /different week/);
 });
 
 test("does not treat missing or inconsistent totals as demand", () => {

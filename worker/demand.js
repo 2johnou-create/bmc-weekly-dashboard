@@ -6,6 +6,12 @@ const MAX_BYTES = 2_000_000;
 const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
 const cache = new WeakMap();
 
+class TallyWeekMismatch extends Error {
+  constructor() {
+    super("Workbook belongs to a different week.");
+  }
+}
+
 function xmlText(value = "") {
   return value.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (entity, key) => {
     const names = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
@@ -100,8 +106,13 @@ function excelDate(value, date1904) {
     if (serial < 1000 || serial > 100000) return null;
     return new Date(Date.parse(date1904 ? "1904-01-01T00:00:00Z" : "1899-12-30T00:00:00Z") + serial * 86400000).toISOString().slice(0, 10);
   }
-  const match = value.match(/^(\d{4}-\d{2}-\d{2})(?:T00:00:00(?:\.000)?Z)?$/);
-  return match && new Date(`${match[1]}T00:00:00Z`).toISOString().slice(0, 10) === match[1] ? match[1] : null;
+  const text = value.trim();
+  const iso = text.match(/^(\d{4}-\d{2}-\d{2})(?:T00:00:00(?:\.000)?Z)?$/)?.[1];
+  const written = text.match(/^Monday\s+(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(20\d{2})$/i);
+  const date = iso || (written && `${written[3]}-${String(MONTHS.indexOf(written[2].slice(0, 3).toLowerCase()) + 1).padStart(2, "0")}-${written[1].padStart(2, "0")}`);
+  if (!date) return null;
+  const parsed = new Date(`${date}T00:00:00Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === date ? date : null;
 }
 function planningTotal(sheet) {
   if (!sheet) return null;
@@ -156,7 +167,8 @@ export function parseWeeklyDemandWorkbook(bytes, weekStart) {
   const tally = sheets.get("1. Roast Tally");
   if (!tally || !/week commencing/i.test(tally.get("B2")?.value || "")) throw new Error("Workbook week is missing.");
   const actualWeek = excelDate(tally.get("C2")?.value, /<workbookPr\b[^>]*date1904=["'](?:1|true)["']/i.test(workbook));
-  if (actualWeek !== weekStart) throw new Error("Workbook belongs to a different week.");
+  if (!actualWeek) throw new Error("Workbook week is missing or invalid.");
+  if (actualWeek !== weekStart) throw new TallyWeekMismatch();
   const plan = planningTotal(sheets.get("3. Roast Planning")), total = tallyTotal(tally);
   if (plan !== null && total !== null && Math.abs(plan - total) > 0.02) throw new Error("Demand totals disagree.");
   const kg = plan ?? total;
@@ -218,6 +230,7 @@ export async function readWeeklyDemand(weekStart, env = {}) {
   if (cached && now - cached.time < 55_000) return { ...cached.value };
   const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 16_000);
   let folderFailed = false, candidates = [];
+  let wrongWeekFile;
   try {
     try { candidates = parseDriveFolderCandidates(strFromU8(await readBytes(FOLDER_URL, fetcher, controller.signal)), weekStart); }
     catch { folderFailed = true; }
@@ -231,8 +244,15 @@ export async function readWeeklyDemand(weekStart, env = {}) {
         if (entries.size >= 8) entries.delete(entries.keys().next().value);
         entries.set(weekStart, { time: now, value });
         return { ...value };
-      } catch { /* Try another bounded candidate; an old or malformed file is never a zero. */ }
+      } catch (error) {
+        if (error instanceof TallyWeekMismatch && candidate.date === weekStart && !wrongWeekFile) wrongWeekFile = candidate;
+      }
     }
+    if (wrongWeekFile) return {
+      ...unavailable("The roast tally’s Week commencing date differs from its filename. Check the date inside the workbook."),
+      weekMismatch: true,
+      url: `https://docs.google.com/spreadsheets/d/${wrongWeekFile.id}/edit`,
+    };
     return unavailable(folderFailed ? "The roast tally could not be reached. Try refreshing." : "No readable roast tally with the matching internal week was found. Add this week's tally to the shared roast folder.");
   } finally { clearTimeout(timer); }
 }

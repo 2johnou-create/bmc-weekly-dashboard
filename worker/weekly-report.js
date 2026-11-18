@@ -1,7 +1,6 @@
-import { addDays, dashboardWeek, fetchSourceJson, mapNonCoffee, SOURCE_ORIGINS } from "./metrics.js";
+import { addDays, dashboardWeek, fetchSourceJson, isoTimestamp, mapGreen, mapNonCoffee, SOURCE_ORIGINS } from "./metrics.js";
 import { readCropsterProduction, unavailableCropsterProduction } from "./cropster-production.js";
-import { readGreenBuy } from "./green-buy.js";
-import { readStockHistory, stockMonthEnds } from "./stock-history.js";
+import { readWeeklyDemand } from "./demand.js";
 
 const dispatchPath = "/api/integrations/dashboard/weekly";
 
@@ -20,40 +19,84 @@ async function readDispatch(weekStart, env, fetcher) {
 }
 
 const orderCount = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
+const demandKg = value => Number.isFinite(value) && value >= 0 ? value : null;
 
-export function wholesaleDeliveryComparison(current, previous) {
-  const count = source => source?.planStatus === "confirmed-weekly-import" ? orderCount(source.wholesale?.orders) : null;
-  const orders = count(current);
-  const previousOrders = count(previous);
-  const completed = orderCount(current?.delivery?.deliveredOrders ?? current?.delivery?.orders);
-  const previousCompleted = orderCount(previous?.delivery?.deliveredOrders ?? previous?.delivery?.orders);
-  const status = orders !== null && previousOrders !== null ? "live" : current || previous ? "partial" : "unavailable";
-  let note = "";
-  if (orders === null) {
-    note = current?.planStatus === "inherited-plan" ? "This week’s Dispatch plan is awaiting a confirmed import." : "This week’s Dispatch order total is unavailable.";
-  } else if (previousOrders === null) {
-    note = "The previous week has no confirmed Dispatch order total.";
-  }
-  return { orders, previousOrders, completed, previousCompleted, status, note, asOf: current?.sourceUpdatedAt ?? null };
+function dispatchCounts(source) {
+  const confirmed = source?.planStatus === "confirmed-weekly-import";
+  const orders = confirmed ? orderCount(source.wholesale?.orders) : null;
+  const completed = orderCount(source?.wholesale?.completedOrders);
+  const pending = orderCount(source?.wholesale?.pendingOrders);
+  const hasBreakdown = orders !== null && completed !== null && pending !== null && completed + pending === orders;
+  return {
+    orders,
+    done: hasBreakdown || source?.planStatus === "inherited-plan" ? completed : null,
+    pending: hasBreakdown ? pending : null,
+  };
 }
 
-function stockMetric(inventory, history) {
-  let value;
-  try { value = mapNonCoffee(inventory); }
-  catch { value = { status: "unavailable", value: null, itemCount: null, note: "Stockroom inventory is unavailable." }; }
-  const unavailableMonths = history.filter(month => month.value === null).length;
-  const estimated = history.some(month => month.value !== null && month.status !== "live");
+export function wholesaleDeliveryComparison(current, previous) {
+  const { orders, done, pending } = dispatchCounts(current);
+  const { orders: previousOrders, done: previousDone, pending: previousPending } = dispatchCounts(previous);
   const notes = [];
-  if (estimated) notes.push("Month-end estimates use recorded quantities and current unit costs.");
-  if (unavailableMonths) notes.push("A dash marks a month without enough history to calculate a value.");
+  if (orders === null) {
+    notes.push(current?.planStatus === "inherited-plan" ? "Confirm this week’s order import in Dispatch." : "This week’s Dispatch order total is unavailable.");
+  } else if (pending === null) {
+    notes.push("The confirmed Dispatch plan does not have a matching done and pending count.");
+  }
+  if (orders !== null && previousOrders === null) notes.push("The previous week has no confirmed Dispatch order total.");
+  const status = pending !== null && previousOrders !== null ? "live" :
+    [orders, done, previousOrders, previousDone].some(value => value !== null) ? "partial" : "unavailable";
   return {
-    value: value.value,
-    itemCount: value.itemCount,
-    status: value.status,
-    note: value.status === "live" ? "" : value.note,
-    history,
-    historyNote: notes.join(" "),
+    orders,
+    done,
+    pending,
+    previousOrders,
+    previousDone,
+    previousPending,
+    completed: orderCount(current?.delivery?.deliveredOrders ?? current?.delivery?.orders),
+    previousCompleted: orderCount(previous?.delivery?.deliveredOrders ?? previous?.delivery?.orders),
+    status,
+    note: notes.join(" "),
+    asOf: isoTimestamp(current?.sourceUpdatedAt),
   };
+}
+
+export function weeklyDemandComparison(current, previous) {
+  const kg = demandKg(current?.kg);
+  const previousKg = demandKg(previous?.kg);
+  const change = kg !== null && previousKg > 0 ? (kg - previousKg) / previousKg * 100 : null;
+  const changePercent = Number.isFinite(change) ? Math.round(change * 10) / 10 : null;
+  const notes = [];
+  if (kg === null) notes.push(current?.note || "This week’s roast tally is unavailable.");
+  if (previousKg === null) notes.push(previous?.weekMismatch
+    ? "Last week’s tally has the wrong week commencing date."
+    : "Last week’s verified roast tally is unavailable.");
+  if (kg !== null && previousKg === 0) notes.push("Last week’s demand was zero, so there is no percentage comparison.");
+  if (current?.status === "partial" || previous?.status === "partial") notes.push("Check the source notes on the roast tallies.");
+  const status = kg !== null && previousKg !== null && current?.status === "live" && previous?.status === "live" ? "live" :
+    kg !== null || previousKg !== null ? "partial" : "unavailable";
+  return {
+    kg,
+    previousKg,
+    changePercent,
+    status,
+    note: notes.join(" "),
+    asOf: isoTimestamp(current?.asOf),
+  };
+}
+
+async function readGreenStock(env, fetcher) {
+  if (typeof env.SOURCE_GREEN_PASSWORD !== "string" || !env.SOURCE_GREEN_PASSWORD) return null;
+  return mapGreen(await fetchSourceJson(`${SOURCE_ORIGINS.green}/api/roaster`, { "x-green-password": env.SOURCE_GREEN_PASSWORD }, fetcher));
+}
+
+function stockMetric(inventory) {
+  try {
+    const stock = mapNonCoffee(inventory);
+    return { ...stock, note: stock.status === "live" ? "" : stock.note };
+  } catch {
+    return { status: "unavailable", value: null, itemCount: null, categoryCount: null, categories: [], unpricedItems: null, currency: "AUD", asOf: null, note: "Stockroom inventory is unavailable." };
+  }
 }
 
 export async function collectWeeklyReport({ weekStart, stockroomCookie, env, now = new Date(), fetcher = fetch }) {
@@ -62,33 +105,33 @@ export async function collectWeeklyReport({ weekStart, stockroomCookie, env, now
   const stockroomHeaders = { Cookie: stockroomCookie, Origin: SOURCE_ORIGINS.stockroom };
   // Check Stockroom access before reading other business data.
   const inventory = await fetchSourceJson(SOURCE_ORIGINS.stockroom + "/api/inventory", stockroomHeaders, fetcher);
-  const [cropster, green, history, dispatch, previousDispatch] = await Promise.allSettled([
+  const demandOptions = { fetch: fetcher, now: () => now.getTime() };
+  const [weekDemand, previousDemand, cropster, greenStock, dispatch, previousDispatch] = await Promise.allSettled([
+    readWeeklyDemand(week.start, demandOptions),
+    readWeeklyDemand(previousWeek, demandOptions),
     readCropsterProduction({ weekStart: week.start, env, now, fetcher }),
-    readGreenBuy({ weekStart: week.start, env, now, fetcher }),
-    readStockHistory({ inventory, stockroomCookie, now, fetcher }),
+    readGreenStock(env, fetcher),
     readDispatch(week.start, env, fetcher),
     readDispatch(previousWeek, env, fetcher),
   ]);
+  const currentTally = settledValue(weekDemand);
+  const previousTally = settledValue(previousDemand);
+  const demand = weeklyDemandComparison(currentTally, previousTally);
   const production = settledValue(cropster, unavailableCropsterProduction());
-  const { greenBuy, greenForecast } = settledValue(green, {
-    greenBuy: { status: "unavailable", value: null, kg: null, orders: null, note: "The Green Forecast purchase register is unavailable." },
-    greenForecast: { status: "unavailable", value: null, month: null, note: "The Green Forecast purchase plan is unavailable." },
-  });
-  const stock = stockMetric(inventory, settledValue(history, stockMonthEnds(now).map(date => ({
-    date, value: null, status: "unavailable", note: "The Stockroom movement history is unavailable.",
-  }))));
+  const green = settledValue(greenStock) || { status: "unavailable", kg: null, value: null, unpricedLots: null, currency: "AUD", asOf: null, note: "Green Forecast stock is unavailable." };
+  const stock = stockMetric(inventory);
   const wholesale = wholesaleDeliveryComparison(settledValue(dispatch), settledValue(previousDispatch));
   return {
     week,
     generatedAt: now.toISOString(),
-    metrics: { production, greenBuy, greenForecast, stock, wholesale },
+    metrics: { demand, production, green, stock, wholesale },
     sources: [
+      { label: "This week’s roast tally", note: currentTally?.note || "Demand workbook is unavailable.", url: currentTally?.url, asOf: currentTally?.asOf },
+      { label: "Last week’s roast tally", note: previousTally?.note || "Demand workbook is unavailable.", url: previousTally?.url, asOf: previousTally?.asOf },
       { label: "Cropster", note: production.note },
-      { label: "Green buy", note: "Green Forecast purchase register and monthly purchase forecast." },
-      { label: "Stockroom", note: "Current value covers the non-coffee inventory. " + stock.historyNote },
-      ...stock.history.filter(month => month.status === "partial" || month.status === "unavailable")
-        .map(month => ({ label: month.date, note: month.note })),
-      { label: "Wholesale deliveries", note: "Dispatch counts confirmed delivery orders. Completed handovers are recorded separately." },
+      { label: "Green Forecast", note: green.note },
+      { label: "Stockroom", note: "Current value covers the non-coffee inventory." },
+      { label: "Dispatch", note: "Done counts completed primary orders. Scheduled and pending counts use confirmed weekly imports." },
     ],
   };
 }

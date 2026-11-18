@@ -8,11 +8,11 @@ The landing page shows the weekly report. The previous operations view and saved
 
 | Weekly report | Figure |
 | --- | --- |
-| Production | Completed roast output from Cropster for the selected Sydney week and the previous week. Combined production is pending Cropster Schedule access. |
-| Green buy | Purchase register entries grouped by supplier order date. |
-| Monthly forecast green buy spend | Green Forecast's projected purchase value for the current order month. The forecast starts in its current forecast week. |
-| Current holding stock | Non-coffee stock value and the last three completed Sydney month ends. Historical figures use rolled-back quantities and current unit costs. |
-| Wholesale delivery orders | Confirmed Dispatch delivery orders for both weeks. Recorded handovers are shown when an order plan awaits confirmation. |
+| Demand | Planned kilograms from the exact-week roast tally. Percentage change uses last week's tally as its baseline when the previous total is above zero. |
+| Roasted and scheduled | Completed roast output kilograms from Cropster for the selected Sydney week and the previous full week. Scheduled kilograms through Friday and production AUD require additional Cropster data. |
+| Current green bean stock | Remaining kilograms and value at the recorded cost of each green lot in Green Forecast. Supplier contract balances are excluded. |
+| Current non-coffee stock | Latest Stockroom value, using counted stock × pieces per stock unit × unit cost. Items without prices are flagged. |
+| Wholesale orders | Primary delivery orders from Dispatch. Done counts completed primary orders. Scheduled and pending counts use the confirmed weekly import. |
 
 ## Operations details sources
 

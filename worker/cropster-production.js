@@ -14,7 +14,7 @@ const sydneyOffset = new Intl.DateTimeFormat("en-AU", {
 
 let tokenCache;
 
-export function unavailableCropsterProduction(note = "Connect the Cropster service account to load completed roasts. Cropster Schedule data is pending.") {
+export function unavailableCropsterProduction(note = "Connect the Cropster service account to see completed roasts. Schedule and production value data are unavailable.") {
   return {
     status: "unavailable",
     source: "Cropster",
@@ -25,6 +25,10 @@ export function unavailableCropsterProduction(note = "Connect the Cropster servi
     previousRoastedKg: null,
     changePercent: null,
     roastedChangePercent: null,
+    value: null,
+    previousValue: null,
+    valueChangePercent: null,
+    currency: "AUD",
     byDay: [],
     days: null,
     asOf: null,
@@ -216,8 +220,8 @@ export async function readCropsterProduction({ weekStart, env = {}, now = new Da
     const rows = await listRoastedLots(sydneyMondayUtc(previousStart), token, fetcher);
     const { missingCompleted, ...data } = summarizeRoasts(rows, week.start, previousStart, now);
     const note = missingCompleted
-      ? "Some completed roasts in Cropster have missing or inconsistent data. Cropster Schedule data is pending."
-      : "Completed roasts come from Cropster. Cropster Schedule data, including Friday, is pending.";
+      ? "Some completed roasts in Cropster have missing or inconsistent data. Schedule and production value data are unavailable."
+      : "Completed roasts come from Cropster. Schedule data, including Friday, and production value are unavailable.";
     return {
       ...unavailableCropsterProduction(note),
       ...data,

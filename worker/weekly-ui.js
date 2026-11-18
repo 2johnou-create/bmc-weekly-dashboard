@@ -4,18 +4,20 @@ export const weeklyPage = String.raw`<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex,nofollow">
-  <title>Weekly report | Black Market Coffee</title>
+  <title>Weekly dashboard | Black Market Coffee</title>
   <style>
     :root {
       color-scheme: light;
       --ink: #202624;
-      --muted: #525d58;
+      --muted: #526059;
       --paper: #fff;
-      --background: #f4f5f2;
-      --line: #dce1da;
+      --background: #f3f5f1;
+      --line: #d6ddd6;
       --accent: #a5282c;
       --green: #263e35;
-      font: 1rem/1.5 "Trebuchet MS", system-ui, sans-serif;
+      --green-light: #dceae1;
+      --caution: #794b15;
+      font: 1rem/1.45 Inter, system-ui, sans-serif;
       background: var(--background);
       color: var(--ink);
     }
@@ -24,251 +26,481 @@ export const weeklyPage = String.raw`<!doctype html>
     body, h1, h2, h3, p, dl, dd { margin: 0; }
     button, input { font: inherit; }
     button { cursor: pointer; }
-    button:disabled { opacity: .5; cursor: default; }
+    button:disabled { opacity: .56; cursor: default; }
     a { color: inherit; text-underline-offset: .2em; }
-    :focus-visible { outline: 3px solid #a5282c; outline-offset: 3px; }
-    .wrap { width: min(100% - 3rem, 66rem); margin-inline: auto; }
+    :focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+    .wrap { width: min(100% - 3rem, 86rem); margin-inline: auto; }
     header { background: var(--paper); border-bottom: 1px solid var(--line); }
-    .bar, .brand, .actions, .week-nav { display: flex; align-items: center; gap: .65rem; }
+    .bar, .brand, .actions, .week-nav { display: flex; align-items: center; gap: .6rem; }
     .bar { justify-content: space-between; min-height: 4.25rem; }
     .brand { font-size: .9rem; font-weight: 700; text-decoration: none; }
-    .mark { background: var(--accent); color: white; padding: .48rem .55rem; border-radius: .22rem; }
-    .button { border: 1px solid var(--line); border-radius: .35rem; background: var(--paper); color: var(--ink); padding: .45rem .8rem; min-height: 2.5rem; }
+    .mark { background: var(--accent); color: white; padding: .46rem .52rem; border-radius: .22rem; }
+    .button { border: 1px solid var(--line); border-radius: .35rem; background: var(--paper); color: var(--ink); padding: .4rem .75rem; min-height: 2.7rem; }
     .actions .button { white-space: nowrap; }
     .primary { background: var(--accent); border-color: var(--accent); color: white; }
     .quiet { border-color: transparent; }
     .button:hover:not(:disabled) { border-color: var(--muted); }
-    main.report { padding-block: 2rem 3rem; }
-    .intro { display: flex; justify-content: space-between; align-items: end; gap: 1rem; margin-bottom: 1rem; }
-    h1 { font-size: clamp(1.8rem, 5vw, 2.7rem); letter-spacing: -.04em; line-height: 1.13; }
-    h2 { font-size: 1.03rem; line-height: 1.3; }
-    .dates, .status, .note, dt, .source-list { color: var(--muted); }
-    .dates { margin-top: .3rem; }
-    .status { font-size: .82rem; margin-bottom: 1rem; min-height: 1.2em; }
+    main.report { padding-block: clamp(1.45rem, 3vw, 2.45rem) 2rem; }
+    .intro { display: flex; justify-content: space-between; align-items: end; flex-wrap: wrap; gap: .8rem 1.25rem; margin-bottom: .85rem; }
+    h1 { font-size: clamp(1.9rem, 4vw, 2.85rem); letter-spacing: -.045em; line-height: 1.1; }
+    .dates { color: var(--muted); font-size: clamp(1rem, 2vw, 1.2rem); margin-top: .37rem; }
+    .week-nav { flex-wrap: wrap; font-size: .85rem; }
+    .report-status { display: flex; gap: .4rem 1.1rem; align-items: baseline; flex-wrap: wrap; font-size: .83rem; color: var(--muted); min-height: 1.25rem; margin-bottom: 1rem; }
     .error { color: #912125; }
-    .report-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
-    .panel { min-width: 0; background: var(--paper); border: 1px solid var(--line); border-radius: .55rem; padding: clamp(1rem, 2.6vw, 1.55rem); }
-    .production, .stock { grid-column: 1 / -1; }
-    .production { background: var(--green); color: #fff; border-color: var(--green); }
-    .production .note, .production dt { color: #d7e4dc; }
-    .primary-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: .25rem 1.15rem; margin-block: .45rem .7rem; }
-    .figure { font-size: clamp(1.8rem, 5vw, 2.7rem); line-height: 1.15; font-weight: 700; letter-spacing: -.045em; font-variant-numeric: tabular-nums; }
-    .production .figure { font-size: clamp(2.5rem, 8vw, 4rem); }
-    .change { font-size: .9rem; font-weight: 700; }
-    .split { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .55rem 1rem; }
-    .split.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    dt { font-size: .79rem; line-height: 1.35; }
-    dd { font-size: 1.05rem; font-weight: 700; margin-top: .18rem; font-variant-numeric: tabular-nums; }
-    .note { font-size: .81rem; line-height: 1.45; margin-top: .65rem; }
-    .stock-history { margin-top: .75rem; padding-top: .75rem; border-top: 1px solid var(--line); }
-    .subhead { font-size: .82rem; margin-bottom: .55rem; }
-    .months dd { overflow-wrap: anywhere; }
-    .month-context { color: var(--muted); font-size: .76rem; margin-top: .12rem; }
-    .links { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem 1.25rem; color: var(--muted); font-size: .82rem; margin-top: 1rem; }
-    .source-details { margin-top: 1rem; font-size: .82rem; color: var(--muted); }
-    summary { cursor: pointer; width: fit-content; }
-    .source-list { padding-left: 1.2rem; margin: .55rem 0 0; }
-    .source-list li + li { margin-top: .33rem; }
+    .report-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: clamp(.7rem, 1.3vw, 1.15rem); align-items: start; }
+    .meeting-card { grid-column: span 2; min-width: 0; color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: .55rem; }
+    .meeting-card.featured { grid-column: span 3; }
+    .meeting-card.demand { border-top: 4px solid var(--accent); }
+    .meeting-card.production { color: #fff; background: var(--green); border-color: var(--green); border-top-width: 4px; }
+    .meeting-card summary { cursor: pointer; display: block; min-height: 12.65rem; padding: clamp(1rem, 1.7vw, 1.55rem); border-radius: inherit; }
+    .meeting-card.featured summary { min-height: 13.8rem; }
+    .meeting-card summary::-webkit-details-marker { display: none; }
+    .meeting-card summary::marker { content: ""; }
+    .meeting-card summary:hover { background: rgba(0, 0, 0, .03); }
+    .meeting-card.production summary:hover { background: rgba(255, 255, 255, .055); }
+    .meeting-card.production summary:focus-visible { outline-color: #fff; outline-offset: -4px; }
+    .card-head { display: flex; align-items: start; justify-content: space-between; gap: .75rem; margin-bottom: .75rem; }
+    .card-title { font-size: clamp(1.03rem, 1.6vw, 1.3rem); font-weight: 700; letter-spacing: -.02em; line-height: 1.2; }
+    .disclosure { display: grid; place-items: center; width: 1.6rem; height: 1.6rem; flex: 0 0 auto; border: 1px solid currentColor; border-radius: 50%; color: var(--muted); line-height: 1; font-size: 1.14rem; }
+    .disclosure::before { content: "+"; }
+    .meeting-card[open] .disclosure::before { content: "−"; }
+    .production .disclosure, .production .metric-label, .production .status-flag, .production .source-note, .production .detail-note, .production .comparison .context, .production dt { color: var(--green-light); }
+    .headline { display: block; margin-block: .2rem .35rem; }
+    .metric-figure { display: block; font-size: clamp(2.25rem, 4.1vw, 4rem); line-height: 1.05; font-weight: 750; letter-spacing: -.055em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+    .demand .metric-figure { font-size: clamp(3rem, 5.7vw, 5rem); }
+    .production-headline { display: flex; flex-wrap: wrap; gap: .4rem .85rem; align-items: baseline; margin-top: .35rem; }
+    .production-headline .metric-secondary { margin-top: 0; }
+    .production-total-label { margin-top: .3rem; }
+    .production-comparison { font-size: .94rem; color: var(--green-light); }
+    .metric-figure .unit { font-size: .46em; font-weight: 700; letter-spacing: -.026em; white-space: nowrap; }
+    .metric-label { display: block; color: var(--muted); font-size: .84rem; font-weight: 700; }
+    .metric-secondary { display: block; font-size: clamp(1rem, 1.9vw, 1.45rem); font-weight: 700; margin-top: .26rem; font-variant-numeric: tabular-nums; line-height: 1.26; overflow-wrap: anywhere; }
+    .metric-secondary .unit { font-size: .83em; }
+    .green-stock .metric-secondary { font-size: clamp(1.25rem, 2vw, 1.75rem); }
+    .comparison { display: block; font-weight: 700; font-size: clamp(.91rem, 1.65vw, 1.2rem); margin-top: .54rem; line-height: 1.25; }
+    .comparison .context { font-weight: 400; font-size: .81em; color: var(--muted); }
+    .status-flag { display: block; color: var(--caution); font-size: .78rem; line-height: 1.4; margin-top: .75rem; }
+    .production .status-flag { color: #f6dfb7; }
+    .card-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .65rem 1rem; align-items: start; margin-top: .85rem; }
+    .card-pair>span { min-width: 0; display: block; }
+    .card-pair>span + span { padding-inline-start: .9rem; border-inline-start: 1px solid var(--line); }
+    .production .card-pair>span + span { border-color: #779083; }
+    .production .metric-figure { font-size: clamp(2.25rem, 4.1vw, 4rem); }
+    .production .card-pair { margin-top: .85rem; }
+    .production .card-pair .metric-secondary { margin-top: .19rem; }
+    .wholesale-results .metric-figure { font-size: clamp(1.42rem, 2.55vw, 2.2rem); margin-top: .18rem; }
+    .wholesale .headline { margin-bottom: .5rem; }
+    .wholesale-results { margin-top: .5rem; }
+    .card-body { border-top: 1px solid var(--line); padding: .96rem clamp(1rem, 1.7vw, 1.55rem) 1.15rem; font-size: .89rem; }
+    .production .card-body { border-color: #779083; }
+    .card-body h2 { font-size: 1rem; line-height: 1.3; margin-bottom: .58rem; }
+    .breakdown { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .55rem .85rem; }
+    dt { color: var(--muted); font-size: .84rem; line-height: 1.35; }
+    dd { font-size: 1.05rem; font-weight: 700; margin-top: .16rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+    .source-note, .detail-note { color: var(--muted); font-size: .8rem; line-height: 1.5; margin-top: .75rem; }
+    .detail-table { width: 100%; border-collapse: collapse; margin-top: .7rem; text-align: left; }
+    .detail-table th, .detail-table td { padding: .4rem 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+    .detail-table th:last-child, .detail-table td:last-child { padding-inline-start: .6rem; text-align: right; font-variant-numeric: tabular-nums; }
+    .detail-table th { color: var(--muted); font-size: .78rem; }
+    .detail-table tbody th { font-size: inherit; color: inherit; font-weight: 400; overflow-wrap: anywhere; }
+    .source-details, .links { color: var(--muted); font-size: .82rem; margin-top: 1rem; }
+    .source-details summary { cursor: pointer; width: fit-content; }
+    .source-details a, .links a { font-weight: 700; }
+    .source-list { padding-left: 1.15rem; margin: .55rem 0 0; max-width: 72ch; }
+    .source-list li + li { margin-top: .4rem; }
+    .links { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .45rem 1rem; }
     .login { display: grid; place-items: center; min-height: 60vh; padding: 1rem; }
-    .sign-in { width: min(100%, 25rem); }
+    .sign-in { width: min(100%, 25rem); padding: 1.45rem; background: var(--paper); border: 1px solid var(--line); border-top: 4px solid var(--accent); border-radius: .55rem; }
     .sign-in h1 { font-size: 1.85rem; }
     .sign-in label, .sign-in input, .sign-in button { display: block; width: 100%; }
     .sign-in label { font-size: .9rem; font-weight: 700; margin-top: 1rem; }
     .sign-in input { border: 1px solid var(--line); border-radius: .35rem; padding: .55rem; margin-block: .35rem .75rem; }
     .loading { padding: 2rem; text-align: center; }
-    @media (max-width: 38rem) {
+    .skip-link { position: absolute; top: -5rem; left: .75rem; background: var(--paper); color: var(--ink); padding: .7rem; }
+    .skip-link:focus { top: .7rem; z-index: 1; }
+    @media (min-width: 58.01rem) and (max-height: 50rem) {
+      .bar { min-height: 3.4rem; }
+      main.report { padding-block: 1.2rem 1rem; }
+      .intro { margin-bottom: .55rem; }
+      .report-status { margin-bottom: .65rem; }
+      .report-grid { gap: .75rem; }
+      .meeting-card summary { min-height: 10.9rem; padding: .8rem clamp(.85rem, 1.4vw, 1.2rem); }
+      .meeting-card.featured summary { min-height: 13.25rem; }
+      .card-head { margin-bottom: .42rem; }
+      .headline { margin-block: .12rem .25rem; }
+      .metric-figure, .production .metric-figure { font-size: clamp(2.35rem, 3.65vw, 3.35rem); }
+      .demand .metric-figure { font-size: clamp(3rem, 4.6vw, 4.15rem); }
+      .card-pair, .production .card-pair, .wholesale-results { margin-top: .4rem; }
+      .production-headline, .production-total-label { margin-top: .2rem; }
+      .comparison { margin-top: .36rem; }
+      .status-flag { margin-top: .42rem; }
+      .links, .source-details { margin-top: .65rem; }
+    }
+    @media (max-width: 58rem) {
+      .meeting-card { grid-column: span 3; }
+      .meeting-card.wholesale { grid-column: 1 / -1; }
+      .wholesale summary { min-height: 0; }
+      .wholesale-results { max-width: 26rem; }
+    }
+    @media (max-width: 36rem) {
       .wrap { width: calc(100% - 1.5rem); }
-      .intro { align-items: start; flex-direction: column; gap: .65rem; }
       .report-grid { grid-template-columns: 1fr; }
-      .split { column-gap: .65rem; }
-      .production .split { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .meeting-card, .meeting-card.featured, .meeting-card.wholesale { grid-column: auto; }
+      .meeting-card summary, .meeting-card.featured summary { min-height: 0; }
       .brand { font-size: .8rem; }
-      .actions { gap: .2rem; }
-      .actions .button { font-size: .8rem; padding-inline: .55rem; }
-      main.report { padding-top: 1.3rem; }
+      .actions { gap: .25rem; }
+      .actions .button, .week-nav .button { font-size: .8rem; padding-inline: .55rem; }
+      .production .metric-figure { font-size: clamp(2.1rem, 8vw, 3rem); }
     }
     @media print {
-      :root, .production { background: white; color: black; }
-      .production .note, .production dt { color: #444; }
-      .actions, .links, .week-nav, .source-details { display: none !important; }
-      .panel { break-inside: avoid; }
+      :root, .meeting-card.production { background: white; color: black; }
+      .production .metric-label, .production .status-flag, .production .source-note, .production .detail-note, .production .comparison .context, .production dt { color: #444; }
+      .actions, .week-nav, .disclosure, .source-details, .links { display: none !important; }
+      .meeting-card { break-inside: avoid; }
+      .wrap { width: 100%; }
     }
   </style>
 </head>
 <body>
+  <a class="skip-link" href="#report">Skip to weekly dashboard</a>
   <header><div class="wrap bar">
-    <a class="brand" href="/"><span class="mark">BMC</span> Black Market Coffee</a>
+    <a class="brand" href="/"><span class="mark" aria-hidden="true">BMC</span> Black Market Coffee</a>
     <div id="actions" class="actions" hidden>
       <button id="refresh" class="button quiet" type="button">Refresh</button>
       <button id="logout" class="button" type="button">Sign out</button>
     </div>
   </div></header>
-  <p id="loading" class="loading" role="status">Opening weekly report…</p>
+  <p id="loading" class="loading" role="status">Opening weekly dashboard…</p>
+  <noscript><p class="loading">Enable JavaScript to sign in and view the dashboard.</p></noscript>
   <main id="login" class="login" hidden>
-    <section class="panel sign-in">
-      <h1>Weekly report</h1>
+    <section class="sign-in" aria-labelledby="signInTitle">
+      <h1 id="signInTitle">Weekly dashboard</h1>
       <form id="signInForm">
         <label for="password">Stock Take App password</label>
         <input id="password" type="password" autocomplete="current-password" required maxlength="256">
         <button id="signIn" class="button primary" type="submit">Sign in</button>
-        <p id="loginMessage" class="note error" role="alert" hidden></p>
+        <p id="loginMessage" class="detail-note error" role="alert" hidden></p>
       </form>
     </section>
   </main>
-  <main id="report" class="wrap report" hidden>
+  <main id="report" class="wrap report" tabindex="-1" hidden>
     <div class="intro">
-      <div><h1>Weekly report</h1><p id="dates" class="dates"></p></div>
+      <div><h1>Weekly dashboard</h1><p id="dates" class="dates"></p></div>
       <nav class="week-nav" aria-label="Reporting week">
         <button id="previous" class="button" type="button">Previous week</button>
         <button id="next" class="button" type="button" disabled>Next week</button>
+        <button id="currentWeek" class="button" type="button" hidden>This week</button>
       </nav>
     </div>
-    <p id="status" class="status" role="status"></p>
+    <div class="report-status"><p id="status" role="status"></p><p id="refreshPolicy" hidden>Refreshes every minute</p></div>
     <div id="figures" class="report-grid" hidden>
-      <section class="panel production" aria-labelledby="productionTitle">
-        <h2 id="productionTitle">Production</h2>
-        <div class="primary-row"><p id="production" class="figure">—</p><p id="productionChange" class="change"></p></div>
-        <dl id="productionBreakdown" class="split">
-          <div id="roastedBreakdown"><dt>Roasted</dt><dd id="roasted">—</dd></div>
-          <div><dt>Scheduled</dt><dd id="scheduled">—</dd></div>
-          <div><dt id="previousProductionLabel">Previous week</dt><dd id="previousProduction">—</dd></div>
-        </dl>
-        <p id="productionNote" class="note" hidden></p>
-      </section>
-      <section class="panel" aria-labelledby="greenBuyTitle">
-        <h2 id="greenBuyTitle">Green buy this week</h2>
-        <div class="primary-row"><p id="greenBuy" class="figure">—</p></div>
-        <p id="greenBuyBreakdown" class="note" hidden></p>
-        <p id="greenBuyNote" class="note" hidden></p>
-      </section>
-      <section class="panel" aria-labelledby="forecastTitle">
-        <h2 id="forecastTitle">Monthly forecast green buy spend</h2>
-        <div class="primary-row"><p id="forecast" class="figure">—</p></div>
-        <p id="forecastMonth" class="note" hidden></p>
-        <p id="forecastNote" class="note" hidden></p>
-      </section>
-      <section class="panel stock" aria-labelledby="stockTitle">
-        <h2 id="stockTitle">Current holding stock (non-coffee)</h2>
-        <div class="primary-row"><p id="stock" class="figure">—</p><p id="stockItems" class="change"></p></div>
-        <p id="stockNote" class="note" hidden></p>
-        <div class="stock-history">
-          <h3 class="subhead">Last three month ends</h3>
-          <dl id="monthEnds" class="split months"></dl>
-          <p id="stockHistoryNote" class="note" hidden></p>
+      <details class="meeting-card featured demand">
+        <summary>
+          <span class="card-head"><span class="card-title">Weekly demand</span><span class="disclosure" aria-hidden="true"></span></span>
+          <span id="demandKg" class="metric-figure headline">—</span>
+          <span id="demandChange" class="comparison"></span>
+          <span id="demandFlag" class="status-flag" hidden></span>
+        </summary>
+        <div class="card-body">
+          <h2>Weekly demand comparison</h2>
+          <dl class="breakdown"><div><dt id="demandCurrentLabel">Selected week</dt><dd id="demandDetail">—</dd></div><div><dt id="demandPreviousLabel">Previous week</dt><dd id="demandPrevious">—</dd></div></dl>
+          <p id="demandSource" class="source-note" hidden></p>
+          <p id="demandNote" class="detail-note" hidden></p>
         </div>
-      </section>
-      <section class="panel stock" aria-labelledby="wholesaleTitle">
-        <h2 id="wholesaleTitle">Wholesale delivery orders</h2>
-        <div class="primary-row"><p id="wholesale" class="figure">—</p><p id="previousWholesale" class="change"></p></div>
-        <p id="wholesaleNote" class="note" hidden></p>
-      </section>
+      </details>
+      <details class="meeting-card featured production">
+        <summary>
+          <span class="card-head"><span class="card-title">Roasted &amp; scheduled</span><span class="disclosure" aria-hidden="true"></span></span>
+          <span class="production-headline">
+            <span id="productionKg" class="metric-figure">—</span>
+            <span id="productionValue" class="metric-secondary">—</span>
+          </span>
+          <span id="productionTotalLabel" class="metric-label production-total-label">Combined production</span>
+          <span id="productionChange" class="comparison production-comparison"></span>
+          <span class="card-pair">
+            <span><span class="metric-label">Roasted</span><span id="roastedKg" class="metric-secondary">—</span></span>
+            <span><span class="metric-label">Scheduled</span><span id="scheduledKg" class="metric-secondary">—</span></span>
+          </span>
+          <span id="productionFlag" class="status-flag" hidden></span>
+        </summary>
+        <div class="card-body">
+          <h2 id="productionPreviousLabel">Previous week</h2>
+          <dl class="breakdown">
+            <div><dt>Combined production</dt><dd id="previousProductionKg">—</dd></div>
+            <div><dt>Production value</dt><dd id="previousProductionValue">—</dd></div>
+            <div><dt>Roasted</dt><dd id="previousRoastedKg">—</dd></div>
+            <div id="previousScheduledRow" hidden><dt>Scheduled</dt><dd id="previousScheduledKg">—</dd></div>
+          </dl>
+          <p id="productionComparisonNote" class="source-note" hidden></p>
+          <p id="productionSource" class="source-note" hidden></p>
+          <p id="productionNote" class="detail-note" hidden></p>
+        </div>
+      </details>
+      <details class="meeting-card green-stock">
+        <summary>
+          <span class="card-head"><span class="card-title">Current green bean stock</span><span class="disclosure" aria-hidden="true"></span></span>
+          <span id="greenKg" class="metric-figure headline">—</span>
+          <span id="greenValue" class="metric-secondary">—</span>
+          <span id="greenFlag" class="status-flag" hidden></span>
+        </summary>
+        <div class="card-body">
+          <h2>Green stock on hand</h2>
+          <dl class="breakdown" id="greenBreakdown" hidden><div><dt>Lots needing review</dt><dd id="greenUnpriced">—</dd></div></dl>
+          <p id="greenSource" class="source-note" hidden></p>
+          <p id="greenNote" class="detail-note" hidden></p>
+        </div>
+      </details>
+      <details class="meeting-card stock">
+        <summary>
+          <span class="card-head"><span class="card-title">Current non-coffee stock</span><span class="disclosure" aria-hidden="true"></span></span>
+          <span id="stockValue" class="metric-figure headline">—</span>
+          <span id="stockItems" class="metric-secondary" hidden></span>
+          <span id="stockFlag" class="status-flag" hidden></span>
+        </summary>
+        <div class="card-body">
+          <h2>Value by category</h2>
+          <table id="stockBreakdown" class="detail-table" hidden>
+            <thead><tr><th scope="col">Category</th><th scope="col">Value</th></tr></thead>
+            <tbody id="stockCategories"></tbody>
+          </table>
+          <p id="stockSource" class="source-note" hidden></p>
+          <p id="stockNote" class="detail-note" hidden></p>
+        </div>
+      </details>
+      <details class="meeting-card wholesale">
+        <summary>
+          <span class="card-head"><span class="card-title">Wholesale dispatch</span><span class="disclosure" aria-hidden="true"></span></span>
+          <span id="wholesaleTotal" class="metric-figure headline">—</span>
+          <span class="metric-label" id="wholesaleTotalLabel">Scheduled orders</span>
+          <span class="card-pair wholesale-results">
+            <span><span class="metric-label">Done</span><span id="wholesaleDone" class="metric-figure">—</span></span>
+            <span><span class="metric-label">Pending</span><span id="wholesalePending" class="metric-figure">—</span></span>
+          </span>
+          <span id="wholesaleFlag" class="status-flag" hidden></span>
+        </summary>
+        <div class="card-body">
+          <h2 id="wholesalePreviousLabel">Previous week</h2>
+          <dl class="breakdown">
+            <div><dt>Scheduled orders</dt><dd id="previousWholesaleTotal">—</dd></div>
+            <div><dt>Done</dt><dd id="previousWholesaleDone">—</dd></div>
+            <div><dt>Pending</dt><dd id="previousWholesalePending">—</dd></div>
+          </dl>
+          <p id="wholesaleSource" class="source-note" hidden></p>
+          <p id="wholesaleNote" class="detail-note" hidden></p>
+        </div>
+      </details>
     </div>
     <details id="sources" class="source-details" hidden><summary>Data sources</summary><ul id="sourceList" class="source-list"></ul></details>
-    <footer class="links"><p>Australia/Sydney · AUD</p><a href="/details">Operations details and issue notes</a></footer>
+    <footer class="links"><p>Sydney reporting week · AUD values</p><a href="/details">Operations details and issue notes</a></footer>
   </main>
   <script>
     const el = id => document.getElementById(id);
-    const number = new Intl.NumberFormat('en-AU', { maximumFractionDigits: 1 });
+    const amount = new Intl.NumberFormat('en-AU', { maximumFractionDigits: 1 });
+    const detailKg = new Intl.NumberFormat('en-AU', { maximumFractionDigits: 2 });
     const currency = new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', maximumFractionDigits: 0 });
-    const dayFormat = new Intl.DateTimeFormat('en-AU', { timeZone: 'UTC', day: 'numeric', month: 'short' });
-    const monthFormat = new Intl.DateTimeFormat('en-AU', { timeZone: 'UTC', month: 'long', year: 'numeric' });
-    const timeFormat = new Intl.DateTimeFormat('en-AU', { timeZone: 'Australia/Sydney', hour: 'numeric', minute: '2-digit' });
-    let loadedWeek = '';
+    const dateTime = new Intl.DateTimeFormat('en-AU', { timeZone: 'Australia/Sydney', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+    const calendarDay = new Intl.DateTimeFormat('en-AU', { timeZone: 'UTC', day: 'numeric', month: 'short' });
+    const unavailable = '—';
+    const sourceNames = { stockroom: 'Stock Take App', green: 'Green Forecast', dispatch: 'Dispatch', cropster: 'Cropster' };
+    let loadedWeek;
     let requestedWeek = new URL(location.href).searchParams.get('week') || '';
     let currentRequest;
-    let isCurrentWeek = true;
     let signedIn = false;
 
-    function format(value, formatNumber, unit = '') {
-      return Number.isFinite(value) ? formatNumber.format(value) + unit : '—';
+    function format(value, formatter, unit = '') {
+      return Number.isFinite(value) ? formatter.format(value) + unit : unavailable;
     }
+    function weight(value, formatter = amount) { return format(value, formatter, ' kg'); }
+    function money(value) { return format(value, currency); }
     function set(id, value) { el(id).textContent = value; }
-    function note(id, value) {
+    function showText(id, value) {
       set(id, value || '');
       el(id).hidden = !value;
     }
-    function dateFormat(value, formatter) {
-      const date = new Date(value + 'T12:00:00Z');
-      return Number.isFinite(date.getTime()) ? formatter.format(date) : '';
+    function weightHeadline(id, value) {
+      if (!Number.isFinite(value)) { set(id, unavailable); return; }
+      const unit = document.createElement('span');
+      unit.className = 'unit';
+      unit.textContent = ' kg';
+      el(id).replaceChildren(amount.format(value), unit);
     }
+    function plural(value, singular) { return amount.format(value) + ' ' + singular + (value === 1 ? '' : 's'); }
     function changeWeek(date, offset) {
       const result = new Date(date + 'T12:00:00Z');
       result.setUTCDate(result.getUTCDate() + offset);
       return result.toISOString().slice(0, 10);
     }
-    function plural(value, one) { return number.format(value) + ' ' + one + (value === 1 ? '' : 's'); }
-    function renderMonthEnds(history) {
-      el('monthEnds').replaceChildren(...history.map(item => {
-        const column = document.createElement('div');
-        const label = document.createElement('dt');
-        const value = document.createElement('dd');
-        label.textContent = dateFormat(item.date, dayFormat);
-        value.textContent = format(item.value, currency);
-        if (item.status === 'estimated' || item.status === 'partial') {
-          const context = document.createElement('p');
-          context.className = 'month-context';
-          context.textContent = item.status === 'estimated' ? 'Estimate' : 'Partial';
-          value.append(context);
-        }
-        column.append(label, value);
-        return column;
-      }));
+    function weekRange(start) {
+      const end = changeWeek(start, 6);
+      return calendarDay.format(new Date(start + 'T12:00:00Z')) + ' – ' + calendarDay.format(new Date(end + 'T12:00:00Z'));
     }
-    function render(data) {
-      const { production, greenBuy, greenForecast, stock, wholesale } = data.metrics;
-      set('dates', data.week.label);
+    function formatTimestamp(value) {
+      if (typeof value !== 'string' && typeof value !== 'number') return '';
+      const date = new Date(value);
+      return Number.isFinite(date.getTime()) ? dateTime.format(date) : '';
+    }
+    function comparison(percent, subject = '') {
+      if (!Number.isFinite(percent)) return '';
+      const label = subject ? subject + ' ' : '';
+      if (percent === 0) return label + 'unchanged';
+      const absolute = Math.abs(percent);
+      const digits = absolute < .1 ? 'under 0.1%' : amount.format(absolute) + '%';
+      return label + (percent > 0 ? 'up ' : 'down ') + digits;
+    }
+    function renderComparison(id, text, fallback) {
+      const host = el(id);
+      if (!text) { host.textContent = fallback; return; }
+      const when = document.createElement('span');
+      when.className = 'context';
+      when.textContent = ' vs previous week';
+      host.replaceChildren(text, when);
+    }
+    function sourceText(metric, fallback) {
+      const label = sourceNames[metric.source] || metric.source || fallback;
+      const timestamp = formatTimestamp(metric.asOf);
+      return timestamp ? label + ' updated ' + timestamp + ' Sydney time.' : 'Source: ' + label + '.';
+    }
+    function statusText(metric, unavailableLabel) {
+      if (metric.status === 'unavailable') return unavailableLabel;
+      if (metric.status === 'stale') return 'Last saved data';
+      if (metric.status === 'partial') return 'Partial data';
+      if (metric.status === 'estimated') return 'Estimated';
+      return '';
+    }
+    function renderDemand(demand, week, previousRange) {
+      weightHeadline('demandKg', demand.kg);
+      const change = comparison(demand.changePercent);
+      let fallback = 'Previous week’s demand unavailable';
+      if (!Number.isFinite(demand.kg)) fallback = 'Demand comparison unavailable';
+      else if (demand.previousKg === 0) fallback = 'Previous week had zero demand';
+      renderComparison('demandChange', change && change[0].toUpperCase() + change.slice(1), fallback);
+      showText('demandFlag', statusText(demand, 'Demand unavailable'));
+      set('demandCurrentLabel', week.isCurrent ? 'This week' : 'Selected week');
+      set('demandPreviousLabel', 'Previous week (' + previousRange + ')');
+      set('demandDetail', weight(demand.kg, detailKg));
+      set('demandPrevious', weight(demand.previousKg, detailKg));
+      showText('demandSource', sourceText(demand, 'Weekly roast tally'));
+      showText('demandNote', demand.note || (!change && demand.previousKg === 0 ? 'Percentage change is unavailable when the previous week is zero.' : ''));
+    }
+    function renderProduction(production, previousRange) {
       const hasTotal = Number.isFinite(production.totalKg);
       const hasRoasted = Number.isFinite(production.roastedKg);
-      set('production', hasTotal ? format(production.totalKg, number, ' kg') : hasRoasted ? format(production.roastedKg, number, ' kg roasted') : '—');
-      el('roastedBreakdown').hidden = !hasTotal && hasRoasted;
-      el('productionBreakdown').classList.toggle('two', !hasTotal && hasRoasted);
-      const change = hasTotal ? production.changePercent : production.roastedChangePercent;
-      const subject = hasTotal ? 'Production' : 'Roasted kg';
-      const changeText = !Number.isFinite(change) ? '' : change === 0 ? subject + ' unchanged from previous week' :
-        subject + ' ' + (change > 0 ? 'up ' : 'down ') + number.format(Math.abs(change)) + '% from previous week';
-      set('productionChange', changeText);
-      set('roasted', format(production.roastedKg, number, ' kg'));
-      set('scheduled', format(production.scheduledKg, number, ' kg'));
-      set('previousProductionLabel', hasTotal ? 'Previous week' : 'Previous week roasted');
-      set('previousProduction', format(hasTotal ? production.previousKg : production.previousRoastedKg, number, ' kg'));
-      note('productionNote', production.note);
-
-      set('greenBuy', format(greenBuy.value, currency));
-      const buyParts = [];
-      if (Number.isFinite(greenBuy.kg)) buyParts.push(format(greenBuy.kg, number, ' kg'));
-      if (Number.isFinite(greenBuy.orders)) buyParts.push(plural(greenBuy.orders, 'purchase order'));
-      note('greenBuyBreakdown', buyParts.join(' · '));
-      note('greenBuyNote', greenBuy.status === 'live' ? '' : greenBuy.note);
-      set('forecast', format(greenForecast.value, currency));
-      note('forecastMonth', greenForecast.month && dateFormat(greenForecast.month.slice(0, 7) + '-01', monthFormat));
-      note('forecastNote', greenForecast.note);
-
-      set('stock', format(stock.value, currency));
-      set('stockItems', Number.isFinite(stock.itemCount) ? plural(stock.itemCount, 'stock item') : '');
-      note('stockNote', stock.note);
-      renderMonthEnds(stock.history);
-      note('stockHistoryNote', stock.historyNote);
-      const orderLabel = (orders, completed) => Number.isFinite(orders) ? plural(orders, 'order') :
-        Number.isFinite(completed) ? plural(completed, 'completed handover') : '—';
-      set('wholesale', orderLabel(wholesale.orders, wholesale.completed));
-      set('previousWholesale', 'Previous week · ' + orderLabel(wholesale.previousOrders, wholesale.previousCompleted));
-      note('wholesaleNote', wholesale.note);
-
-      const sourceEntries = data.sources.filter(source => source.note).map(source => {
+      weightHeadline('productionKg', hasTotal ? production.totalKg : production.roastedKg);
+      set('productionValue', Number.isFinite(production.value) ? money(production.value) : '$ unavailable');
+      set('productionTotalLabel', hasTotal ? 'Roasted and still scheduled' : hasRoasted ? 'Recorded roast output' : 'Production weight');
+      set('roastedKg', weight(production.roastedKg));
+      set('scheduledKg', weight(production.scheduledKg));
+      const weightChange = hasTotal ? comparison(production.changePercent, 'Weight') : comparison(production.roastedChangePercent, 'Roasted kg');
+      const valueChange = comparison(production.valueChangePercent, 'value');
+      const fallback = hasTotal || hasRoasted ? 'Previous week comparison unavailable' : 'Production comparison unavailable';
+      renderComparison('productionChange', [weightChange, valueChange].filter(Boolean).join(' · '), fallback);
+      const connectionNeeded = production.status === 'unavailable' && /connect the Cropster|Cropster rejected/i.test(production.note || '');
+      showText('productionFlag', connectionNeeded ? 'Cropster connection needed' : statusText(production, 'Production unavailable'));
+      set('productionPreviousLabel', 'Previous week (' + previousRange + ')');
+      set('previousProductionKg', weight(production.previousKg, detailKg));
+      set('previousProductionValue', money(production.previousValue));
+      set('previousRoastedKg', weight(production.previousRoastedKg, detailKg));
+      set('previousScheduledKg', weight(production.previousScheduledKg, detailKg));
+      el('previousScheduledRow').hidden = !Number.isFinite(production.previousScheduledKg);
+      const notes = [];
+      if (!Number.isFinite(production.value)) notes.push('Production value is unavailable.');
+      if (!Number.isFinite(production.scheduledKg)) notes.push('Scheduled kilograms are unavailable.');
+      if (weightChange && !hasTotal) notes.push('The percentage compares recorded roast output between weeks.');
+      showText('productionComparisonNote', notes.join(' '));
+      showText('productionSource', sourceText(production, 'Cropster'));
+      showText('productionNote', production.note);
+    }
+    function renderGreen(green) {
+      weightHeadline('greenKg', green.kg);
+      set('greenValue', money(green.value));
+      showText('greenFlag', statusText(green, 'Green stock unavailable'));
+      set('greenUnpriced', format(green.unpricedLots, amount));
+      el('greenBreakdown').hidden = !(green.unpricedLots > 0);
+      showText('greenSource', sourceText(green, 'Green Forecast'));
+      showText('greenNote', green.note);
+    }
+    function renderStock(stock) {
+      set('stockValue', money(stock.value));
+      showText('stockItems', Number.isFinite(stock.itemCount) ? plural(stock.itemCount, 'stock item') : '');
+      showText('stockFlag', statusText(stock, 'Stock value unavailable'));
+      const categories = Array.isArray(stock.categories) ? stock.categories : [];
+      const rows = categories.map(category => {
+        const row = document.createElement('tr');
+        const name = document.createElement('th');
+        name.scope = 'row';
+        name.textContent = category.name;
+        const value = document.createElement('td');
+        value.textContent = money(category.value);
+        row.append(name, value);
+        return row;
+      });
+      el('stockCategories').replaceChildren(...rows);
+      el('stockBreakdown').hidden = !rows.length;
+      showText('stockSource', sourceText(stock, 'Stock Take App'));
+      showText('stockNote', stock.note || (!rows.length ? 'Category values are unavailable.' : ''));
+    }
+    function renderWholesale(wholesale, previousRange) {
+      set('wholesaleTotal', format(wholesale.orders, amount));
+      set('wholesaleDone', format(wholesale.done, amount));
+      set('wholesalePending', format(wholesale.pending, amount));
+      const inherited = wholesale.planStatus === 'inherited-plan' || /^Confirm this week’s order import in Dispatch\./i.test(wholesale.note || '');
+      showText('wholesaleFlag', inherited ? 'Order import unconfirmed' : statusText(wholesale, 'Dispatch totals unavailable'));
+      set('wholesalePreviousLabel', 'Previous week (' + previousRange + ')');
+      set('previousWholesaleTotal', format(wholesale.previousOrders, amount));
+      set('previousWholesaleDone', format(wholesale.previousDone, amount));
+      set('previousWholesalePending', format(wholesale.previousPending, amount));
+      showText('wholesaleSource', sourceText(wholesale, 'Dispatch'));
+      showText('wholesaleNote', wholesale.note);
+    }
+    function sourceLink(value) {
+      try {
+        const url = new URL(value);
+        return url.protocol === 'https:' && !url.username && !url.password ? url.href : null;
+      } catch { return null; }
+    }
+    function renderSources(sources) {
+      const entries = sources.filter(source => source.label).map(source => {
         const entry = document.createElement('li');
-        const label = document.createElement('strong');
+        const url = sourceLink(source.url);
+        const label = document.createElement(url ? 'a' : 'strong');
+        if (url) {
+          label.href = url;
+          label.target = '_blank';
+          label.rel = 'noopener noreferrer';
+        }
         label.textContent = source.label;
-        entry.append(label, ' · ' + source.note);
+        entry.append(label);
+        const timestamp = formatTimestamp(source.asOf);
+        if (timestamp) entry.append(' updated ' + timestamp + ' Sydney time.');
+        if (source.note) entry.append(' ' + source.note);
         return entry;
       });
-      el('sourceList').replaceChildren(...sourceEntries);
-      el('sources').hidden = !sourceEntries.length;
+      el('sourceList').replaceChildren(...entries);
+      el('sources').hidden = !entries.length;
+    }
+    function render(data) {
+      const { week, metrics } = data;
+      const previousRange = weekRange(changeWeek(week.start, -7));
+      set('dates', (week.isCurrent ? 'This week · ' : '') + week.label);
+      renderDemand(metrics.demand, week, previousRange);
+      renderProduction(metrics.production, previousRange);
+      renderGreen(metrics.green);
+      renderStock(metrics.stock);
+      renderWholesale(metrics.wholesale, previousRange);
+      renderSources(data.sources);
+      loadedWeek = week;
       el('figures').hidden = false;
-      isCurrentWeek = data.week.isCurrent;
-      loadedWeek = data.week.start;
-      requestedWeek = data.week.start;
-      set('status', 'Updated ' + timeFormat.format(new Date(data.generatedAt)) + ' Sydney time');
+      el('currentWeek').hidden = week.isCurrent;
+      el('refreshPolicy').hidden = false;
+      const checked = formatTimestamp(data.generatedAt);
+      set('status', checked ? 'Last checked ' + checked + ' Sydney time' : 'Figures loaded');
       el('status').classList.remove('error');
+    }
+    function setWeekQuery(week) {
+      const url = new URL(location.href);
+      if (week) url.searchParams.set('week', week);
+      else url.searchParams.delete('week');
+      history.replaceState(null, '', url.pathname + url.search + url.hash);
     }
     function showSession(active) {
       signedIn = active;
@@ -276,56 +508,73 @@ export const weeklyPage = String.raw`<!doctype html>
       el('report').hidden = !active;
       el('actions').hidden = !active;
       el('login').hidden = active;
-      if (!active) {
-        currentRequest?.abort();
-        el('figures').hidden = true;
-        el('sourceList').replaceChildren();
-        loadedWeek = '';
-      }
+      if (active) return;
+      currentRequest?.abort();
+      currentRequest = null;
+      el('report').setAttribute('aria-busy', 'false');
+      el('figures').hidden = true;
+      el('sources').hidden = true;
+      el('sourceList').replaceChildren();
+      el('stockCategories').replaceChildren();
+      el('figures').querySelectorAll('[id]').forEach(node => {
+        if (node.matches('.metric-figure, .metric-secondary, dd')) node.textContent = unavailable;
+        if (node.matches('.comparison, .source-note, .detail-note, .status-flag')) node.textContent = '';
+      });
+      el('figures').querySelectorAll('details').forEach(card => { card.open = false; });
+      el('sources').open = false;
+      loadedWeek = undefined;
     }
-    async function readJson(response) {
-      return response.json().catch(() => ({}));
-    }
-    async function load() {
+    async function readJson(response) { return response.json().catch(() => ({})); }
+    async function load(announce = true) {
       if (!signedIn) return;
       currentRequest?.abort();
       const controller = new AbortController();
       currentRequest = controller;
+      const weekToLoad = requestedWeek;
       const timeout = setTimeout(() => controller.abort(), 30000);
       el('report').setAttribute('aria-busy', 'true');
       el('previous').disabled = true;
       el('next').disabled = true;
+      el('currentWeek').disabled = true;
       el('refresh').disabled = true;
-      if (loadedWeek !== requestedWeek) {
+      if (!loadedWeek || (weekToLoad && weekToLoad !== loadedWeek.start) || (!weekToLoad && !loadedWeek.isCurrent)) {
         el('figures').hidden = true;
         el('sources').hidden = true;
       }
-      set('status', 'Loading weekly figures…');
+      if (announce || !loadedWeek) {
+        set('status', 'Loading weekly figures…');
+        el('status').classList.remove('error');
+      }
       try {
-        const query = requestedWeek ? '?week=' + encodeURIComponent(requestedWeek) : '';
+        const query = weekToLoad ? '?week=' + encodeURIComponent(weekToLoad) : '';
         const response = await fetch('/api/weekly-report' + query, { cache: 'no-store', signal: controller.signal });
         if (currentRequest !== controller) return;
         if (response.status === 401) {
           showSession(false);
-          note('loginMessage', 'Your session has ended. Sign in again.');
+          showText('loginMessage', 'Your session has ended. Sign in again.');
+          el('password').focus();
           return;
         }
         const data = await readJson(response);
         if (currentRequest !== controller || !signedIn) return;
         if (!response.ok) throw new Error(data.error || 'The report could not be loaded.');
         render(data);
+        if (weekToLoad && loadedWeek.isCurrent) requestedWeek = '';
+        setWeekQuery(requestedWeek);
       } catch (error) {
         if (currentRequest !== controller || !signedIn) return;
-        set('status', error.name === 'AbortError' ? 'The report took too long to load. Try Refresh.' : error.message);
+        const message = error.name === 'AbortError' ? 'The report took too long to load.' : error.message;
+        set('status', loadedWeek ? message + ' Showing the last loaded figures.' : message + ' Select Refresh to try again.');
         el('status').classList.add('error');
-        requestedWeek = loadedWeek;
+        requestedWeek = loadedWeek && !loadedWeek.isCurrent ? loadedWeek.start : '';
         if (loadedWeek) el('figures').hidden = false;
       } finally {
         clearTimeout(timeout);
         if (currentRequest === controller) {
           el('report').setAttribute('aria-busy', 'false');
           el('previous').disabled = !loadedWeek;
-          el('next').disabled = !loadedWeek || isCurrentWeek;
+          el('next').disabled = !loadedWeek || loadedWeek.isCurrent;
+          el('currentWeek').disabled = false;
           el('refresh').disabled = false;
           currentRequest = null;
         }
@@ -333,19 +582,20 @@ export const weeklyPage = String.raw`<!doctype html>
     }
     el('previous').addEventListener('click', () => {
       if (!loadedWeek) return;
-      requestedWeek = changeWeek(loadedWeek, -7);
+      requestedWeek = changeWeek(loadedWeek.start, -7);
       load();
     });
     el('next').addEventListener('click', () => {
-      if (!loadedWeek) return;
-      requestedWeek = changeWeek(loadedWeek, 7);
+      if (!loadedWeek || loadedWeek.isCurrent) return;
+      requestedWeek = changeWeek(loadedWeek.start, 7);
       load();
     });
-    el('refresh').addEventListener('click', load);
+    el('currentWeek').addEventListener('click', () => { requestedWeek = ''; load(); });
+    el('refresh').addEventListener('click', () => load());
     el('signInForm').addEventListener('submit', async event => {
       event.preventDefault();
       el('signIn').disabled = true;
-      note('loginMessage', '');
+      showText('loginMessage', '');
       try {
         const response = await fetch('/api/auth', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -354,9 +604,14 @@ export const weeklyPage = String.raw`<!doctype html>
         const data = await readJson(response);
         if (!response.ok || !data.authenticated) throw new Error(data.error || 'Sign-in could not be completed.');
         showSession(true);
+        el('report').focus({ preventScroll: true });
         load();
-      } catch (error) { note('loginMessage', error.message); }
-      finally { el('password').value = ''; el('signIn').disabled = false; }
+      } catch (error) {
+        showText('loginMessage', error.message);
+      } finally {
+        el('password').value = '';
+        el('signIn').disabled = false;
+      }
     });
     el('logout').addEventListener('click', async () => {
       el('logout').disabled = true;
@@ -365,14 +620,19 @@ export const weeklyPage = String.raw`<!doctype html>
         if (!response.ok) throw new Error('Sign-out could not be completed. Try again.');
         showSession(false);
         el('password').focus();
-      } catch (error) { set('status', error.message); }
-      finally { el('logout').disabled = false; }
+      } catch (error) {
+        set('status', error.message);
+        el('status').classList.add('error');
+      } finally {
+        el('logout').disabled = false;
+      }
     });
     fetch('/api/auth', { cache: 'no-store' }).then(readJson).then(data => {
       showSession(data.authenticated === true);
       if (signedIn) load();
     }).catch(() => showSession(false));
-    setInterval(() => { if (signedIn && !document.hidden && !currentRequest) load(); }, 60000);
+    document.addEventListener('visibilitychange', () => { if (signedIn && !document.hidden && !currentRequest) load(false); });
+    setInterval(() => { if (signedIn && !document.hidden && !currentRequest) load(false); }, 60000);
   </script>
 </body>
 </html>`;
