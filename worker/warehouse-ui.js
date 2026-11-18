@@ -212,6 +212,7 @@ export const warehousePage = String.raw`<!doctype html>
               <p class="john-caption">Playful weekly estimates</p>
               <div id="johnRatings" class="john-ratings"></div>
               <button id="johnHighFive" class="high-five" type="button"><span aria-hidden="true">🙌</span> Hi five, John! <span aria-hidden="true">+1</span></button>
+              <p id="johnSaveStatus" class="john-caption" role="status" hidden></p>
               <p id="johnCoinFeedback" class="john-coin-feedback" hidden></p>
               <div class="john-cheers"><span id="johnCheerCount">0 cheers · this visit</span><span id="johnCombo" class="john-combo" hidden aria-hidden="true"></span></div>
               <p class="john-caption">Local cheers boost Energy and Emotion up to 5.</p>
@@ -273,6 +274,12 @@ export const warehousePage = String.raw`<!doctype html>
     const johnCheers = new Map();
     const johnCoins = new Map();
     const cheerPops = [];
+    const cheerStoragePrefix = "bmc-warehouse-cheer-v1:";
+    const maxPendingCheers = 5000;
+    const pendingCheers = new Map();
+    const cheerCleanupIds = new Set();
+    let cheerSaveTimer = null, cheerSaveRequest = null, cheerRetryAttempt = 0;
+    let cheerStorageFailed = false, cheerSaveFailed = false, cheerQueueUnreadable = false, cheerIdFailed = false, cheerRecordFailed = false;
     const clockDate = new Intl.DateTimeFormat("en-AU", { timeZone: "Australia/Sydney", weekday: "short", day: "numeric", month: "short", year: "numeric" });
     const clockTime = new Intl.DateTimeFormat("en-AU", { timeZone: "Australia/Sydney", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" });
     const motion = matchMedia("(prefers-reduced-motion: reduce)");
@@ -814,6 +821,152 @@ export const warehousePage = String.raw`<!doctype html>
       }
     }
     function johnWeek() { return data?.john?.weekStart || data?.weekly?.week?.start || null; }
+    function updateCheerSaveStatus() {
+      let text = "";
+      if (signedIn && (pendingCheers.size || cheerQueueUnreadable || cheerIdFailed || cheerRecordFailed)) {
+        if (pendingCheers.size >= maxPendingCheers) text = "Cheers waiting to save. Reconnect before adding more high fives.";
+        else if (cheerIdFailed) text = "A cheer could not be recorded. Refresh this page to try again.";
+        else if (cheerRecordFailed) text = "Cheer could not be recorded. Enable browser storage and try again.";
+        else if (cheerStorageFailed) text = "Cheers waiting to save. Browser storage is unavailable.";
+        else if (cheerQueueUnreadable) text = "Some pending cheers could not be read from browser storage.";
+        else if (cheerSaveFailed || navigator.onLine === false) text = "Cheers waiting to save. Retrying in the background.";
+      }
+      el("johnSaveStatus").textContent = text;
+      el("johnSaveStatus").hidden = !text;
+      el("johnHighFive").disabled = !signedIn || !johnWeek() || pendingCheers.size >= maxPendingCheers || cheerIdFailed;
+    }
+    function validPendingCheer(value, id) {
+      return value && value.id === id && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)
+        && typeof value.occurredAt === "string" && Number.isFinite(Date.parse(value.occurredAt))
+        && new Date(value.occurredAt).toISOString() === value.occurredAt;
+    }
+    function readPendingCheers() {
+      try {
+        const storage = window.localStorage;
+        cheerStorageFailed = false;
+        cheerQueueUnreadable = false;
+        const keys = [];
+        for (let index = 0; index < storage.length; index++) {
+          const key = storage.key(index);
+          if (key?.startsWith(cheerStoragePrefix)) keys.push(key);
+        }
+        for (const key of keys) {
+          const id = key.slice(cheerStoragePrefix.length);
+          if (cheerCleanupIds.has(id)) {
+            try { storage.removeItem(key); cheerCleanupIds.delete(id); } catch {}
+            continue;
+          }
+          if (pendingCheers.has(id) || pendingCheers.size >= maxPendingCheers) continue;
+          try {
+            const event = JSON.parse(storage.getItem(key));
+            if (validPendingCheer(event, id)) pendingCheers.set(id, { id, occurredAt: event.occurredAt, persisted: true });
+            else cheerQueueUnreadable = true;
+          } catch { cheerQueueUnreadable = true; }
+        }
+      } catch { cheerStorageFailed = true; }
+      updateCheerSaveStatus();
+    }
+    function persistCheer(event) {
+      if (event.persisted) return true;
+      try {
+        window.localStorage.setItem(cheerStoragePrefix + event.id, JSON.stringify({ id: event.id, occurredAt: event.occurredAt }));
+        event.persisted = true;
+        cheerStorageFailed = false;
+        return true;
+      } catch { cheerStorageFailed = true; return false; }
+    }
+    function scheduleCheerSave(delay = 500) {
+      if (!signedIn || !pendingCheers.size || cheerSaveTimer !== null || cheerSaveRequest) return;
+      cheerSaveTimer = setTimeout(() => { cheerSaveTimer = null; flushCheers(); }, delay);
+    }
+    function enqueueCheer() {
+      if (pendingCheers.size >= maxPendingCheers) { updateCheerSaveStatus(); scheduleCheerSave(0); return false; }
+      let event;
+      try { event = { id: crypto.randomUUID(), occurredAt: new Date().toISOString(), persisted: false }; }
+      catch { cheerIdFailed = true; updateCheerSaveStatus(); return false; }
+      pendingCheers.set(event.id, event);
+      if (!persistCheer(event)) {
+        pendingCheers.delete(event.id);
+        cheerRecordFailed = true;
+        updateCheerSaveStatus();
+        scheduleCheerSave();
+        return false;
+      }
+      cheerRecordFailed = false;
+      updateCheerSaveStatus();
+      scheduleCheerSave();
+      return true;
+    }
+    function acknowledgeCheer(id) {
+      pendingCheers.delete(id);
+      try { window.localStorage.removeItem(cheerStoragePrefix + id); }
+      catch {
+        if (cheerCleanupIds.size >= maxPendingCheers) cheerCleanupIds.delete(cheerCleanupIds.values().next().value);
+        cheerCleanupIds.add(id);
+      }
+    }
+    function stopCheerSave() {
+      clearTimeout(cheerSaveTimer);
+      cheerSaveTimer = null;
+      cheerSaveRequest?.abort();
+      cheerSaveRequest = null;
+    }
+    function resumeCheerSave() {
+      if (!signedIn) return;
+      readPendingCheers();
+      clearTimeout(cheerSaveTimer);
+      cheerSaveTimer = null;
+      scheduleCheerSave(0);
+    }
+    async function flushCheers({ keepalive = false } = {}) {
+      if (!signedIn || cheerSaveRequest || !pendingCheers.size) return;
+      clearTimeout(cheerSaveTimer);
+      cheerSaveTimer = null;
+      const controller = new AbortController();
+      const generation = sessionGeneration;
+      cheerSaveRequest = controller;
+      const batch = [...pendingCheers.values()].slice(0, 25);
+      for (const event of batch) persistCheer(event);
+      const events = batch.map(({ id, occurredAt }) => ({ id, occurredAt }));
+      const timeout = setTimeout(() => controller.abort(), 12000);
+      let success = false;
+      try {
+        const response = await fetch("/api/john-cheers", {
+          method: "POST", credentials: "same-origin", cache: "no-store", keepalive: true,
+          headers: { "Content-Type": "application/json" }, body: JSON.stringify({ events }), signal: controller.signal,
+        });
+        const result = await readJson(response);
+        if (cheerSaveRequest !== controller || generation !== sessionGeneration || !signedIn) return;
+        if (response.status === 401 || response.status === 403) {
+          showSession(false);
+          setMessage("loginMessage", "Sign in again to save your pending cheers.");
+          return;
+        }
+        if (!response.ok || result.ok !== true || !Array.isArray(result.acknowledgedIds)) throw new Error("Cheer save unavailable.");
+        const sentIds = new Set(events.map(event => event.id));
+        const acknowledged = result.acknowledgedIds.filter(id => sentIds.has(id));
+        if (!acknowledged.length) throw new Error("Cheer save is not confirmed.");
+        for (const id of acknowledged) acknowledgeCheer(id);
+        cheerRetryAttempt = 0;
+        cheerSaveFailed = false;
+        success = true;
+      } catch {
+        if (cheerSaveRequest === controller && generation === sessionGeneration && signedIn) {
+          cheerSaveFailed = true;
+          cheerRetryAttempt = Math.min(cheerRetryAttempt + 1, 5);
+        }
+      } finally {
+        clearTimeout(timeout);
+        if (cheerSaveRequest === controller) {
+          cheerSaveRequest = null;
+          updateCheerSaveStatus();
+          if (!keepalive) {
+            if (success && pendingCheers.size < 25) readPendingCheers();
+            scheduleCheerSave(success ? 100 : Math.min(30000, 1000 * Math.pow(2, cheerRetryAttempt)));
+          }
+        }
+      }
+    }
     function clearCheerEffects() {
       for (const pop of cheerPops) {
         pop.animation?.cancel();
@@ -864,7 +1017,7 @@ export const warehousePage = String.raw`<!doctype html>
       el("johnCoinFeedback").textContent = feedback;
       el("johnCoinFeedback").hidden = !feedback;
       el("johnCoinFeedback").classList.toggle("error", Boolean(johnCoinReward && !johnCoinReward.accepted));
-      el("johnHighFive").disabled = !signedIn || !week;
+      updateCheerSaveStatus();
     }
     function closeJohn(restoreFocus = false) {
       johnOpen = false;
@@ -947,6 +1100,7 @@ export const warehousePage = String.raw`<!doctype html>
     function highFiveJohn() {
       const week = johnWeek();
       if (!signedIn || !week) return;
+      if (!enqueueCheer()) return;
       const now = performance.now();
       johnCombo = now - johnLastTap <= 1400 ? johnCombo + 1 : 1;
       johnLastTap = now;
@@ -1096,6 +1250,7 @@ export const warehousePage = String.raw`<!doctype html>
     }
     function clearReport() {
       data = null;
+      stopCheerSave();
       clearTimeout(johnComboTimer);
       clearTimeout(johnAnnounceTimer);
       johnCheers.clear();
@@ -1139,6 +1294,7 @@ export const warehousePage = String.raw`<!doctype html>
         el("refresh").textContent = "Refresh";
         clearReport();
       } else {
+        resumeCheerSave();
         startScene();
         pauseState();
       }
@@ -1286,7 +1442,25 @@ export const warehousePage = String.raw`<!doctype html>
     observer.observe(el("sceneStage"));
     document.addEventListener("visibilitychange", () => {
       pauseState();
+      if (!document.hidden && signedIn) resumeCheerSave();
       if (!document.hidden && signedIn && !activeRequest) load();
+    });
+    window.addEventListener("online", resumeCheerSave);
+    window.addEventListener("storage", event => {
+      if (!event.key?.startsWith(cheerStoragePrefix)) return;
+      const id = event.key.slice(cheerStoragePrefix.length);
+      if (event.newValue === null) {
+        pendingCheers.delete(id);
+        cheerCleanupIds.delete(id);
+      } else if (pendingCheers.size < maxPendingCheers && !cheerCleanupIds.has(id)) {
+        try {
+          const value = JSON.parse(event.newValue);
+          if (validPendingCheer(value, id)) pendingCheers.set(id, { id, occurredAt: value.occurredAt, persisted: true });
+          else cheerQueueUnreadable = true;
+        } catch { cheerQueueUnreadable = true; }
+      }
+      updateCheerSaveStatus();
+      scheduleCheerSave();
     });
     motion.addEventListener("change", () => {
       scene?.setReducedMotion?.(motion.matches);
@@ -1299,6 +1473,9 @@ export const warehousePage = String.raw`<!doctype html>
     const clockTimer = setInterval(updateClock, 1000);
     window.addEventListener("pagehide", () => {
       activeRequest?.abort();
+      clearTimeout(cheerSaveTimer);
+      cheerSaveTimer = null;
+      flushCheers({ keepalive: true });
       clearTimeout(johnComboTimer);
       clearTimeout(johnAnnounceTimer);
       clearCheerEffects();

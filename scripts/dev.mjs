@@ -14,7 +14,7 @@ const host = "127.0.0.1";
 const port = Number(process.env.PORT || 4182);
 createServer(async (incoming, outgoing) => {
   try {
-    if (incoming.url === "/warehouse-scene.js" && ["GET", "HEAD"].includes(incoming.method)) {
+    if (new URL(incoming.url, `http://${host}:${port}`).pathname === "/warehouse-scene.js" && ["GET", "HEAD"].includes(incoming.method)) {
       const script = await buildWarehouseAsset();
       outgoing.writeHead(200, { "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "no-store" });
       outgoing.end(incoming.method === "HEAD" ? undefined : script);

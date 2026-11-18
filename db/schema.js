@@ -99,3 +99,12 @@ export const warehouseRoasterMessages = sqliteTable("warehouse_roaster_messages"
 }, table => [
   check("warehouse_roaster_messages_status", sql`${table.status} IN ('queued', 'sent')`),
 ]);
+
+export const warehouseJohnCheers = sqliteTable("warehouse_john_cheers", {
+  id: text("id").primaryKey(),
+  occurredAt: integer("occurred_at").notNull(),
+  receivedAt: integer("received_at").notNull(),
+  weekStart: text("week_start").notNull(),
+}, table => [
+  index("warehouse_john_cheers_week_received_idx").on(table.weekStart, table.receivedAt),
+]);

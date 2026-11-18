@@ -57,6 +57,13 @@
       "when": 1795036062623,
       "tag": "0007_warehouse_expenses_messages",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1795039179517,
+      "tag": "0008_john_cheer_log",
+      "breakpoints": true
     }
   ]
 }

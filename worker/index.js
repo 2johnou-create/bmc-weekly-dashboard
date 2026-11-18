@@ -18,6 +18,7 @@ import { saveLabSettings } from "./roastery-lab-settings.js";
 import { readCoffeeC } from "./coffee-c.js";
 import { readPurchases } from "./purchases.js";
 import { saveExpenseReading } from "./expenses.js";
+import { readJohnCheers, saveJohnCheers } from "./john-cheers.js";
 import { readOnlineOrders, ONLINE_ORDERS_FOLDER_URL, ONLINE_ORDERS_CSV_HEADERS } from "./online-orders.js";
 
 const commonHeaders = {
@@ -48,6 +49,7 @@ const cropsterSmallBody = { ...cropsterBody, maximum: 512 };
 const labSettingsBody = { maximum: 32_768, missing: "Enter release or QA details.", invalid: "Enter valid release and QA details.", tooLarge: "The release and QA notes are too large." };
 const labCropsterBody = { ...cropsterBody, maximum: 350_000, tooLarge: "The Cropster report is too large." };
 const expenseBody = { maximum: 100_000, missing: "Enter a verified sheet reading.", invalid: "Enter a valid sheet reading.", tooLarge: "The sheet reading is too large." };
+const cheerBody = { maximum: 8_192, missing: "The cheer log needs valid events.", invalid: "The cheer log needs valid events.", tooLarge: "The cheer batch is too large." };
 const documents = new Map([["/", weeklyPage], ["/details", page], ["/roastery-lab", roasteryLabPage], ["/warehouse", warehousePage]]);
 const warehouseAsset = typeof __WAREHOUSE_SCENE__ === "string" ? __WAREHOUSE_SCENE__ : null;
 async function activeSession(request, env) {
@@ -185,6 +187,14 @@ export default {
         requireOrigin(request);
         await activeSession(request, env);
         return json(await saveExpenseReading(env.DB, await jsonInput(request, expenseBody), new Date()));
+      }
+      if (url.pathname === "/api/john-cheers") {
+        if (!["GET", "POST"].includes(request.method)) return json({ error: "Method not allowed." }, 405, { Allow: "GET, POST" });
+        if (request.method === "POST") requireOrigin(request);
+        await activeSession(request, env);
+        const now = new Date();
+        if (request.method === "GET") return json(await readJohnCheers(env.DB, dashboardWeek(undefined, now).start));
+        return json(await saveJohnCheers(env.DB, await jsonInput(request, cheerBody), now));
       }
       if (url.pathname === "/api/weekly-note") {
         if (!["GET", "PUT"].includes(request.method)) return json({ error: "Method not allowed." }, 405, { Allow: "GET, PUT" });
