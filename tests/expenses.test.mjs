@@ -201,13 +201,14 @@ test("Google ContentService redirect uses a separate GET without token, body or 
     assert.equal(options.method, "GET");
     assert.equal(options.body, undefined);
     assert.equal(options.headers, undefined);
-    return Response.json({ status: "sent", id: "fixture-id" });
+    return Response.json({ ok: true });
   };
-  assert.deepEqual(await callGoogleBridge(env, { action: "message", message: "Fixture only" }, { fetcher }), { status: "sent", id: "fixture-id" });
+  assert.deepEqual(await callGoogleBridge(env, { action: "expenses" }, { fetcher }), { ok: true });
   assert.equal(calls, 2);
 });
 
 test("bridge configuration and redirects are tightly bounded and errors contain no token", async () => {
+  await assert.rejects(callGoogleBridge(env, {action:"message"}, {fetcher:()=>assert.fail("Removed message actions must not contact Google")}));
   assert.equal(isGoogleBridgeConfigured(env), true);
   for (const config of [
     { ...env, GOOGLE_BRIDGE_TOKEN: "short" },

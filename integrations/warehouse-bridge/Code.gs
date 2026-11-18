@@ -1,9 +1,6 @@
-/** Warehouse bridge. The recipient and spreadsheet are fixed in source. */
-const BRIDGE_RECIPIENT = 'roaster@blackmarketroasters.com.au';
+/** Read-only Warehouse expenses bridge. The spreadsheet and range are fixed. */
 const EXPENSES_SPREADSHEET = '1rhkE1pU7kKoBSX1j9V_OpeAyGNzWIpCgcYxWYvwmpik';
 const EXPENSES_RANGE = "'Sheet1'!A1:W36";
-const MESSAGE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const MESSAGE_CONTROLS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/;
 
 function bridgeJson_(value) {
   return ContentService.createTextOutput(JSON.stringify(value)).setMimeType(ContentService.MimeType.JSON);
@@ -47,9 +44,6 @@ function doPost(event) {
     if (input.action === 'expenses' && bridgeFields_(input, ['token', 'action'])) {
       return bridgeJson_(readExpenses_());
     }
-    if (input.action === 'message' && bridgeFields_(input, ['token', 'action', 'id', 'message'])) {
-      return bridgeJson_(sendWarehouseMessage_(input, properties));
-    }
     return bridgeJson_({ ok: false, error: 'Unsupported request.' });
   } catch (_) {
     return bridgeJson_({ ok: false, error: 'The bridge could not complete this request.' });
@@ -84,59 +78,8 @@ function readExpenses_() {
   };
 }
 
-function sendWarehouseMessage_(input, properties) {
-  if (typeof input.id !== 'string' || !MESSAGE_ID.test(input.id) ||
-      typeof input.message !== 'string' || MESSAGE_CONTROLS.test(input.message)) {
-    return { ok: false, status: 'unavailable', error: 'Invalid message.' };
-  }
-  const id = input.id.toLowerCase();
-  const message = input.message.replace(/\r\n?/g, '\n').trim();
-  if (!message || message.length > 500) return { ok: false, id: id, status: 'unavailable', error: 'Invalid message.' };
-  const digest = bridgeHash_(message);
-  const key = 'message_' + id;
-  const lock = LockService.getScriptLock();
-  if (!lock.tryLock(1000)) return { ok: true, id: id, status: 'queued' };
-  try {
-    const previous = properties.getProperty(key);
-    if (previous) {
-      const receipt = JSON.parse(previous);
-      if (receipt.digest !== digest) return { ok: false, id: id, status: 'unavailable', error: 'Message reference conflict.' };
-      return { ok: true, id: id, status: receipt.status === 'sent' ? 'sent' : 'queued' };
-    }
-    if (MailApp.getRemainingDailyQuota() < 1) return { ok: true, id: id, status: 'unavailable' };
-
-    // Reserve before touching MailApp. An interrupted/uncertain send remains
-    // queued. It is never resent automatically by a retry with this UUID.
-    const receipt = { digest: digest, status: 'queued', createdAt: Date.now() };
-    properties.setProperty(key, JSON.stringify(receipt));
-    try {
-      MailApp.sendEmail({
-        to: BRIDGE_RECIPIENT,
-        subject: 'Warehouse message for John',
-        body: 'Message from the Black Market Coffee Warehouse dashboard\n\n' + message + '\n\nMessage reference: ' + id,
-        name: 'Black Market Coffee Warehouse',
-      });
-    } catch (_) {
-      return { ok: true, id: id, status: 'queued' };
-    }
-    receipt.status = 'sent';
-    try { properties.setProperty(key, JSON.stringify(receipt)); } catch (_) {
-      // The earlier reservation still prevents a duplicate even if receipt
-      // storage is unavailable after MailApp has confirmed the send.
-    }
-    return { ok: true, id: id, status: 'sent' };
-  } finally {
-    lock.releaseLock();
-  }
-}
-
-/** Run once in the editor to review Google permissions. This sends no email. */
+/** Run once in the editor to review the read-only Google Sheets permission. */
 function authorizeBridge() {
   const expenses = readExpenses_();
-  return {
-    sheetName: expenses.sheetName,
-    range: expenses.range,
-    recipient: BRIDGE_RECIPIENT,
-    remainingDailyEmailRecipients: MailApp.getRemainingDailyQuota(),
-  };
+  return { sheetName: expenses.sheetName, range: expenses.range };
 }

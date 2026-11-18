@@ -45,7 +45,7 @@ async function responseJson(response) {
 export async function callGoogleBridge(env, payload, { fetcher = fetch } = {}) {
   const config = configuration(env);
   if (!config || !payload || typeof payload !== "object" || Array.isArray(payload)
-    || !["expenses", "message"].includes(payload.action)) throw new Error("Google bridge is not configured for this action.");
+    || payload.action !== "expenses") throw new Error("Google bridge is not configured for this action.");
   try {
     const body = JSON.stringify({ ...payload, token: config.token });
     if (new TextEncoder().encode(body).length > 20_000) throw new Error("Google bridge request is too large.");

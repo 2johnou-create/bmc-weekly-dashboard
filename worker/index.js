@@ -18,7 +18,6 @@ import { saveLabSettings } from "./roastery-lab-settings.js";
 import { readCoffeeC } from "./coffee-c.js";
 import { readPurchases } from "./purchases.js";
 import { saveExpenseReading } from "./expenses.js";
-import { sendRoasterMessage } from "./roaster-messages.js";
 import { readOnlineOrders, ONLINE_ORDERS_FOLDER_URL, ONLINE_ORDERS_CSV_HEADERS } from "./online-orders.js";
 
 const commonHeaders = {
@@ -49,7 +48,6 @@ const cropsterSmallBody = { ...cropsterBody, maximum: 512 };
 const labSettingsBody = { maximum: 32_768, missing: "Enter release or QA details.", invalid: "Enter valid release and QA details.", tooLarge: "The release and QA notes are too large." };
 const labCropsterBody = { ...cropsterBody, maximum: 350_000, tooLarge: "The Cropster report is too large." };
 const expenseBody = { maximum: 100_000, missing: "Enter a verified sheet reading.", invalid: "Enter a valid sheet reading.", tooLarge: "The sheet reading is too large." };
-const messageBody = { maximum: 4_096, missing: "Enter a message.", invalid: "Enter a valid message.", tooLarge: "Keep the message to 500 characters." };
 const documents = new Map([["/", weeklyPage], ["/details", page], ["/roastery-lab", roasteryLabPage], ["/warehouse", warehousePage]]);
 const warehouseAsset = typeof __WAREHOUSE_SCENE__ === "string" ? __WAREHOUSE_SCENE__ : null;
 async function activeSession(request, env) {
@@ -182,14 +180,10 @@ export default {
           throw error;
         }
       }
-      if (url.pathname === "/api/roaster-messages" || url.pathname === "/api/expenses/readings") {
+      if (url.pathname === "/api/expenses/readings") {
         if (request.method !== "POST") return json({ error: "Method not allowed." }, 405, { Allow: "POST" });
         requireOrigin(request);
         await activeSession(request, env);
-        if (url.pathname === "/api/roaster-messages") {
-          const result = await sendRoasterMessage(env.DB, env, await jsonInput(request, messageBody));
-          return json(result, result.status === "unavailable" ? 503 : 200);
-        }
         return json(await saveExpenseReading(env.DB, await jsonInput(request, expenseBody), new Date()));
       }
       if (url.pathname === "/api/weekly-note") {

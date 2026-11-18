@@ -5,7 +5,6 @@ import { readCoffeeC } from "./coffee-c.js";
 import { PURCHASE_SOURCE_URL, PURCHASE_SHEET, readPurchases } from "./purchases.js";
 import { readWeeklyNote } from "./weekly-note.js";
 import { readWarehouseWeather } from "./weather.js";
-import { roasterMessagingCapability } from "./roaster-messages.js";
 
 function settled(result, fallback) {
   return result.status === "fulfilled" ? result.value : fallback;
@@ -67,7 +66,6 @@ export async function collectWarehouse({ env = {}, stockroomCookie, now = new Da
       location: "Marrickville", sourceUrl: "https://api.met.no/", licenseUrl: "https://api.met.no/doc/License",
       note: "The Marrickville outdoor forecast could not be loaded. Try refreshing.",
     }),
-    messaging: roasterMessagingCapability(env),
     generatedAt: now.toISOString(),
   };
 }

@@ -6,7 +6,7 @@ const overviewDirection = new THREE.Vector3(1, 1.05, 1.3).normalize();
 const overviewTarget = new THREE.Vector3(0, 1.3, 2);
 const floorBounds = new THREE.Box3(new THREE.Vector3(-19, -.6, -11.5), new THREE.Vector3(19, 9, 17.5));
 
-export function createWarehouseScene({ container, onSelect, onPersonSelect, onReady, onError, reducedMotion = false }) {
+export function createWarehouseScene({ container, onSelect, onReady, onError, reducedMotion = false }) {
   if (!container?.appendChild) throw new Error('A container is needed for the warehouse view.');
 
   let renderer;
@@ -14,7 +14,7 @@ export function createWarehouseScene({ container, onSelect, onPersonSelect, onRe
     renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
   } catch (error) {
     queueMicrotask(() => onError?.(error));
-    return { setData() {}, focus() {}, setPaused() {}, setReducedMotion() {}, resize() {}, dispose() {}, projectPins: () => [], projectPerson: () => ({ visible: false }) };
+    return { setData() {}, focus() {}, setPaused() {}, setReducedMotion() {}, resize() {}, dispose() {}, projectPins: () => [] };
   }
 
   const scene = new THREE.Scene();
@@ -464,17 +464,16 @@ export function createWarehouseScene({ container, onSelect, onPersonSelect, onRe
 
   const headGeometry = sphereGeometry;
   const capGeometry = geometry(new THREE.SphereGeometry(1, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2));
-  function createWorker({ path, zone, person, shirt = palette.cream, skin = palette.skin, offset = 0, apron = true }) {
+  function createWorker({ path, zone, shirt = palette.cream, skin = palette.skin, offset = 0, apron = true }) {
     const root = group(scene);
     root.userData.zone = zone;
-    if (person) root.userData.person = person;
     const body = group(root);
     const torsoGeometry = geometry(new THREE.CylinderGeometry(.22, .27, .59, 10));
     mesh(torsoGeometry, shirt, body, [0, 1.03, 0]);
     cylinder(body, skin, .09, .12, [0, 1.39, 0]);
     mesh(headGeometry, skin, body, [0, 1.62, .01], [.22, .245, .22]);
     mesh(capGeometry, palette.hair, body, [0, 1.67, 0], [.23, .21, .23]);
-    box(body, person === 'john' || zone === 'dispatch' ? palette.red : palette.green, [.28, .045, .23], [0, 1.82, .15]);
+    box(body, zone === 'dispatch' ? palette.red : palette.green, [.28, .045, .23], [0, 1.82, .15]);
     for (const x of [-.073, .073]) sphere(body, palette.ink, .019, [x, 1.65, .215]);
     if (apron) {
       box(body, palette.apron, [.38, .48, .035], [0, .98, .235]);
@@ -514,7 +513,7 @@ export function createWarehouseScene({ container, onSelect, onPersonSelect, onRe
     worker.arms[1].rotation.x = stride * .45;
     worker.body.position.y = Math.abs(stride) * .035;
   }
-  const john = createWorker({ zone: 'roasting', person: 'john', offset: .18, shirt: palette.cream,
+  createWorker({ zone: 'roasting', offset: .18, shirt: palette.cream,
     path: [[2.8, 2.5], [3.8, .8], [3.3, -2.5], [2.3, -4.7], [3.2, -1.3]] });
   createWorker({ zone: 'green', offset: .54, shirt: palette.navy, skin: palette.skinDark,
     path: [[-5.8, -5.8], [-5.2, -2.4], [-8, -1.7], [-7.1, -3.5]] });
@@ -530,7 +529,7 @@ export function createWarehouseScene({ container, onSelect, onPersonSelect, onRe
   const raycaster = new THREE.Raycaster();
   const pointer = new THREE.Vector2();
   const projected = new THREE.Vector3();
-  function hitTarget(event) {
+  function hitZone(event) {
     const bounds = canvas.getBoundingClientRect();
     if (!bounds.width || !bounds.height) return null;
     pointer.set((event.clientX - bounds.left) / bounds.width * 2 - 1, -(event.clientY - bounds.top) / bounds.height * 2 + 1);
@@ -538,13 +537,8 @@ export function createWarehouseScene({ container, onSelect, onPersonSelect, onRe
     const intersections = raycaster.intersectObjects(scene.children, true);
     for (const hit of intersections) {
       let object = hit.object;
-      let zone;
-      while (object) {
-        if (object.userData.person) return { person: object.userData.person };
-        if (!zone && object.userData.zone) zone = object.userData.zone;
-        object = object.parent;
-      }
-      if (zone) return { zone };
+      while (object && !object.userData.zone) object = object.parent;
+      if (object?.userData.zone) return object.userData.zone;
       // A wall or foreground object blocks picking objects behind it.
       if (!hit.object.isLine && !hit.object.material?.transparent) return null;
     }
@@ -568,18 +562,13 @@ export function createWarehouseScene({ container, onSelect, onPersonSelect, onRe
     const moved = Math.hypot(event.clientX - pointerStart.x, event.clientY - pointerStart.y);
     pointerStart = undefined;
     if (moved > 7) return;
-    const target = hitTarget(event);
-    if (target?.person) {
-      onPersonSelect?.(target.person);
-    } else if (target?.zone) {
-      highlight(target.zone);
-      onSelect?.(target.zone);
-    }
+    const id = hitZone(event);
+    if (id) { highlight(id); onSelect?.(id); }
   }
   function onPointerMove(event) {
     if (pointerStart || performance.now() - hoverAt < 65) return;
     hoverAt = performance.now();
-    canvas.style.cursor = hitTarget(event) ? 'pointer' : 'grab';
+    canvas.style.cursor = hitZone(event) ? 'pointer' : 'grab';
   }
   function onPointerCancel() { pointerStart = undefined; canvas.style.cursor = 'grab'; }
   canvas.addEventListener('pointerdown', onPointerDown);
@@ -649,18 +638,6 @@ export function createWarehouseScene({ container, onSelect, onPersonSelect, onRe
       const y = (1 - projected.y) / 2 * height;
       return { id, x, y, visible: projected.z > -1 && projected.z < 1 && x >= 0 && x <= width && y >= 0 && y <= height };
     });
-  }
-  function projectPerson(id) {
-    if (id !== 'john' || disposed || contextLost) return { visible: false };
-    camera.updateMatrixWorld();
-    john.root.updateWorldMatrix(true, false);
-    projected.set(0, 2.05, 0).applyMatrix4(john.root.matrixWorld).project(camera);
-    const x = (projected.x + 1) / 2 * width;
-    const y = (1 - projected.y) / 2 * height;
-    return {
-      id, x, y,
-      visible: projected.z > -1 && projected.z < 1 && x >= 0 && x <= width && y >= 0 && y <= height,
-    };
   }
 
   function knownIntensity(value, scale) {
@@ -804,5 +781,5 @@ export function createWarehouseScene({ container, onSelect, onPersonSelect, onRe
   resize();
   camera.lookAt(controls.target);
   requestFrame();
-  return { setData, focus, setPaused, setReducedMotion, resize, dispose, projectPins, projectPerson };
+  return { setData, focus, setPaused, setReducedMotion, resize, dispose, projectPins };
 }

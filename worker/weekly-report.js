@@ -5,6 +5,7 @@ import { readCropsterFriday } from "./cropster-friday.js";
 import { readWeeklyDemand } from "./demand.js";
 import { readFridayStock } from "./stock-history.js";
 import { readExpenses } from "./expenses.js";
+import { readPurchases, PURCHASE_SOURCE_URL } from "./purchases.js";
 
 const dispatchPath = "/api/integrations/dashboard/weekly";
 
@@ -139,11 +140,12 @@ export async function collectWeeklyReport({ weekStart, stockroomCookie, env, now
   // Check Stockroom access before reading other business data.
   const inventory = await fetchSourceJson(SOURCE_ORIGINS.stockroom + "/api/inventory", stockroomHeaders, fetcher);
   const demandOptions = { fetch: fetcher, now: () => now.getTime(), fresh };
-  const [{ production, green }, mondayReading, stock, expenses, [weekDemand, previousDemand, dispatch, previousDispatch]] = await Promise.all([
+  const [{ production, green }, mondayReading, stock, expenses, purchases, [weekDemand, previousDemand, dispatch, previousDispatch]] = await Promise.all([
     historical ? readCropsterFriday(env.DB, week.start) : readCropsterReadings({ db: env.DB, weekStart: week.start, followingWeekStart: addDays(week.start, 7), now }),
     readCropsterMonday({ db: env.DB, weekStart: week.start }),
     historical ? readFridayStock({ date: week.end, inventory, stockroomCookie, now, fetcher }) : stockMetric(inventory),
     readExpenses({ db: env.DB, env, week, fresh, now, fetcher }),
+    readPurchases({ now, fetcher, fresh }),
     Promise.allSettled([
       readWeeklyDemand(week.start, demandOptions),
       readWeeklyDemand(previousWeek, demandOptions),
@@ -155,12 +157,13 @@ export async function collectWeeklyReport({ weekStart, stockroomCookie, env, now
   const previousTally = settledValue(previousDemand);
   const demand = weeklyDemandComparison(currentTally, previousTally, mondayReading);
   const wholesale = wholesaleDeliveryComparison(settledValue(dispatch), settledValue(previousDispatch));
+  const greenForecast = purchases.greenForecast;
   const greenReport = new URL("/apps/lots/inventory-report/location", CROPSTER_WEBSITE);
   if (historical) greenReport.searchParams.set("reportDates", JSON.stringify([null, week.end]));
   return {
     week,
     generatedAt: now.toISOString(),
-    metrics: { demand, production, green, stock, wholesale, expenses },
+    metrics: { demand, production, green, stock, wholesale, expenses: { ...expenses, greenForecast } },
     sources: [
       { label: "This week’s roast tally", note: currentTally?.note || "Demand workbook is unavailable.", url: currentTally?.url, asOf: currentTally?.asOf },
       { label: "Last week’s roast tally", note: previousTally?.note || "Demand workbook is unavailable.", url: previousTally?.url, asOf: previousTally?.asOf },
@@ -170,6 +173,7 @@ export async function collectWeeklyReport({ weekStart, stockroomCookie, env, now
       { label: "Stock Take App", note: historical ? stock.note : "Current non-coffee value uses every active item’s saved stock count.", url: SOURCE_ORIGINS.stockroom },
       { label: "Dispatch", note: historical ? "Selected week’s schedules and completed handovers through Friday." : "This week’s schedule covers all seven days. Done counts completed primary orders.", url: SOURCE_ORIGINS.dispatch },
       { label: "Warehouse expenses", note: expenses.note, url: expenses.sourceUrl, asOf: expenses.asOf },
+      { label: "Current month Green Buy forecast", note: greenForecast?.note || "The current month’s forecast is unavailable.", url: PURCHASE_SOURCE_URL, asOf: greenForecast?.asOf },
     ],
   };
 }

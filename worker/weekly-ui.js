@@ -66,6 +66,7 @@ export const weeklyPage = String.raw`<!doctype html>
     .expenses .over-limit { color: var(--accent); }
     .expenses .status-flag { grid-column: 1 / -1; margin: 0; }
     .expense-freshness { grid-column: 1 / -1; font-size: .73rem; line-height: 1.35; color: var(--muted); }
+    .expense-forecast { margin-top: 1rem; padding-top: .8rem; border-top: 1px solid var(--line); }
     .expense-capture textarea { display: block; width: 100%; min-height: 7rem; margin-block: .45rem .65rem; padding: .5rem; border: 1px solid var(--line); border-radius: .3rem; resize: vertical; }
     .week-note .disclosure { margin-inline-start: auto; }
     .week-note-preview { flex: 1; min-width: 0; color: var(--muted); font-size: .87rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -380,6 +381,16 @@ export const weeklyPage = String.raw`<!doctype html>
           <p id="expensesSource" class="source-note" hidden></p>
           <p id="expensesNote" class="detail-note" hidden></p>
           <a id="expensesSourceLink" class="cropster-link" target="_blank" rel="noopener noreferrer" hidden>Open expense sheet</a>
+          <section class="expense-forecast" aria-labelledby="greenForecastTitle">
+            <h2 id="greenForecastTitle">Current month forecast Green Buy · EST cost</h2>
+            <p id="greenForecastMonth" class="metric-label"></p>
+            <p id="greenForecastValue" class="metric-secondary">—</p>
+            <p class="detail-note">Estimate for the current Sydney calendar month.</p>
+            <p id="greenForecastFlag" class="status-flag" hidden></p>
+            <p id="greenForecastSource" class="source-note" hidden></p>
+            <p id="greenForecastNote" class="detail-note" hidden></p>
+            <a id="greenForecastLink" class="cropster-link" target="_blank" rel="noopener noreferrer" hidden>Open Green Buy forecast</a>
+          </section>
         </div>
       </details>
       <details id="weekNote" class="meeting-card week-note">
@@ -722,7 +733,27 @@ export const weeklyPage = String.raw`<!doctype html>
       if (!Number.isFinite(value)) return unavailable;
       return expenses.currency === 'AUD' ? detailCurrency.format(value) : '$' + expenseAmount.format(value);
     }
-    function renderExpenses(expenses = {}, week) {
+    function renderGreenForecast(forecast = {}) {
+      const parts = new Intl.DateTimeFormat('en-AU', { timeZone: 'Australia/Sydney', year: 'numeric', month: '2-digit' }).formatToParts(new Date());
+      const currentMonth = parts.find(part => part.type === 'year').value + '-' + parts.find(part => part.type === 'month').value;
+      const matchesMonth = forecast.month === currentMonth;
+      const value = matchesMonth && forecast.status !== 'unavailable' ? forecast.value : null;
+      const currentLabel = new Intl.DateTimeFormat('en-AU', { timeZone: 'Australia/Sydney', month: 'long', year: 'numeric' }).format(new Date());
+      set('greenForecastMonth', matchesMonth && forecast.monthLabel ? forecast.monthLabel : currentLabel);
+      set('greenForecastValue', expenseMoney(value, forecast));
+      showText('greenForecastFlag', !Number.isFinite(value) ? 'Current month forecast unavailable'
+        : forecast.status === 'partial' ? 'Partial estimate' : '');
+      const timestamp = matchesMonth ? formatTimestamp(forecast.asOf) : '';
+      const source = [matchesMonth && forecast.sourceCell, timestamp && 'Forecast checked ' + timestamp + ' Sydney time',
+        Number.isFinite(value) && (forecast.currency === 'AUD' ? 'AUD estimate' : '$ as recorded')].filter(Boolean).join(' · ');
+      showText('greenForecastSource', source);
+      showText('greenForecastNote', matchesMonth ? forecast.note : 'A forecast is needed for the current month.');
+      const url = sourceLink(forecast.sourceUrl);
+      el('greenForecastLink').hidden = !url;
+      if (url) el('greenForecastLink').href = url;
+      else el('greenForecastLink').removeAttribute('href');
+    }
+    function renderExpenses(expenses = {}, week, { updateForecast = true } = {}) {
       const matchesWeek = expenses.weekStart === week.start;
       const value = matchesWeek && expenses.status !== 'unavailable' ? expenses.value : null;
       const overLimit = Number.isFinite(value) && value > 18900;
@@ -760,6 +791,7 @@ export const weeklyPage = String.raw`<!doctype html>
       if (url) el('expensesSourceLink').href = url;
       else el('expensesSourceLink').removeAttribute('href');
       set('expensesCaptureWeek', 'Selected Monday · ' + dateLabel(week.start));
+      if (updateForecast) renderGreenForecast(expenses.greenForecast);
     }
     function sourceLink(value) {
       try {
@@ -955,6 +987,9 @@ export const weeklyPage = String.raw`<!doctype html>
       el('stockCategories').replaceChildren();
       el('expensesItems').replaceChildren();
       el('expensesSourceLink').removeAttribute('href');
+      el('greenForecastLink').removeAttribute('href');
+      el('greenForecastLink').hidden = true;
+      set('greenForecastMonth', '');
       el('figures').querySelectorAll('[id]').forEach(node => {
         if (node.matches('.metric-figure, .metric-secondary, dd')) node.textContent = unavailable;
         if (node.matches('.comparison, .source-note, .detail-note, .status-flag, .carry-forward, .expense-freshness')) node.textContent = '';
@@ -1141,7 +1176,7 @@ export const weeklyPage = String.raw`<!doctype html>
         if (response.status === 401) { showExpiredSession(); return; }
         if (!response.ok || !result.ok || !result.expenses) throw new Error(result.error || 'The verified reading could not be saved.');
         if (loadedWeek?.start === weekStart) {
-          renderExpenses(result.expenses, loadedWeek);
+          renderExpenses(result.expenses, loadedWeek, { updateForecast: false });
           el('expensesCaptureForm').reset();
           showText('expensesCaptureMessage', 'Verified sheet reading saved.');
           await load(false, { fresh: true });
