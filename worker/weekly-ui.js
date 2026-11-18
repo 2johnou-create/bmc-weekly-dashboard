@@ -121,6 +121,8 @@ export const weeklyPage = String.raw`<!doctype html>
     .capture-fields label { display: grid; gap: .2rem; }
     .capture-fields input { width: 100%; min-width: 0; padding: .375rem; border: 1px solid var(--line); border-radius: .25rem; }
     .cropster-link { display: inline-block; margin-top: .75rem; }
+    .wholesale-window { margin: 0 0 .65rem; }
+    #greenCapture .capture-fields { margin-top: .65rem; }
     .links { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .45rem 1rem; }
     .login { display: grid; place-items: center; min-height: 60vh; padding: 1rem; }
     .sign-in { width: min(100%, 25rem); padding: 1.45rem; background: var(--paper); border: 1px solid var(--line); border-top: 4px solid var(--accent); border-radius: .55rem; }
@@ -267,13 +269,14 @@ export const weeklyPage = String.raw`<!doctype html>
       </details>
       <details class="meeting-card green-stock">
         <summary>
-          <span class="card-head"><span class="card-title">Current green bean stock</span><span class="disclosure" aria-hidden="true"></span></span>
+          <span class="card-head"><span class="card-title">Green bean stock</span><span class="disclosure" aria-hidden="true"></span></span>
+          <span class="metric-label">Marrickville</span>
           <span id="greenKg" class="metric-figure headline">—</span>
           <span id="greenValue" class="metric-secondary">—</span>
           <span id="greenFlag" class="status-flag" hidden></span>
         </summary>
         <div class="card-body">
-          <h2>Green stock on hand</h2>
+          <h2>Marrickville green stock on hand</h2>
           <dl class="breakdown" id="greenDetails" hidden>
             <div><dt>Current weight</dt><dd id="greenDetailKg">—</dd></div>
             <div><dt>Inventory value</dt><dd id="greenDetailValue">—</dd></div>
@@ -292,7 +295,7 @@ export const weeklyPage = String.raw`<!doctype html>
           <span id="stockFlag" class="status-flag" hidden></span>
         </summary>
         <div class="card-body">
-          <h2>Value by category</h2>
+          <h2 id="stockCategoryTitle">Value by category</h2>
           <table id="stockBreakdown" class="detail-table" hidden>
             <thead><tr><th scope="col">Category</th><th scope="col">Value</th></tr></thead>
             <tbody id="stockCategories"></tbody>
@@ -313,6 +316,7 @@ export const weeklyPage = String.raw`<!doctype html>
           <span id="wholesaleFlag" class="status-flag" hidden></span>
         </summary>
         <div class="card-body">
+          <p id="wholesaleScheduleLabel" class="detail-note wholesale-window">Scheduled orders</p>
           <h2 id="wholesalePreviousLabel">Previous week</h2>
           <dl class="breakdown">
             <div><dt>Scheduled orders</dt><dd id="previousWholesaleTotal">—</dd></div>
@@ -345,6 +349,22 @@ export const weeklyPage = String.raw`<!doctype html>
           <p id="mondayCaptureMessage" class="detail-note" role="status" hidden></p>
         </form>
       </details>
+      <details id="greenCapture" class="source-details" hidden>
+        <summary>Record Marrickville green stock</summary>
+        <form id="greenCaptureForm" class="capture-form">
+          <fieldset>
+            <legend>Marrickville green stock</legend>
+            <p id="greenCaptureHelp" class="detail-note">Open the Cropster Green Inventory Report, select By location, and use the Marrickville row. Leave value blank if Cropster does not show it.</p>
+            <a class="cropster-link" href="https://c-sar.cropster.com/apps/lots/inventory-report/location" target="_blank" rel="noopener noreferrer">Open Cropster inventory report</a>
+            <div class="capture-fields">
+              <label>Stock weight (kg)<input name="kg" type="number" inputmode="decimal" min="0" max="1000000" step=".01" aria-describedby="greenCaptureHelp" required></label>
+              <label>Stock value (AUD, optional)<input name="value" type="number" inputmode="decimal" min="0" max="100000000" step=".01" aria-describedby="greenCaptureHelp"></label>
+            </div>
+          </fieldset>
+          <button id="greenCaptureSave" type="submit" class="button primary">Save Marrickville stock</button>
+          <p id="greenCaptureMessage" class="detail-note" role="status" hidden></p>
+        </form>
+      </details>
     </details>
     <footer class="links"><p>Sydney reporting week · AUD values</p><a href="/details">Operations details and issue notes</a></footer>
   </main>
@@ -370,9 +390,6 @@ export const weeklyPage = String.raw`<!doctype html>
       ['Previous week', [
         ['previousRoastedKg', 'Previous roasted (kg)'], ['previousRoastedValue', 'Previous roasted green cost (AUD)'],
         ['previousScheduledKg', 'Previous outstanding output (kg)'], ['previousScheduledValue', 'Previous outstanding green cost (AUD)'],
-      ]],
-      ['Green inventory · all locations', [
-        ['greenKg', 'Green stock (kg)', true], ['greenValue', 'Green stock value (AUD)'],
       ]],
     ];
 
@@ -499,21 +516,27 @@ export const weeklyPage = String.raw`<!doctype html>
       showText('productionNote', production.note);
     }
     function renderGreen(green) {
-      weightHeadline('greenKg', green.kg);
-      set('greenValue', Number.isFinite(green.value) ? money(green.value) : '$ unavailable');
-      showText('greenFlag', statusText(green, 'Cropster reading needed') || 'Cropster snapshot');
-      set('greenDetailKg', weight(green.kg, detailKg));
-      set('greenDetailValue', format(green.value, detailCurrency));
-      el('greenDetails').hidden = ![green.kg, green.value].some(Number.isFinite);
+      const isMarrickville = green.location === 'Marrickville';
+      const kg = isMarrickville ? green.kg : null;
+      const value = isMarrickville ? green.value : null;
+      weightHeadline('greenKg', kg, detailKg);
+      set('greenValue', Number.isFinite(value) ? format(value, detailCurrency) : '$ unavailable');
+      const flag = isMarrickville ? statusText(green, 'Cropster reading needed') || 'Cropster snapshot' : 'Marrickville reading needed';
+      showText('greenFlag', flag);
+      set('greenDetailKg', weight(kg, detailKg));
+      set('greenDetailValue', format(value, detailCurrency));
+      el('greenDetails').hidden = ![kg, value].some(Number.isFinite);
       set('greenUnpriced', format(green.unpricedLots, amount));
       el('greenBreakdown').hidden = !(green.unpricedLots > 0);
       showText('greenSource', sourceText(green, 'Cropster'));
       showText('greenNote', green.note);
     }
     function renderStock(stock) {
-      set('stockValue', money(stock.value));
+      const partial = stock.status === 'partial' && Number.isFinite(stock.value);
+      set('stockValue', format(stock.value, detailCurrency));
       showText('stockItems', Number.isFinite(stock.itemCount) ? plural(stock.itemCount, 'stock item') : '');
-      showText('stockFlag', statusText(stock, 'Stock value unavailable'));
+      showText('stockFlag', partial ? 'Known-price subtotal' : statusText(stock, 'Stock value unavailable'));
+      set('stockCategoryTitle', partial ? 'Known prices by category' : 'Value by category');
       const categories = Array.isArray(stock.categories) ? stock.categories : [];
       const rows = categories.map(category => {
         const row = document.createElement('tr');
@@ -521,21 +544,24 @@ export const weeklyPage = String.raw`<!doctype html>
         name.scope = 'row';
         name.textContent = category.name;
         const value = document.createElement('td');
-        value.textContent = money(category.value);
+        value.textContent = format(category.value, detailCurrency);
         row.append(name, value);
         return row;
       });
       el('stockCategories').replaceChildren(...rows);
       el('stockBreakdown').hidden = !rows.length;
-      showText('stockSource', sourceText(stock, 'Stock Take App'));
+      const latestCount = formatTimestamp(stock.asOf);
+      showText('stockSource', latestCount ? 'Stock Take App · latest saved count ' + latestCount + ' Sydney time.' : 'Source: Stock Take App.');
       showText('stockNote', stock.note || (!rows.length ? 'Category values are unavailable.' : ''));
     }
-    function renderWholesale(wholesale, previousRange) {
-      set('wholesaleTotal', format(wholesale.orders, amount));
+    function renderWholesale(wholesale, week, previousRange) {
+      const provisional = wholesale.provisional === true;
+      set('wholesaleTotal', format(provisional ? wholesale.scheduledOrders : wholesale.orders, amount));
       set('wholesaleDone', format(wholesale.done, amount));
-      set('wholesalePending', format(wholesale.pending, amount));
+      set('wholesalePending', format(provisional ? wholesale.scheduledPendingOrders : wholesale.pending, amount));
       const inherited = wholesale.planStatus === 'inherited-plan' || /^Confirm this week’s order import in Dispatch\./i.test(wholesale.note || '');
-      showText('wholesaleFlag', inherited ? 'Order import unconfirmed' : statusText(wholesale, 'Dispatch totals unavailable'));
+      showText('wholesaleFlag', provisional ? 'Provisional · import unconfirmed' : inherited ? 'Order import unconfirmed' : statusText(wholesale, 'Dispatch totals unavailable'));
+      set('wholesaleScheduleLabel', 'Scheduled orders · ' + weekRange(week.start));
       set('wholesalePreviousLabel', 'Previous week (' + previousRange + ')');
       set('previousWholesaleTotal', format(wholesale.previousOrders, amount));
       set('previousWholesaleDone', format(wholesale.previousDone, amount));
@@ -577,10 +603,11 @@ export const weeklyPage = String.raw`<!doctype html>
       renderProduction(metrics.production, week, previousRange);
       renderGreen(metrics.green);
       renderStock(metrics.stock);
-      renderWholesale(metrics.wholesale, previousRange);
+      renderWholesale(metrics.wholesale, week, previousRange);
       renderSources(data.sources);
       loadedWeek = week;
       el('capture').hidden = !week.isCurrent;
+      el('greenCapture').hidden = false;
       el('figures').hidden = false;
       el('currentWeek').hidden = week.isCurrent;
       el('refreshPolicy').hidden = false;
@@ -612,6 +639,10 @@ export const weeklyPage = String.raw`<!doctype html>
       showText('captureMessage', '');
       el('mondayCaptureForm').reset();
       showText('mondayCaptureMessage', '');
+      el('greenCapture').hidden = true;
+      el('greenCapture').open = false;
+      el('greenCaptureForm').reset();
+      showText('greenCaptureMessage', '');
       el('sourceList').replaceChildren();
       el('stockCategories').replaceChildren();
       el('figures').querySelectorAll('[id]').forEach(node => {
@@ -764,6 +795,42 @@ export const weeklyPage = String.raw`<!doctype html>
         await load(false);
       } catch (error) {
         if (signedIn) showText('mondayCaptureMessage', error.message);
+      } finally {
+        button.disabled = false;
+      }
+    });
+    el('greenCaptureForm').addEventListener('submit', async event => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const button = el('greenCaptureSave');
+      if (!signedIn || !loadedWeek || button.disabled || !form.reportValidity()) return;
+
+      const fields = new FormData(form);
+      const kg = Number(fields.get('kg'));
+      const rawValue = fields.get('value');
+      const value = rawValue === '' ? null : Number(rawValue);
+      button.disabled = true;
+      showText('greenCaptureMessage', '');
+      try {
+        const response = await fetch('/api/cropster-green-stock', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ kg, value }),
+        });
+        if (!signedIn) return;
+        if (response.status === 401) {
+          showSession(false);
+          showText('loginMessage', 'Your session has ended. Sign in again.');
+          el('password').focus();
+          return;
+        }
+        const result = await readJson(response);
+        if (!response.ok || !result.ok) throw new Error(result.error || 'The Marrickville stock reading could not be saved.');
+        if (!signedIn) return;
+        form.reset();
+        showText('greenCaptureMessage', 'Marrickville green stock saved.');
+        await load(false);
+      } catch (error) {
+        if (signedIn) showText('greenCaptureMessage', error.message);
       } finally {
         button.disabled = false;
       }

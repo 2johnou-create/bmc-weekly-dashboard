@@ -10,9 +10,9 @@ The landing page shows the weekly report. The previous operations view and saved
 | --- | --- |
 | Demand | Kilograms from `3. Roast Planning!C18` in the dated weekly ROAST TALLY. The comparison uses last week’s demand. Carry-forward uses the current tally’s `D6:D17` brown stock less Monday’s completed roast output from Cropster. |
 | Roasted and scheduled | Cropster Production Report output and recorded green cost, plus the remaining schedule’s estimated output and green cost. Expand for last week’s figures and the capture time. |
-| Current green bean stock | The most recent Cropster Green Inventory Report snapshot across all locations, in kg and AUD. |
-| Current non-coffee stock | Latest Stockroom value, using counted stock × pieces per stock unit × unit cost. Items without prices are flagged. |
-| Wholesale orders | Primary delivery orders from Dispatch. Done counts completed primary orders. Scheduled and pending counts use the confirmed weekly import. |
+| Current green bean stock | The most recent Marrickville location reading from Cropster’s Green Inventory Report, in kg and AUD. |
+| Current non-coffee stock | All active items’ latest saved counts from the Stock Take App, valued in AUD to the cent. Missing prices or quantities are flagged and the known-price subtotal is shown. |
+| Wholesale orders | Primary delivery orders for all seven days of the selected Sydney week. Done counts completed orders. An inherited plan’s scheduled and pending counts are provisional until the weekly import is confirmed. |
 
 ## Operations details sources
 
@@ -20,7 +20,7 @@ The landing page shows the weekly report. The previous operations view and saved
 | --- | --- |
 | Weekly demand | The saved numeric value in `3. Roast Planning!C18` of the dated ROAST TALLY in the shared Drive folder. |
 | Weekly roasted | Completed output recorded from the Cropster Production Report for the selected Sydney week. |
-| Green stock | Current physical Cropster green lots, reported in kilograms. |
+| Green stock | Cropster Green Inventory Report’s Marrickville location, in kilograms and AUD. |
 | Non-coffee stock | Current Stockroom inventory: counted stock × pieces per stock unit × unit cost, grouped by category. Missing prices make the known value partial. |
 | Wholesale orders | Confirmed Dispatch delivery jobs, excluding follow-up jobs. This is partial coverage: collection/postal orders and sales values require the main order ledger. |
 | Online orders | CSV exports in the linked Dashboard Folder, counted by unique order number and Sydney placement week. Duplicate line items/files count once; only consistent AUD order totals are summed. |
@@ -33,9 +33,9 @@ Weeks are Monday–Sunday in Australia/Sydney. Previous weeks can be selected; i
 
 ## Cropster readings
 
-Read actual kilograms and historical green-ingredient cost from **Reports → Production Report**. Read remaining estimated roast output in **Roasts → Schedule**, including Friday and excluding completed batches. Estimate remaining green cost from the scheduled lot inputs and their Cropster AUD per-kg prices when all prices are available. Use **Green Inventory Report → By location** for the total current stock and value.
+Read actual kilograms and historical green-ingredient cost from **Reports → Production Report**. Read remaining estimated roast output in **Roasts → Schedule**, including Friday and excluding completed batches. Estimate remaining green cost from the scheduled lot inputs and their Cropster AUD per-kg prices when all prices are available. Read the **Marrickville** row in **Green Inventory Report → By location** for current green stock and value.
 
-While signed in to the dashboard, open **Data sources → Record Cropster readings** to save the current week’s verified aggregates. Cropster credentials stay in the browser or password manager. The dashboard stores the figures and capture time in its password-protected database.
+While signed in to the dashboard, save production totals under **Data sources → Record Cropster readings** and green stock under **Data sources → Record Marrickville green stock**. Cropster credentials stay in the browser or password manager. The dashboard stores the figures and capture time in its password-protected database.
 
 Record Monday’s completed kilograms separately using the Cropster Production Report filtered to Monday only. That reading supplies the Demand card’s carry-forward calculation.
 

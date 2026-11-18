@@ -47,6 +47,9 @@ test("Dispatch done and pending reconcile with the confirmed primary order count
   assert.equal(metric.orders, 40);
   assert.equal(metric.done, 12);
   assert.equal(metric.pending, 28);
+  assert.equal(metric.scheduledOrders, 40);
+  assert.equal(metric.scheduledPendingOrders, 28);
+  assert.equal(metric.provisional, false);
   assert.equal(metric.previousDone, 27);
   assert.equal(metric.previousPending, 3);
   assert.equal(metric.status, "live");
@@ -61,6 +64,31 @@ test("Dispatch done and pending reconcile with the confirmed primary order count
   assert.equal(inconsistent.orders, 40);
   assert.equal(inconsistent.done, null);
   assert.equal(inconsistent.pending, null);
+});
+
+test("an inherited Dispatch plan shows a reconciled full-week schedule as provisional", () => {
+  const current = { planStatus: "inherited-plan", wholesale: {
+    orders: null, pendingOrders: null, scheduledOrders: 25, scheduledPendingOrders: 17, completedOrders: 8,
+  } };
+  const metric = wholesaleDeliveryComparison(current, null);
+  assert.equal(metric.orders, null);
+  assert.equal(metric.pending, null);
+  assert.equal(metric.scheduledOrders, 25);
+  assert.equal(metric.scheduledPendingOrders, 17);
+  assert.equal(metric.done, 8);
+  assert.equal(metric.provisional, true);
+  assert.match(metric.note, /entire Sydney week/);
+
+  const broken = wholesaleDeliveryComparison({ ...current, wholesale: { ...current.wholesale, scheduledPendingOrders: 20 } }, null);
+  assert.equal(broken.provisional, false);
+  assert.equal(broken.scheduledOrders, null);
+  assert.equal(broken.scheduledPendingOrders, null);
+  assert.equal(broken.done, 8);
+
+  const empty = wholesaleDeliveryComparison({ ...current, wholesale: { scheduledOrders: 0, scheduledPendingOrders: 0, completedOrders: 0 } }, null);
+  assert.equal(empty.provisional, true);
+  assert.equal(empty.scheduledOrders, 0);
+  assert.equal(empty.scheduledPendingOrders, 0);
 });
 
 test("demand uses the previous verified tally as its baseline", () => {
@@ -97,7 +125,10 @@ test("the landing report reads protected Stockroom totals and requires a Cropste
     if (pathname === "/api/inventory") {
       assert.equal(headers.Cookie, stockroomCookie);
       assert.equal(headers["x-green-password"], undefined);
-      return Response.json({ items: [{ category: "Packaging", stock: 4, unitCost: 2 }] });
+      return Response.json({ items: [
+        { category: "Packaging", stock: 4, unitCost: 2, updatedAt: "2026-07-01T00:00:00Z" },
+        { category: "Packaging", stock: 3, unitCost: 1.03, updatedAt: "2026-11-14T00:00:00Z" },
+      ] });
     }
     if (pathname === "/api/roaster") {
       greenForecastRead = true;
@@ -111,8 +142,8 @@ test("the landing report reads protected Stockroom totals and requires a Cropste
   assert.equal(report.metrics.green.kg, null);
   assert.equal(report.metrics.green.value, null);
   assert.equal(report.metrics.green.source, "Cropster");
-  assert.equal(report.metrics.stock.value, 8);
-  assert.deepEqual(report.metrics.stock.categories, [{ name: "Packaging", itemCount: 1, value: 8, unpricedItems: 0 }]);
+  assert.equal(report.metrics.stock.value, 11.09);
+  assert.deepEqual(report.metrics.stock.categories, [{ name: "Packaging", itemCount: 2, value: 11.09, unpricedItems: 0 }]);
   assert.ok(!JSON.stringify(report).includes(greenPassword));
   assert.ok(!JSON.stringify(report).includes(stockroomCookie));
 });

@@ -28,6 +28,15 @@ test("non-coffee valuation respects pieces per carton and reports missing prices
   assert.deepEqual(metric.categories.find(row => row.name === "Packaging"), { name: "Packaging", value: 20, itemCount: 2, unpricedItems: 1 });
 });
 
+test("non-coffee valuation matches Stock Take's counted units and cent formatting", () => {
+  const metric = mapNonCoffee({ items: [
+    { category: "Cups & Lids", stock: 1, unitCost: 1.005, stockUnitQuantity: 0, packSize: 20 },
+  ] });
+  assert.equal(metric.value, 1.01);
+  assert.equal(metric.categories[0].value, 1.01);
+  assert.equal(metric.status, "live");
+});
+
 test("demand uses only the exact entered week and keeps planning separate from roast actuals", () => {
   const payload = { state: { recipes: [{ id: "liberty", active: true, finishedBatchKg: 25 }], demand: [{ recipeId: "liberty", weekStart: week, source: "Daily Mon-Fri batch entry", dailyBatches: { mon: 2, tue: 1, wed: 3, thu: 0, fri: 0 }, actualKg: 9999, forecastBatches: 200 }] } };
   assert.equal(mapDemand(payload, week).kg, 150);

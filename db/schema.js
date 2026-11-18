@@ -27,7 +27,7 @@ export const dashboardCropsterReadings = sqliteTable("dashboard_cropster_reading
   previousScheduledKg: real("previous_scheduled_kg"),
   previousRoastedValue: real("previous_roasted_value"),
   previousScheduledValue: real("previous_scheduled_value"),
-  greenKg: real("green_kg").notNull(),
+  greenKg: real("green_kg"),
   greenValue: real("green_value"),
   recordedAt: integer("recorded_at").notNull(),
 }, table => [
@@ -39,3 +39,12 @@ export const dashboardCropsterMonday = sqliteTable("dashboard_cropster_monday", 
   roastedKg: real("roasted_kg").notNull(),
   recordedAt: integer("recorded_at").notNull(),
 });
+
+export const dashboardCropsterGreenStock = sqliteTable("dashboard_cropster_green_stock", {
+  location: text("location").primaryKey(),
+  kg: real("kg").notNull(),
+  value: real("value"),
+  recordedAt: integer("recorded_at").notNull(),
+}, table => [
+  check("dashboard_cropster_green_stock_marrickville", sql`${table.location} = 'Marrickville'`),
+]);

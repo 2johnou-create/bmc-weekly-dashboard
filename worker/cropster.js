@@ -1,6 +1,7 @@
 import { HttpError } from "./auth.js";
 
 export const CROPSTER_WEBSITE = "https://c-sar.cropster.com/app/";
+const GREEN_LOCATION = "Marrickville";
 const STALE_MS = 24 * 60 * 60 * 1000;
 const MAX_KG = 1_000_000;
 const MAX_AUD = 100_000_000;
@@ -16,8 +17,9 @@ const fields = {
   greenKg: "green_kg",
   greenValue: "green_value",
 };
+const legacyGreenColumns = new Set([fields.greenKg, fields.greenValue]);
 const columns = ["week_start", ...Object.values(fields), "recorded_at"];
-const required = new Set(["roastedKg", "greenKg"]);
+const productionColumns = columns.filter(column => !legacyGreenColumns.has(column));
 const permitted = new Set(["weekStart", ...Object.keys(fields)]);
 
 function captureMetadata(reading, now, status, note) {
@@ -101,11 +103,12 @@ export function cropsterProduction(reading = null, now = new Date()) {
 }
 
 export function cropsterGreenInventory(reading = null, now = new Date()) {
-  if (reading) {
-    const value = reading.green_value;
+  if (reading?.location === GREEN_LOCATION) {
+    const { kg, value } = reading;
     return {
-      ...captureMetadata(reading, now, value === null ? "partial" : "live", "Green Inventory Report, all locations."),
-      kg: reading.green_kg,
+      ...captureMetadata(reading, now, value === null ? "partial" : "live", "Green Inventory Report, Marrickville only."),
+      location: GREEN_LOCATION,
+      kg,
       value,
       unpricedLots: null,
     };
@@ -113,6 +116,7 @@ export function cropsterGreenInventory(reading = null, now = new Date()) {
 
   return {
     source: "Cropster",
+    location: GREEN_LOCATION,
     status: "unavailable",
     stale: false,
     kg: null,
@@ -120,7 +124,7 @@ export function cropsterGreenInventory(reading = null, now = new Date()) {
     currency: "AUD",
     unpricedLots: null,
     asOf: null,
-    note: "Sign in to Cropster and open Green Inventory to see current weight and value.",
+    note: "Save the Marrickville weight and value from Cropster’s Green Inventory Report.",
   };
 }
 
@@ -139,22 +143,37 @@ function priorWeekProjection(followingReading) {
   };
 }
 
-export async function readCropsterReadings({ db, weekStart, followingWeekStart, now = new Date() }) {
+async function readProduction(db, weekStart, followingWeekStart, now) {
   try {
-    if (!db || typeof db.prepare !== "function") return { production: cropsterProduction(), green: cropsterGreenInventory() };
-    // Production belongs to the selected week. Green stock uses the most recent reading across weeks.
-    const { results } = await db.prepare(`SELECT ${columns.join(", ")} FROM dashboard_cropster_readings
-      WHERE week_start IN (?, ?, (SELECT week_start FROM dashboard_cropster_readings ORDER BY recorded_at DESC, week_start DESC LIMIT 1))
-      ORDER BY recorded_at DESC, week_start DESC`).bind(weekStart, followingWeekStart).all();
+    const { results } = await db.prepare(`SELECT ${productionColumns.join(", ")} FROM dashboard_cropster_readings
+      WHERE week_start IN (?, ?)`).bind(weekStart, followingWeekStart).all();
     const selected = results.find(reading => reading.week_start === weekStart);
     const prior = selected ? null : priorWeekProjection(results.find(reading => reading.week_start === followingWeekStart));
     const production = cropsterProduction(selected || prior, now);
     if (prior) production.note += " This week was captured as the previous week in the following reading.";
-    return { production, green: cropsterGreenInventory(results[0], now) };
+    return production;
   } catch {
-    const note = "Saved Cropster readings could not be loaded. Try refreshing.";
-    return { production: { ...cropsterProduction(), note }, green: { ...cropsterGreenInventory(), note } };
+    return { ...cropsterProduction(), note: "Saved Cropster production could not be loaded. Try refreshing." };
   }
+}
+
+async function readGreenStock(db, now) {
+  try {
+    const reading = await db.prepare(`SELECT location, kg, value, recorded_at FROM dashboard_cropster_green_stock
+      WHERE location = ?`).bind(GREEN_LOCATION).first();
+    return cropsterGreenInventory(reading, now);
+  } catch {
+    return { ...cropsterGreenInventory(), note: "Saved Marrickville green stock could not be loaded. Try refreshing." };
+  }
+}
+
+export async function readCropsterReadings({ db, weekStart, followingWeekStart, now = new Date() }) {
+  if (!db || typeof db.prepare !== "function") return { production: cropsterProduction(), green: cropsterGreenInventory() };
+  const [production, green] = await Promise.all([
+    readProduction(db, weekStart, followingWeekStart, now),
+    readGreenStock(db, now),
+  ]);
+  return { production, green };
 }
 
 export async function saveCropsterReading(db, input, currentWeekStart, now = new Date()) {
@@ -166,7 +185,8 @@ export async function saveCropsterReading(db, input, currentWeekStart, now = new
   }
   const amounts = Object.keys(fields).map(key => {
     const value = input[key];
-    if ((value === null || value === undefined) && !required.has(key)) return null;
+    const required = key === "roastedKg" || (key === "greenKg" && Object.hasOwn(input, key));
+    if ((value === null || value === undefined) && !required) return null;
     const maximum = key.endsWith("Kg") ? MAX_KG : MAX_AUD;
     if (!Number.isFinite(value) || value < 0 || value > maximum) throw new HttpError(`Enter a valid Cropster value for ${key}.`);
     return value;
@@ -174,7 +194,13 @@ export async function saveCropsterReading(db, input, currentWeekStart, now = new
 
   let saved;
   try {
-    const updates = columns.slice(1).map(column => `${column} = excluded.${column}`);
+    // Legacy clients may still submit unscoped green values. Keep them separate from Marrickville.
+    const submittedGreenColumns = new Set(
+      ["greenKg", "greenValue"].filter(key => Object.hasOwn(input, key)).map(key => fields[key]),
+    );
+    const updates = columns.slice(1)
+      .filter(column => !legacyGreenColumns.has(column) || submittedGreenColumns.has(column))
+      .map(column => `${column} = excluded.${column}`);
     saved = await db.prepare(`INSERT INTO dashboard_cropster_readings (${columns.join(", ")})
       VALUES (${columns.map(() => "?").join(", ")}) ON CONFLICT(week_start) DO UPDATE SET ${updates.join(", ")}
       WHERE excluded.recorded_at >= dashboard_cropster_readings.recorded_at RETURNING week_start, recorded_at`)
@@ -184,4 +210,27 @@ export async function saveCropsterReading(db, input, currentWeekStart, now = new
   }
   if (!saved) throw new HttpError("A newer Cropster reading has already been saved.", 409);
   return { ok: true, weekStart: saved.week_start, asOf: new Date(saved.recorded_at).toISOString() };
+}
+
+export async function saveCropsterGreenStock(db, input, now = new Date()) {
+  if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).some(key => key !== "kg" && key !== "value")) {
+    throw new HttpError("Enter valid Marrickville green stock fields.");
+  }
+  const { kg, value = null } = input;
+  if (!Number.isFinite(kg) || kg < 0 || kg > MAX_KG) throw new HttpError("Enter valid Marrickville green stock kilograms.");
+  if (value !== null && (!Number.isFinite(value) || value < 0 || value > MAX_AUD)) {
+    throw new HttpError("Enter a valid Marrickville green stock value in AUD.");
+  }
+
+  let saved;
+  try {
+    saved = await db.prepare(`INSERT INTO dashboard_cropster_green_stock (location, kg, value, recorded_at) VALUES (?, ?, ?, ?)
+      ON CONFLICT(location) DO UPDATE SET kg = excluded.kg, value = excluded.value, recorded_at = excluded.recorded_at
+      WHERE excluded.recorded_at >= dashboard_cropster_green_stock.recorded_at
+      RETURNING location, kg, value, recorded_at`).bind(GREEN_LOCATION, kg, value, now.getTime()).first();
+  } catch {
+    throw new HttpError("The Marrickville green stock reading could not be saved. Try again.", 503);
+  }
+  if (!saved) throw new HttpError("A newer Marrickville green stock reading has already been saved.", 409);
+  return { ok: true, location: saved.location, kg: saved.kg, value: saved.value, asOf: new Date(saved.recorded_at).toISOString() };
 }

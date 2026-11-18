@@ -10,6 +10,7 @@ const TIME_ZONE = "Australia/Sydney";
 const finite = value => typeof value === "number" && Number.isFinite(value) ? value : null;
 const nonnegative = value => finite(value) !== null && value >= 0 ? value : null;
 const rounded = value => value === null ? null : Math.round(value * 100) / 100;
+const stockValueFormatter = new Intl.NumberFormat("en-AU", { useGrouping: false, maximumFractionDigits: 2 });
 const object = value => value && typeof value === "object" && !Array.isArray(value) ? value : null;
 const shortText = (value, fallback = "") => typeof value === "string" ? value.trim().slice(0, 180) : fallback;
 
@@ -96,20 +97,39 @@ export async function fetchSourceJson(url, headers = {}, fetcher = fetch) {
 export function mapNonCoffee(payload) {
   const items = rows(payload?.items, 1500);
   const categories = new Map();
-  let value = 0, unpricedItems = 0, invalid = 0;
+  let value = 0, unpricedItems = 0;
   for (const item of items) {
     const categoryName = shortText(item.category, "Uncategorised") || "Uncategorised";
     const group = categories.get(categoryName) || { name: categoryName, itemCount: 0, value: 0, unpricedItems: 0 };
     group.itemCount++;
     const stock = nonnegative(item.stock), cost = nonnegative(item.unitCost);
-    const units = nonnegative(item.stockUnitQuantity) ?? ((categoryName === "Cups & Lids" || categoryName === "Food Packaging") && nonnegative(item.packSize) > 0 ? item.packSize : 1);
-    if (stock === null || units <= 0) { invalid++; unpricedItems++; group.unpricedItems++; }
-    else if (stock > 0 && cost === null) { unpricedItems++; group.unpricedItems++; }
-    else { const amount = stock * (cost ?? 0) * units; group.value += amount; value += amount; }
+    const units = finite(item.stockUnitQuantity) > 0 ? item.stockUnitQuantity : 1;
+    if (stock === null || (stock > 0 && cost === null)) {
+      unpricedItems++;
+      group.unpricedItems++;
+    } else if (stock > 0) {
+      const itemValue = stock * (cost * units);
+      group.value += itemValue;
+      value += itemValue;
+    }
     categories.set(categoryName, group);
   }
   const asOf = latest(items.map(item => item.updatedAt));
-  return { ...base("stockroom", asOf, `${unpricedItems ? `${unpricedItems} items need a price or valid quantity. Known value shown. ` : ""}Current non-coffee stock; coffee is excluded.${invalid ? " Some quantities need review." : ""}`, unpricedItems ? "partial" : "live"), value: rounded(value), itemCount: items.length, categoryCount: categories.size, categories: [...categories.values()].map(group => ({ ...group, value: rounded(group.value) })).sort((a, b) => b.value - a.value || a.name.localeCompare(b.name)), unpricedItems, currency: "AUD" };
+  const note = unpricedItems
+    ? `Known-price subtotal across all active counts. ${unpricedItems} ${unpricedItems === 1 ? "item needs" : "items need"} a price or valid quantity.`
+    : "Current value across all active non-coffee stock counts.";
+  const categoriesByValue = [...categories.values()]
+    .map(group => ({ ...group, value: Number(stockValueFormatter.format(group.value)) }))
+    .sort((a, b) => b.value - a.value || a.name.localeCompare(b.name));
+  return {
+    ...base("stockroom", asOf, note, unpricedItems ? "partial" : "live"),
+    value: Number(stockValueFormatter.format(value)),
+    itemCount: items.length,
+    categoryCount: categories.size,
+    categories: categoriesByValue,
+    unpricedItems,
+    currency: "AUD",
+  };
 }
 
 export function mapDemand(payload, weekStart) {

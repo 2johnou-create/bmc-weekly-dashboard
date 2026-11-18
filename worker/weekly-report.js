@@ -24,23 +24,32 @@ const demandKg = value => Number.isFinite(value) && value >= 0 ? value : null;
 
 function dispatchCounts(source) {
   const confirmed = source?.planStatus === "confirmed-weekly-import";
+  const inherited = source?.planStatus === "inherited-plan";
   const orders = confirmed ? orderCount(source.wholesale?.orders) : null;
   const completed = orderCount(source?.wholesale?.completedOrders);
   const pending = orderCount(source?.wholesale?.pendingOrders);
   const hasBreakdown = orders !== null && completed !== null && pending !== null && completed + pending === orders;
+  const scheduled = orderCount(source?.wholesale?.scheduledOrders);
+  const scheduledPending = orderCount(source?.wholesale?.scheduledPendingOrders);
+  const provisional = inherited && scheduled !== null && completed !== null &&
+    scheduledPending !== null && completed + scheduledPending === scheduled;
   return {
     orders,
-    done: hasBreakdown || source?.planStatus === "inherited-plan" ? completed : null,
+    done: hasBreakdown || inherited ? completed : null,
     pending: hasBreakdown ? pending : null,
+    scheduledOrders: provisional ? scheduled : orders,
+    scheduledPendingOrders: provisional ? scheduledPending : hasBreakdown ? pending : null,
+    provisional,
   };
 }
 
 export function wholesaleDeliveryComparison(current, previous) {
-  const { orders, done, pending } = dispatchCounts(current);
+  const { orders, done, pending, scheduledOrders, scheduledPendingOrders, provisional } = dispatchCounts(current);
   const { orders: previousOrders, done: previousDone, pending: previousPending } = dispatchCounts(previous);
   const notes = [];
   if (orders === null) {
-    notes.push(current?.planStatus === "inherited-plan" ? "Confirm this week’s order import in Dispatch." : "This week’s Dispatch order total is unavailable.");
+    if (provisional) notes.push("The saved schedule covers the entire Sydney week. Scheduled and pending counts are provisional until the weekly import is confirmed in Dispatch.");
+    else notes.push(current?.planStatus === "inherited-plan" ? "Confirm this week’s order import in Dispatch." : "This week’s Dispatch order total is unavailable.");
   } else if (pending === null) {
     notes.push("The confirmed Dispatch plan does not have a matching done and pending count.");
   }
@@ -51,6 +60,9 @@ export function wholesaleDeliveryComparison(current, previous) {
     orders,
     done,
     pending,
+    scheduledOrders,
+    scheduledPendingOrders,
+    provisional,
     previousOrders,
     previousDone,
     previousPending,
@@ -99,8 +111,7 @@ export function weeklyDemandComparison(current, previous, mondayReading = null) 
 
 function stockMetric(inventory) {
   try {
-    const stock = mapNonCoffee(inventory);
-    return { ...stock, note: stock.status === "live" ? "" : stock.note };
+    return mapNonCoffee(inventory);
   } catch {
     return { status: "unavailable", value: null, itemCount: null, categoryCount: null, categories: [], unpricedItems: null, currency: "AUD", asOf: null, note: "Stockroom inventory is unavailable." };
   }
@@ -137,9 +148,9 @@ export async function collectWeeklyReport({ weekStart, stockroomCookie, env, now
       { label: "Last week’s roast tally", note: previousTally?.note || "Demand workbook is unavailable.", url: previousTally?.url, asOf: previousTally?.asOf },
       { label: "Monday’s completed roasts", note: mondayReading ? "Read in Cropster." : "Save the completed output from Cropster’s Monday production report.", url: new URL(`/apps/roast/production-report?dateFrom=${week.start}&dateTo=${week.start}`, CROPSTER_WEBSITE).href, asOf: mondayReading?.asOf },
       { label: "Cropster production", note: production.note, url: CROPSTER_WEBSITE, asOf: production.asOf },
-      { label: "Cropster green inventory", note: green.note, url: CROPSTER_WEBSITE, asOf: green.asOf },
-      { label: "Stockroom", note: "Current value covers the non-coffee inventory." },
-      { label: "Dispatch", note: "Done counts completed primary orders. Scheduled and pending counts use confirmed weekly imports." },
+      { label: "Cropster green inventory · Marrickville", note: green.note, url: new URL("/apps/lots/inventory-report/location", CROPSTER_WEBSITE).href, asOf: green.asOf },
+      { label: "Stock Take App", note: "Current non-coffee value uses every active item’s saved stock count.", url: SOURCE_ORIGINS.stockroom },
+      { label: "Dispatch", note: "The schedule covers all seven days of the selected Sydney week. Done counts completed primary orders.", url: SOURCE_ORIGINS.dispatch },
     ],
   };
 }
