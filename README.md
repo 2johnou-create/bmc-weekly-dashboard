@@ -8,7 +8,7 @@ The landing page shows the weekly report. The previous operations view and saved
 
 | Weekly report | Figure |
 | --- | --- |
-| Demand | Kilograms from `3. Roast Planning!C18` in the dated weekly ROAST TALLY. Percentage change uses last week's tally as its baseline when the previous total is above zero. |
+| Demand | Kilograms from `3. Roast Planning!C18` in the dated weekly ROAST TALLY. The comparison uses last week’s demand. Carry-forward uses the current tally’s `D6:D17` brown stock less Monday’s completed roast output from Cropster. |
 | Roasted and scheduled | Cropster Production Report output and recorded green cost, plus the remaining schedule’s estimated output and green cost. Expand for last week’s figures and the capture time. |
 | Current green bean stock | The most recent Cropster Green Inventory Report snapshot across all locations, in kg and AUD. |
 | Current non-coffee stock | Latest Stockroom value, using counted stock × pieces per stock unit × unit cost. Items without prices are flagged. |
@@ -36,6 +36,8 @@ Weeks are Monday–Sunday in Australia/Sydney. Previous weeks can be selected; i
 Read actual kilograms and historical green-ingredient cost from **Reports → Production Report**. Read remaining estimated roast output in **Roasts → Schedule**, including Friday and excluding completed batches. Estimate remaining green cost from the scheduled lot inputs and their Cropster AUD per-kg prices when all prices are available. Use **Green Inventory Report → By location** for the total current stock and value.
 
 While signed in to the dashboard, open **Data sources → Record Cropster readings** to save the current week’s verified aggregates. Cropster credentials stay in the browser or password manager. The dashboard stores the figures and capture time in its password-protected database.
+
+Record Monday’s completed kilograms separately using the Cropster Production Report filtered to Monday only. That reading supplies the Demand card’s carry-forward calculation.
 
 The demand feed reads the shared-drive copy of the workbook used for Emily’s Monday Roast Schedule. It looks for `ROAST TALLY <day> <MMM> <year>.xlsx` for the reporting week. The date in that filename identifies the week. Older filename formats also need a matching internal week. An ambiguous file or missing numeric C18 result is shown as unavailable. The dashboard reads the live Drive workbook on refresh.
 

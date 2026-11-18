@@ -15,6 +15,13 @@
       "when": 1794998447275,
       "tag": "0001_cropster_readings",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1795000678040,
+      "tag": "0002_cropster_monday",
+      "breakpoints": true
     }
   ]
 }

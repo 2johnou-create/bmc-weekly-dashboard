@@ -7,12 +7,12 @@ const ID = "test_current_tally_123456789";
 const MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const inline = (ref, value) => `<c r="${ref}" t="inlineStr"><is><t>${value}</t></is></c>`;
 const numeric = (ref, value, formula = "") => `<c r="${ref}">${formula ? `<f>${formula}</f>` : ""}<v>${value}</v></c>`;
-function fixture({ serial = 46328, dateText = null, plan = 1255.75, tally = 1255.75, single = 40.25, olderNotes = false, omitTotal = false, demandCell, shared = false, extraFiles = {} } = {}) {
+function fixture({ serial = 46328, dateText = null, plan = 1255.75, tally = 1255.75, single = 40.25, olderNotes = false, omitTotal = false, demandCell, brownStockCells = "", shared = false, extraFiles = {} } = {}) {
   const label = shared ? '<c r="B2" t="s"><v>0</v></c>' : inline("B2", "Week commencing:");
   const date = dateText === null ? numeric("C2", serial) : '<c r="C2" t="s"><v>1</v></c>';
   const roastTally = `<worksheet><sheetData>${label}${date}${inline("B41", "BLEND TOTAL")}${omitTotal ? "" : numeric("J41", tally - single)}${inline("B67", "SINGLE ORIGIN TOTAL")}${omitTotal ? "" : numeric("J67", single)}${olderNotes ? inline("B76", "* Online: retail sales 5–11 Oct, subscriptions excluded.") : ""}</sheetData></worksheet>`;
   const savedDemand = demandCell ?? numeric("C18", plan, "SUM(C6:C17)");
-  const roastPlan = `<worksheet><sheetData>${inline("C4", "Demand (kg)&#10;from tally")}${numeric("C17", single)}${omitTotal ? "" : savedDemand}</sheetData></worksheet>`;
+  const roastPlan = `<worksheet><sheetData>${inline("C4", "Demand (kg)&#10;from tally")}${numeric("C17", single)}${omitTotal ? "" : savedDemand}${brownStockCells}</sheetData></worksheet>`;
   const files = {
     "xl/workbook.xml": '<workbook xmlns:r="relationships"><sheets><sheet name="1. Roast Tally" sheetId="1" r:id="rId1"/><sheet name="3. Roast Planning" sheetId="2" r:id="rId2"/></sheets></workbook>',
     "xl/_rels/workbook.xml.rels": '<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Target="/xl/worksheets/sheet2.xml"/></Relationships>',
@@ -56,11 +56,29 @@ test("HTML discovery fallback decodes file title entities", () => {
 });
 
 test("reads verified exact-week demand from a workbook with shared or inline text", () => {
-  for (const shared of [false, true]) assert.deepEqual(parseWeeklyDemandWorkbook(fixture({ shared }), "2026-11-02"), { kg: 1255.75 });
+  for (const shared of [false, true]) assert.deepEqual(parseWeeklyDemandWorkbook(fixture({ shared }), "2026-11-02"), { kg: 1255.75, brownOnHandKg: null });
 });
 
 test("a verified explicit zero remains distinguishable from missing data", () => {
   assert.equal(parseWeeklyDemandWorkbook(fixture({ plan: 0, tally: 0, single: 0 }), "2026-11-02").kg, 0);
+});
+
+test("brown stock sums only D6:D17 and retains explicit zero", async () => {
+  const brownStockCells = numeric("D5", 5000) + numeric("D6", 250.25) + '<c r="D8"/>' +
+    numeric("D16", 0) + numeric("D17", 45.5, "D3") + numeric("D18", 8000);
+  const { fetcher } = fakeFetch(fixture({ brownStockCells }));
+  const demand = await readWeeklyDemand("2026-11-02", { fetch: fetcher });
+  assert.equal(demand.kg, 1255.75);
+  assert.equal(demand.brownOnHandKg, 295.75);
+  assert.equal(parseWeeklyDemandWorkbook(fixture({ brownStockCells: numeric("D6", 0) }), "2026-11-02").brownOnHandKg, 0);
+});
+
+test("unreadable stock in the range leaves carry-forward input unavailable and preserves demand", () => {
+  for (const invalidStock of ['<c r="D7" t="e"><v>#VALUE!</v></c>', '<c r="D7"><f>SUM(D1:D3)</f></c>', '<c r="D7" t="s"><v>99</v></c>']) {
+    const parsed = parseWeeklyDemandWorkbook(fixture({ brownStockCells: numeric("D6", 300) + invalidStock }), "2026-11-02");
+    assert.equal(parsed.brownOnHandKg, null);
+    assert.equal(parsed.kg, 1255.75);
+  }
 });
 
 test("older names still require a matching internal week", async () => {

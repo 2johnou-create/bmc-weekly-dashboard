@@ -73,6 +73,21 @@ test("demand uses the previous verified tally as its baseline", () => {
   assert.equal(weeklyDemandComparison(tally(100), { kg: 70, status: "partial" }).status, "partial");
 });
 
+test("carry-forward uses current brown stock less Monday's completed output", () => {
+  const current = { status: "live", kg: 550, brownOnHandKg: 310.8 };
+  const previous = { status: "live", kg: 500, brownOnHandKg: 900 };
+  const comparison = weeklyDemandComparison(current, previous, { kg: 150.42 });
+  assert.equal(comparison.carryForwardKg, 160.38);
+  assert.equal(comparison.changePercent, 10);
+  assert.equal(comparison.brownOnHandKg, 310.8);
+  assert.equal(comparison.mondayRoastedKg, 150.42);
+  assert.equal(weeklyDemandComparison(current, previous, { kg: 310.8 }).carryForwardKg, 0);
+  assert.equal(weeklyDemandComparison(current, previous, { kg: 313 }).carryForwardKg, -2.2);
+  assert.equal(weeklyDemandComparison(current, previous, { kg: 0 }).carryForwardKg, 310.8);
+  assert.equal(weeklyDemandComparison(current, previous).carryForwardKg, null);
+  assert.equal(weeklyDemandComparison({ ...current, brownOnHandKg: null }, previous, { kg: 150.42 }).carryForwardKg, null);
+});
+
 test("the landing report reads protected Stockroom totals and requires a Cropster reading for green stock", async () => {
   const stockroomCookie = "stockroom-test-session";
   const greenPassword = "green-password-test";

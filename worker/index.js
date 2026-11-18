@@ -3,6 +3,7 @@ import { weeklyPage } from "./weekly-ui.js";
 import { collectWeeklyReport } from "./weekly-report.js";
 import { collectDashboard, dashboardWeek, fetchSourceJson, SOURCE_ORIGINS } from "./metrics.js";
 import { saveCropsterReading } from "./cropster.js";
+import { saveCropsterMonday } from "./cropster-monday.js";
 import { readWeeklyDemand } from "./demand.js";
 import { HttpError, readSession, signIn, signOut, clearCookie, requireOrigin } from "./auth.js";
 import { listIssues, createIssue, updateIssue, issuesMetric } from "./issues.js";
@@ -31,6 +32,7 @@ async function jsonInput(request, { maximum, missing, invalid, tooLarge }) {
 }
 const issueBody = { maximum: 16_384, missing: "Enter the issue details.", invalid: "Enter valid issue details.", tooLarge: "The issue note is too large." };
 const cropsterBody = { maximum: 2_048, missing: "Enter the Cropster reading.", invalid: "Enter a valid Cropster reading.", tooLarge: "The Cropster reading is too large." };
+const cropsterMondayBody = { ...cropsterBody, maximum: 512 };
 async function activeSession(request, env) {
   const session = await readSession(request, env);
   if (!session) throw new HttpError("Sign in with your Stock Take App password.", 401);
@@ -85,14 +87,16 @@ export default {
         const item = request.method === "POST" ? await createIssue(env.DB, input) : await updateIssue(env.DB, issueMatch[1], input);
         return json({ ok: true, item }, request.method === "POST" ? 201 : 200);
       }
-      if (url.pathname === "/api/cropster-readings") {
+      if (["/api/cropster-readings", "/api/cropster-monday"].includes(url.pathname)) {
         if (request.method !== "POST") return json({ error: "Method not allowed." }, 405, { Allow: "POST" });
         requireOrigin(request);
         const receivedAt = new Date();
         await activeSession(request, env);
-        const input = await jsonInput(request, cropsterBody);
+        const monday = url.pathname === "/api/cropster-monday";
+        const input = await jsonInput(request, monday ? cropsterMondayBody : cropsterBody);
         const week = dashboardWeek(undefined, receivedAt);
-        return json(await saveCropsterReading(env.DB, input, week.start, receivedAt));
+        const save = monday ? saveCropsterMonday : saveCropsterReading;
+        return json(await save(env.DB, input, week.start, receivedAt));
       }
       if (url.pathname === "/api/dashboard") {
         if (request.method !== "GET") return json({ error: "Method not allowed." }, 405, { Allow: "GET" });

@@ -1,5 +1,6 @@
 import { addDays, dashboardWeek, fetchSourceJson, isoTimestamp, mapNonCoffee, SOURCE_ORIGINS } from "./metrics.js";
 import { CROPSTER_WEBSITE, readCropsterReadings } from "./cropster.js";
+import { readCropsterMonday } from "./cropster-monday.js";
 import { readWeeklyDemand } from "./demand.js";
 
 const dispatchPath = "/api/integrations/dashboard/weekly";
@@ -61,9 +62,16 @@ export function wholesaleDeliveryComparison(current, previous) {
   };
 }
 
-export function weeklyDemandComparison(current, previous) {
+export function weeklyDemandComparison(current, previous, mondayReading = null) {
   const kg = demandKg(current?.kg);
   const previousKg = demandKg(previous?.kg);
+  const brownOnHandKg = demandKg(current?.brownOnHandKg);
+  const mondayRoastedKg = demandKg(mondayReading?.kg);
+  const carryForwardKg = brownOnHandKg === null || mondayRoastedKg === null
+    ? null : (Math.round(brownOnHandKg * 100) - Math.round(mondayRoastedKg * 100)) / 100;
+  const carryForwardNote = brownOnHandKg === null ? "Brown stock in 3. Roast Planning!D6:D17 is unavailable."
+    : mondayRoastedKg === null ? "A completed Monday roast reading from Cropster is needed."
+    : "Brown stock from 3. Roast Planning!D6:D17 less Monday’s completed Cropster roast output.";
   const change = kg !== null && previousKg > 0 ? (kg - previousKg) / previousKg * 100 : null;
   const changePercent = Number.isFinite(change) ? Math.round(change * 10) / 10 : null;
   const notes = [];
@@ -78,6 +86,10 @@ export function weeklyDemandComparison(current, previous) {
   return {
     kg,
     previousKg,
+    carryForwardKg,
+    carryForwardNote,
+    brownOnHandKg,
+    mondayRoastedKg,
     changePercent,
     status,
     note: notes.join(" "),
@@ -101,8 +113,9 @@ export async function collectWeeklyReport({ weekStart, stockroomCookie, env, now
   // Check Stockroom access before reading other business data.
   const inventory = await fetchSourceJson(SOURCE_ORIGINS.stockroom + "/api/inventory", stockroomHeaders, fetcher);
   const demandOptions = { fetch: fetcher, now: () => now.getTime() };
-  const [{ production, green }, [weekDemand, previousDemand, dispatch, previousDispatch]] = await Promise.all([
+  const [{ production, green }, mondayReading, [weekDemand, previousDemand, dispatch, previousDispatch]] = await Promise.all([
     readCropsterReadings({ db: env.DB, weekStart: week.start, followingWeekStart: addDays(week.start, 7), now }),
+    readCropsterMonday({ db: env.DB, weekStart: week.start }),
     Promise.allSettled([
       readWeeklyDemand(week.start, demandOptions),
       readWeeklyDemand(previousWeek, demandOptions),
@@ -112,7 +125,7 @@ export async function collectWeeklyReport({ weekStart, stockroomCookie, env, now
   ]);
   const currentTally = settledValue(weekDemand);
   const previousTally = settledValue(previousDemand);
-  const demand = weeklyDemandComparison(currentTally, previousTally);
+  const demand = weeklyDemandComparison(currentTally, previousTally, mondayReading);
   const stock = stockMetric(inventory);
   const wholesale = wholesaleDeliveryComparison(settledValue(dispatch), settledValue(previousDispatch));
   return {
@@ -122,6 +135,7 @@ export async function collectWeeklyReport({ weekStart, stockroomCookie, env, now
     sources: [
       { label: "This week’s roast tally", note: currentTally?.note || "Demand workbook is unavailable.", url: currentTally?.url, asOf: currentTally?.asOf },
       { label: "Last week’s roast tally", note: previousTally?.note || "Demand workbook is unavailable.", url: previousTally?.url, asOf: previousTally?.asOf },
+      { label: "Monday’s completed roasts", note: mondayReading ? "Read in Cropster." : "Save the completed output from Cropster’s Monday production report.", url: new URL(`/apps/roast/production-report?dateFrom=${week.start}&dateTo=${week.start}`, CROPSTER_WEBSITE).href, asOf: mondayReading?.asOf },
       { label: "Cropster production", note: production.note, url: CROPSTER_WEBSITE, asOf: production.asOf },
       { label: "Cropster green inventory", note: green.note, url: CROPSTER_WEBSITE, asOf: green.asOf },
       { label: "Stockroom", note: "Current value covers the non-coffee inventory." },

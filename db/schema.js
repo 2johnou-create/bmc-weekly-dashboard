@@ -33,3 +33,9 @@ export const dashboardCropsterReadings = sqliteTable("dashboard_cropster_reading
 }, table => [
   index("dashboard_cropster_readings_recorded_idx").on(table.recordedAt, table.weekStart),
 ]);
+
+export const dashboardCropsterMonday = sqliteTable("dashboard_cropster_monday", {
+  weekStart: text("week_start").primaryKey(),
+  roastedKg: real("roasted_kg").notNull(),
+  recordedAt: integer("recorded_at").notNull(),
+});

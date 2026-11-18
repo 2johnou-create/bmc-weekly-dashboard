@@ -97,7 +97,8 @@ function cells(xml, shared) {
     let value = raw === undefined ? null : xmlText(raw);
     if (type === "s") value = /^\d+$/.test(value || "") ? shared[Number(value)] ?? null : null;
     if (type === "inlineStr") value = texts(content);
-    if (value !== null) result.set(ref, { value, type });
+    const hasFormula = /<(?:\w+:)?f\b/.test(content);
+    if (value?.trim() || raw?.trim() || hasFormula) result.set(ref, { value, type });
   }
   return result;
 }
@@ -107,6 +108,21 @@ function number(cell) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
+
+function brownStockTotal(planning) {
+  let total = 0;
+  let savedWeights = 0;
+  for (let row = 6; row <= 17; row++) {
+    const cell = planning.get(`D${row}`);
+    if (!cell) continue;
+    const kg = number(cell);
+    if (kg === null) return null;
+    total += kg;
+    savedWeights++;
+  }
+  return savedWeights && total <= 1_000_000 ? Math.round(total * 100) / 100 : null;
+}
+
 function excelDate(value, date1904) {
   if (typeof value !== "string") return null;
   if (/^\d+(?:\.0+)?$/.test(value)) {
@@ -155,9 +171,10 @@ export function parseWeeklyDemandWorkbook(bytes, weekStart, filename = "") {
     if (!actualWeek) throw new Error("Workbook week is missing or invalid.");
     if (actualWeek !== weekStart) throw new TallyWeekMismatch();
   }
-  const kg = number(sheets.get("3. Roast Planning")?.get("C18"));
+  const planning = sheets.get("3. Roast Planning");
+  const kg = number(planning?.get("C18"));
   if (kg === null || kg > 1_000_000) throw new Error(`No numeric demand is saved in ${DEMAND_CELL}.`);
-  return { kg: Math.round(kg * 100) / 100 };
+  return { kg: Math.round(kg * 100) / 100, brownOnHandKg: brownStockTotal(planning) };
 }
 
 function allowedUrl(value) {
@@ -223,6 +240,7 @@ export async function readWeeklyDemand(weekStart, env = {}) {
         const value = {
           status: folderFailed ? "partial" : "live",
           kg: result.kg,
+          brownOnHandKg: result.brownOnHandKg,
           source: "Weekly roast tally",
           asOf: candidate.modified,
           note: `Demand from ${DEMAND_CELL} in ${candidate.name}.${folderFailed ? " The known workbook was used while the folder listing was unavailable." : ""}`,

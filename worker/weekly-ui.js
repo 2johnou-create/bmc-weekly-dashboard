@@ -99,6 +99,8 @@ export const weeklyPage = String.raw`<!doctype html>
     dt { color: var(--muted); font-size: .84rem; line-height: 1.35; }
     dd { font-size: 1.05rem; font-weight: 700; margin-top: .16rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
     .source-note, .detail-note { color: var(--muted); font-size: .8rem; line-height: 1.5; margin-top: .75rem; }
+    .carry-forward { display: block; color: var(--muted); font-size: .8rem; line-height: 1.4; margin-top: .35rem; font-variant-numeric: tabular-nums; }
+    .carry-forward-detail { margin-top: .85rem; }
     .detail-table { width: 100%; border-collapse: collapse; margin-top: .7rem; text-align: left; }
     .detail-table th, .detail-table td { padding: .4rem 0; border-bottom: 1px solid var(--line); vertical-align: top; }
     .detail-table th:last-child, .detail-table td:last-child { padding-inline-start: .6rem; text-align: right; font-variant-numeric: tabular-nums; }
@@ -112,6 +114,9 @@ export const weeklyPage = String.raw`<!doctype html>
     .capture-form { max-width: 42rem; margin-block: .75rem; color: var(--ink); }
     .capture-form fieldset { border: 0; padding: 0; margin: 0 0 .8rem; }
     .capture-form legend { font-weight: 700; margin-bottom: .4rem; }
+    .monday-form { border-top: 1px solid var(--line); padding-top: .8rem; }
+    .monday-form .capture-fields { grid-template-columns: minmax(0, 15rem); margin-top: .55rem; }
+    .monday-form .detail-note { margin-top: .25rem; }
     .capture-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .45rem .75rem; }
     .capture-fields label { display: grid; gap: .2rem; }
     .capture-fields input { width: 100%; min-width: 0; padding: .375rem; border: 1px solid var(--line); border-radius: .25rem; }
@@ -207,6 +212,7 @@ export const weeklyPage = String.raw`<!doctype html>
           <span class="card-head"><span class="card-title">Weekly demand</span><span class="disclosure" aria-hidden="true"></span></span>
           <span id="demandKg" class="metric-figure headline">—</span>
           <span id="demandChange" class="comparison"></span>
+          <span id="demandCarryForward" class="carry-forward" hidden></span>
           <span id="demandFlag" class="status-flag" hidden></span>
         </summary>
         <div class="card-body">
@@ -214,6 +220,14 @@ export const weeklyPage = String.raw`<!doctype html>
           <dl class="breakdown"><div><dt id="demandCurrentLabel">Selected week</dt><dd id="demandDetail">—</dd></div><div><dt id="demandPreviousLabel">Previous week</dt><dd id="demandPrevious">—</dd></div></dl>
           <p id="demandSource" class="source-note" hidden></p>
           <p id="demandNote" class="detail-note" hidden></p>
+          <div id="demandCarryDetail" class="carry-forward-detail" hidden>
+            <h2>Carry-forward calculation</h2>
+            <dl class="breakdown">
+              <div><dt>Roasted coffee on hand</dt><dd id="demandBrownOnHand">—</dd></div>
+              <div><dt id="demandMondayDate">Monday roasted</dt><dd id="demandMondayRoast">—</dd></div>
+            </dl>
+            <p id="demandCarryNote" class="detail-note" hidden></p>
+          </div>
         </div>
       </details>
       <details class="meeting-card featured production">
@@ -321,6 +335,15 @@ export const weeklyPage = String.raw`<!doctype html>
           <button id="captureSave" type="submit" class="button primary">Save readings</button>
           <p id="captureMessage" class="detail-note" role="status" hidden></p>
         </form>
+        <form id="mondayCaptureForm" class="capture-form monday-form">
+          <fieldset>
+            <legend>Monday roast total</legend>
+            <p id="mondayCaptureHelp" class="detail-note">In the Cropster Production Report, filter to this Monday in Sydney and enter the actual roasted output in kilograms. Enter 0 only if Cropster confirms no completed roasts.</p>
+            <div class="capture-fields"><label>Monday roasted (kg)<input name="roastedKg" type="number" inputmode="decimal" min="0" max="1000000" step=".01" aria-describedby="mondayCaptureHelp" required></label></div>
+          </fieldset>
+          <button id="mondayCaptureSave" type="submit" class="button primary">Save Monday total</button>
+          <p id="mondayCaptureMessage" class="detail-note" role="status" hidden></p>
+        </form>
       </details>
     </details>
     <footer class="links"><p>Sydney reporting week · AUD values</p><a href="/details">Operations details and issue notes</a></footer>
@@ -422,6 +445,7 @@ export const weeklyPage = String.raw`<!doctype html>
       if (!Number.isFinite(demand.kg)) fallback = 'Demand comparison unavailable';
       else if (demand.previousKg === 0) fallback = 'Previous week had zero demand';
       renderComparison('demandChange', change && change[0].toUpperCase() + change.slice(1), fallback);
+      renderCarryForward(demand, week);
       showText('demandFlag', statusText(demand, 'Demand unavailable'));
       set('demandCurrentLabel', week.isCurrent ? 'This week' : 'Selected week');
       set('demandPreviousLabel', 'Previous week (' + previousRange + ')');
@@ -429,6 +453,17 @@ export const weeklyPage = String.raw`<!doctype html>
       set('demandPrevious', weight(demand.previousKg, detailKg));
       showText('demandSource', sourceText(demand, 'Weekly roast tally · 3. Roast Planning!C18'));
       showText('demandNote', demand.note || (!change && demand.previousKg === 0 ? 'Percentage change is unavailable when the previous week is zero.' : ''));
+    }
+    function renderCarryForward(demand, week) {
+      const hasCarryForward = Number.isFinite(demand.carryForwardKg);
+      const show = week.isCurrent || hasCarryForward;
+      const caption = hasCarryForward ? 'Carry-forward from last week · ' + weight(demand.carryForwardKg, detailKg) : 'Carry-forward unavailable';
+      showText('demandCarryForward', show ? caption : '');
+      el('demandCarryDetail').hidden = !show;
+      set('demandBrownOnHand', weight(demand.brownOnHandKg, detailKg));
+      set('demandMondayDate', 'Monday roasted (' + calendarDay.format(new Date(week.start + 'T12:00:00Z')) + ')');
+      set('demandMondayRoast', weight(demand.mondayRoastedKg, detailKg));
+      showText('demandCarryNote', demand.carryForwardNote || 'Roasted coffee on hand from the weekly tally less Monday’s actual roasted output in Cropster.');
     }
     function renderProduction(production, week, previousRange) {
       const hasTotal = Number.isFinite(production.totalKg);
@@ -575,11 +610,13 @@ export const weeklyPage = String.raw`<!doctype html>
       el('capture').open = false;
       el('captureForm').reset();
       showText('captureMessage', '');
+      el('mondayCaptureForm').reset();
+      showText('mondayCaptureMessage', '');
       el('sourceList').replaceChildren();
       el('stockCategories').replaceChildren();
       el('figures').querySelectorAll('[id]').forEach(node => {
         if (node.matches('.metric-figure, .metric-secondary, dd')) node.textContent = unavailable;
-        if (node.matches('.comparison, .source-note, .detail-note, .status-flag')) node.textContent = '';
+        if (node.matches('.comparison, .source-note, .detail-note, .status-flag, .carry-forward')) node.textContent = '';
       });
       el('figures').querySelectorAll('details').forEach(card => { card.open = false; });
       el('sources').open = false;
@@ -695,6 +732,40 @@ export const weeklyPage = String.raw`<!doctype html>
         showText('captureMessage', error.message);
       } finally {
         el('captureSave').disabled = false;
+      }
+    });
+    el('mondayCaptureForm').addEventListener('submit', async event => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const button = el('mondayCaptureSave');
+      if (!signedIn || !loadedWeek?.isCurrent || button.disabled) return;
+      const raw = new FormData(form).get('roastedKg');
+      const roastedKg = Number(raw);
+      if (typeof raw !== 'string' || !raw.trim() || !Number.isFinite(roastedKg) || roastedKg < 0) return;
+      button.disabled = true;
+      showText('mondayCaptureMessage', '');
+      try {
+        const response = await fetch('/api/cropster-monday', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ weekStart: loadedWeek.start, roastedKg }),
+        });
+        if (!signedIn) return;
+        if (response.status === 401) {
+          showSession(false);
+          showText('loginMessage', 'Your session has ended. Sign in again.');
+          el('password').focus();
+          return;
+        }
+        const result = await readJson(response);
+        if (!response.ok || !result.ok) throw new Error(result.error || 'The Monday total could not be saved.');
+        if (!signedIn) return;
+        form.reset();
+        showText('mondayCaptureMessage', 'Monday roast total saved.');
+        await load(false);
+      } catch (error) {
+        if (signedIn) showText('mondayCaptureMessage', error.message);
+      } finally {
+        button.disabled = false;
       }
     });
     el('signInForm').addEventListener('submit', async event => {
