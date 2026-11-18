@@ -209,10 +209,12 @@ function allowedUrl(value) {
   if (!allowed) throw new Error("Source redirect is not allowed.");
   return url.href;
 }
-export async function readBytes(url, fetcher, signal) {
+export async function readBytes(url, fetcher, signal, { fresh = false } = {}) {
+  const headers = { Accept: "*/*" };
+  if (fresh) { headers["Cache-Control"] = "no-cache"; headers.Pragma = "no-cache"; }
   for (let redirect = 0; redirect <= 3; redirect++) {
     url = allowedUrl(url);
-    const response = await fetcher(url, { redirect: "manual", cache: "no-store", signal, headers: { Accept: "*/*" } });
+    const response = await fetcher(url, { redirect: "manual", cache: "no-store", signal, headers });
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       const location = response.headers.get("location");
       await response.body?.cancel();
@@ -244,15 +246,24 @@ export async function readWeeklyDemand(weekStart, env = {}) {
   if (!/^20\d{2}-\d{2}-\d{2}$/.test(weekStart || "") || !Number.isFinite(Date.parse(`${weekStart}T00:00:00Z`)) || new Date(`${weekStart}T00:00:00Z`).toISOString().slice(0, 10) !== weekStart || new Date(`${weekStart}T00:00:00Z`).getUTCDay() !== 1) return unavailable("Choose a Monday to read weekly demand.");
   const fetcher = typeof env.fetch === "function" ? env.fetch : globalThis.fetch;
   const now = typeof env.now === "function" ? env.now() : Date.now();
+  const fresh = env.fresh === true;
   let entries = cache.get(fetcher);
   if (!entries) { entries = new Map(); cache.set(fetcher, entries); }
-  const cached = entries.get(weekStart);
-  if (cached && now - cached.time < 55_000) return { ...cached.value };
+  let state = entries.get(weekStart);
+  if (!state) {
+    if (entries.size >= 8) entries.delete(entries.keys().next().value);
+    state = { sequence: 0, entry: null };
+    entries.set(weekStart, state);
+  }
+  const cached = state.entry;
+  if (!fresh && cached && now >= cached.time && now - cached.time < 55_000) return { ...cached.value };
+  const sequence = ++state.sequence;
+  if (fresh) state.entry = null;
   const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 16_000);
   let folderFailed = false, candidates = [];
   let wrongWeekFile;
   try {
-    try { candidates = parseDriveFolderCandidates(strFromU8(await readBytes(FOLDER_URL, fetcher, controller.signal)), weekStart); }
+    try { candidates = parseDriveFolderCandidates(strFromU8(await readBytes(FOLDER_URL, fetcher, controller.signal, { fresh })), weekStart); }
     catch { folderFailed = true; }
     const named = candidates.filter(file => namedWeeklyTally(file.name, weekStart));
     if (named.length > 1) return unavailable("More than one dated ROAST TALLY matches this week in the shared folder.");
@@ -260,8 +271,9 @@ export async function readWeeklyDemand(weekStart, env = {}) {
     for (const candidate of candidates.slice(0, 3)) {
       if (controller.signal.aborted) break;
       try {
-        const url = candidate.mime === SHEET_MIME ? `https://docs.google.com/spreadsheets/d/${candidate.id}/export?format=xlsx` : `https://drive.google.com/uc?export=download&id=${candidate.id}`;
-        const result = parseWeeklyDemandWorkbook(await readBytes(url, fetcher, controller.signal), weekStart, candidate.name);
+        let url = candidate.mime === SHEET_MIME ? `https://docs.google.com/spreadsheets/d/${candidate.id}/export?format=xlsx` : `https://drive.google.com/uc?export=download&id=${candidate.id}`;
+        if (fresh) url += "&_refresh=" + now;
+        const result = parseWeeklyDemandWorkbook(await readBytes(url, fetcher, controller.signal, { fresh }), weekStart, candidate.name);
         const value = {
           status: folderFailed ? "partial" : "live",
           kg: result.kg,
@@ -271,8 +283,7 @@ export async function readWeeklyDemand(weekStart, env = {}) {
           note: `Demand from ${DEMAND_CELL} in ${candidate.name}.${folderFailed ? " The known workbook was used while the folder listing was unavailable." : ""}`,
           url: `https://docs.google.com/spreadsheets/d/${candidate.id}/edit`,
         };
-        if (entries.size >= 8) entries.delete(entries.keys().next().value);
-        entries.set(weekStart, { time: now, value });
+        if (state.sequence === sequence && entries.get(weekStart) === state) state.entry = { time: now, value };
         return { ...value };
       } catch (error) {
         if (error instanceof TallyWeekMismatch && candidate.date === weekStart && !wrongWeekFile) wrongWeekFile = candidate;
@@ -290,5 +301,8 @@ export async function readWeeklyDemand(weekStart, env = {}) {
       url: `https://docs.google.com/spreadsheets/d/${candidate.id}/edit`,
     };
     return unavailable("The dated ROAST TALLY for this week is missing from the shared folder.");
-  } finally { clearTimeout(timer); }
+  } finally {
+    clearTimeout(timer);
+    if (state.sequence === sequence && state.entry?.time !== now) state.entry = null;
+  }
 }

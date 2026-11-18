@@ -114,20 +114,26 @@ export function parsePurchaseWorkbook(bytes, today = sydneyDate()) {
   };
 }
 
-export async function readPurchases({ now = new Date(), fetcher = fetch } = {}) {
+export async function readPurchases({ now = new Date(), fetcher = fetch, fresh = false } = {}) {
   const base = { sourceUrl: PURCHASE_SOURCE_URL, sheetName: PURCHASE_SHEET, asOf: null, events: [] };
   const timestamp = new Date(now).getTime();
-  const previous = cache.get(fetcher);
-  if (previous && timestamp >= previous.time && timestamp - previous.time < 55_000) return structuredClone(previous.value);
+  let state = cache.get(fetcher);
+  if (!state) { state = { sequence: 0, entry: null }; cache.set(fetcher, state); }
+  const previous = state.entry;
+  if (!fresh && previous && timestamp >= previous.time && timestamp - previous.time < 55_000) return structuredClone(previous.value);
+  const sequence = ++state.sequence;
+  if (fresh) state.entry = null;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 12_000);
   try {
-    const bytes = await readBytes(downloadUrl, fetcher, controller.signal);
+    const url = fresh ? downloadUrl + "&_refresh=" + timestamp : downloadUrl;
+    const bytes = await readBytes(url, fetcher, controller.signal, { fresh });
     const report = parsePurchaseWorkbook(bytes, sydneyDate(new Date(now)));
     const value = { ...base, ...report, asOf: new Date(now).toISOString() };
-    cache.set(fetcher, { time: timestamp, value });
+    if (state.sequence === sequence) state.entry = { time: timestamp, value };
     return structuredClone(value);
   } catch {
+    if (state.sequence === sequence) state.entry = null;
     return { ...base, status: "unavailable", note: "The ORDER PLAN worksheet could not be read. Try Refresh or open the source workbook." };
   } finally { clearTimeout(timer); }
 }

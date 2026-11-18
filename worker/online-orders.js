@@ -184,14 +184,18 @@ function folderFiles(html) {
 function allowedUrl(value) {
   const url = new URL(value);
   if (url.protocol !== "https:" || url.username || url.password || url.port) throw new Error("The source redirect is not allowed.");
-  const allowed = (url.href === ONLINE_ORDERS_FOLDER_URL) || (url.hostname === "drive.google.com" && url.pathname === "/uc") || (url.hostname === "drive.usercontent.google.com" && url.pathname === "/download") || (url.hostname === "docs.google.com" && /^\/spreadsheets\/d\/[\w-]{20,100}\/export$/.test(url.pathname)) || (/^doc-\d{2}-\d{2}-sheets\.googleusercontent\.com$/.test(url.hostname) && url.pathname.startsWith("/export/"));
+  const folderQuery = [...url.searchParams];
+  const fixedFolder = url.origin + url.pathname === ONLINE_ORDERS_FOLDER_URL && !url.hash && (!folderQuery.length || (folderQuery.length === 1 && folderQuery[0][0] === "_refresh" && /^\d{1,16}-\d{1,16}$/.test(folderQuery[0][1])));
+  const allowed = fixedFolder || (url.hostname === "drive.google.com" && url.pathname === "/uc") || (url.hostname === "drive.usercontent.google.com" && url.pathname === "/download") || (url.hostname === "docs.google.com" && /^\/spreadsheets\/d\/[\w-]{20,100}\/export$/.test(url.pathname)) || (/^doc-\d{2}-\d{2}-sheets\.googleusercontent\.com$/.test(url.hostname) && url.pathname.startsWith("/export/"));
   if (!allowed) throw new Error("The source redirect is not allowed.");
   return url.href;
 }
-async function publicText(url, fetcher, signal, budget) {
+async function publicText(url, fetcher, signal, budget, fresh = false) {
+  const headers = { Accept: "text/csv,text/html;q=0.9,*/*;q=0.1" };
+  if (fresh) { headers["Cache-Control"] = "no-cache"; headers.Pragma = "no-cache"; }
   for (let redirects = 0; redirects <= 3; redirects++) {
     url = allowedUrl(url);
-    const response = await fetcher(url, { redirect: "manual", cache: "no-store", signal, headers: { Accept: "text/csv,text/html;q=0.9,*/*;q=0.1" } });
+    const response = await fetcher(url, { redirect: "manual", cache: "no-store", signal, headers });
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       const location = response.headers.get("location");
       await response.body?.cancel();
@@ -221,13 +225,24 @@ export async function readOnlineOrders(weekStart, env = {}) {
   if (!validDate(weekStart) || mondayOf(weekStart) !== weekStart) return noData("Choose a Monday to read online orders.");
   const fetcher = typeof env.fetch === "function" ? env.fetch : globalThis.fetch;
   const now = typeof env.now === "function" ? env.now() : Date.now();
+  const fresh = env.fresh === true;
   let entries = cache.get(fetcher);
   if (!entries) { entries = new Map(); cache.set(fetcher, entries); }
-  const previous = entries.get(weekStart);
-  if (previous && now - previous.time < 55_000) return { ...previous.metric };
+  let state = entries.get(weekStart);
+  if (!state) {
+    if (entries.size >= 8) entries.delete(entries.keys().next().value);
+    state = { sequence: 0, entry: null };
+    entries.set(weekStart, state);
+  }
+  const previous = state.entry;
+  if (!fresh && previous && now >= previous.time && now - previous.time < 55_000) return { ...previous.metric };
+  const sequence = ++state.sequence;
+  if (fresh) state.entry = null;
+  const nonce = `${Number.isSafeInteger(now) && now >= 0 ? now : Date.now()}-${sequence}`;
   const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 16_000), budget = { bytes: 0 };
   try {
-    const listing = folderFiles(await publicText(ONLINE_ORDERS_FOLDER_URL, fetcher, controller.signal, budget));
+    const folderUrl = fresh ? `${ONLINE_ORDERS_FOLDER_URL}?_refresh=${nonce}` : ONLINE_ORDERS_FOLDER_URL;
+    const listing = folderFiles(await publicText(folderUrl, fetcher, controller.signal, budget, fresh));
     const visible = listing.files.filter(file => !/template|example/i.test(file.name));
     const supported = visible.filter(file => /\.csv$/i.test(file.name) || file.mime === "text/csv" || file.mime === "application/vnd.google-apps.spreadsheet");
     let metric;
@@ -239,14 +254,14 @@ export async function readOnlineOrders(weekStart, env = {}) {
         if (controller.signal.aborted || budget.bytes > 8_000_000) { failedFiles++; break; }
         try {
           const native = file.mime === "application/vnd.google-apps.spreadsheet";
-          const url = native ? `https://docs.google.com/spreadsheets/d/${file.id}/export?format=csv` : `https://drive.google.com/uc?export=download&id=${file.id}`;
-          files.push({ text: await publicText(url, fetcher, controller.signal, budget), modified: file.modified, firstSheet: native });
+          let url = native ? `https://docs.google.com/spreadsheets/d/${file.id}/export?format=csv` : `https://drive.google.com/uc?export=download&id=${file.id}`;
+          if (fresh) url += `&_refresh=${nonce}`;
+          files.push({ text: await publicText(url, fetcher, controller.signal, budget, fresh), modified: file.modified, firstSheet: native });
         } catch { failedFiles++; }
       }
       metric = summarizeOnlineOrderFiles(files, weekStart, { failedFiles, incomplete: listing.incomplete || supported.length > MAX_FILES || controller.signal.aborted || budget.bytes > 8_000_000 });
     }
-    if (entries.size >= 8) entries.delete(entries.keys().next().value);
-    entries.set(weekStart, { time: now, metric });
+    if (state.sequence === sequence) state.entry = { time: now, metric };
     return { ...metric };
   } catch { return noData("The online orders folder could not be read. Try refreshing or check the folder's existing access."); }
   finally { clearTimeout(timer); }

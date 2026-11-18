@@ -31,6 +31,8 @@ The landing page shows the weekly report. The previous operations view and saved
 
 The current week runs Monday–Sunday in Australia/Sydney and shows the latest stock figures. Previous weeks use Monday–Friday. The historical production and Marrickville stock cards use saved readings from Cropster’s dated reports. Historical non-coffee quantities are reconstructed from Stock Take App movements through Friday close and valued at today’s catalogue prices. Missing source readings appear as a dash. The page checks its sources every minute while visible.
 
+The top **Refresh** buttons recheck every source and bypass the dashboard's short-lived feed caches. Purchases re-download the live ORDER PLAN worksheet. Cropster cards reload the latest saved Cropster readings and retain their original capture times. The checked time reports when the refresh completed.
+
 The **Note** card stores one editable list of points per reporting week. Each line becomes a separate point. Notes use Stock Take App access and stay with the selected week.
 
 ## Roastery Lab

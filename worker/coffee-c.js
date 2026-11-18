@@ -66,8 +66,10 @@ function quoteResult(data, strip, now) {
   };
 }
 
-async function readText(url, type, fetcher, signal) {
-  const response = await fetcher(url, { redirect: "manual", cache: "no-store", signal, headers: { Accept: type } });
+async function readText(url, type, fetcher, signal, fresh) {
+  const headers = { Accept: type };
+  if (fresh) { headers["Cache-Control"] = "no-cache"; headers.Pragma = "no-cache"; }
+  const response = await fetcher(url, { redirect: "manual", cache: "no-store", signal, headers });
   if (!response.ok || !response.headers.get("content-type")?.toLowerCase().includes(type) || Number(response.headers.get("content-length")) > MAX_BYTES) {
     await response.body?.cancel();
     throw new Error("Exchange response is unavailable.");
@@ -92,24 +94,28 @@ async function readText(url, type, fetcher, signal) {
   } finally { reader.releaseLock(); }
 }
 
-export async function readCoffeeC({ now = new Date(), fetcher = fetch } = {}) {
+export async function readCoffeeC({ now = new Date(), fetcher = fetch, fresh = false } = {}) {
   if (!(now instanceof Date) || !Number.isFinite(now.getTime())) return unavailable();
-  const cached = cache.get(fetcher);
-  if (cached && cached.tradeDate === newYorkDay.format(now) && now.getTime() >= cached.fetchedAt && now.getTime() - cached.fetchedAt < CACHE_MS) {
+  let state = cache.get(fetcher);
+  if (!state) { state = { sequence: 0, entry: null }; cache.set(fetcher, state); }
+  const cached = state.entry;
+  if (!fresh && cached && cached.tradeDate === newYorkDay.format(now) && now.getTime() >= cached.fetchedAt && now.getTime() - cached.fetchedAt < CACHE_MS) {
     return { ...cached.value, status: now.getTime() - Date.parse(cached.value.asOf) > STALE_MS ? "stale" : "delayed" };
   }
+  const sequence = ++state.sequence;
+  if (fresh) state.entry = null;
   try {
     const signal = AbortSignal.timeout(8_000);
     const [quotes, expiry] = await Promise.allSettled([
-      readText(QUOTES_URL, "application/json", fetcher, signal),
-      readText(EXPIRY_URL, "text/csv", fetcher, signal),
+      readText(QUOTES_URL, "application/json", fetcher, signal, fresh),
+      readText(EXPIRY_URL, "text/csv", fetcher, signal, fresh),
     ]);
     if (quotes.status !== "fulfilled" || expiry.status !== "fulfilled") throw new Error("Exchange request failed.");
     const value = quoteResult(JSON.parse(quotes.value), selectContract(expiry.value, now), now);
-    cache.set(fetcher, { fetchedAt: now.getTime(), tradeDate: newYorkDay.format(now), value });
+    if (state.sequence === sequence) state.entry = { fetchedAt: now.getTime(), tradeDate: newYorkDay.format(now), value };
     return { ...value };
   } catch {
-    cache.delete(fetcher);
+    if (state.sequence === sequence) state.entry = null;
     return unavailable();
   }
 }

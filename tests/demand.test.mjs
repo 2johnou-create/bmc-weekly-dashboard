@@ -188,3 +188,56 @@ test("refreshes after the short cache window without serving failed reads as fre
   clock += 55_001; available = false;
   assert.equal((await readWeeklyDemand("2026-11-02", env)).kg, null);
 });
+
+test("Manual demand refresh bypasses the TTL, leaves the folder URL exact and busts the file cache", async () => {
+  let kg = 1255.75, available = true, calls = 0;
+  const fetcher = async (url, options) => {
+    calls++;
+    if (!available) return new Response(null, { status: 503 });
+    const source = new URL(url);
+    const isFolder = source.pathname.includes("/drive/folders/");
+    if (options.headers["Cache-Control"]) {
+      assert.equal(options.headers["Cache-Control"], "no-cache");
+      assert.equal(options.headers.Pragma, "no-cache");
+      assert.equal(source.searchParams.has("_refresh"), !isFolder);
+    }
+    return new Response(isFolder ? folder() : fixture({ plan: kg }));
+  };
+  const env = { fetch: fetcher, now: () => 100_000 };
+  assert.equal((await readWeeklyDemand("2026-11-02", env)).kg, 1255.75);
+  kg = 1500;
+  assert.equal((await readWeeklyDemand("2026-11-02", env)).kg, 1255.75);
+  assert.equal(calls, 2);
+  assert.equal((await readWeeklyDemand("2026-11-02", { ...env, fresh: true })).kg, 1500);
+  available = false;
+  assert.equal((await readWeeklyDemand("2026-11-02", { ...env, fresh: true })).kg, null);
+  const attempted = calls;
+  assert.equal((await readWeeklyDemand("2026-11-02", env)).kg, null);
+  assert.ok(calls > attempted);
+});
+
+test("An older tally read cannot replace or clear the cache after a newer forced read", async () => {
+  for (const olderFails of [false, true]) {
+    const pending = Promise.withResolvers();
+    const started = Promise.withResolvers();
+    let files = 0;
+    const fetcher = async url => {
+      if (url.includes("/drive/folders/")) return new Response(folder());
+      files++;
+      if (files === 1) {
+        started.resolve();
+        await pending.promise;
+        return olderFails ? new Response(null, { status: 503 }) : new Response(fixture());
+      }
+      return new Response(fixture({ plan: 1500 }));
+    };
+    const env = { fetch: fetcher, now: () => 100_000 };
+    const older = readWeeklyDemand("2026-11-02", env);
+    await started.promise;
+    assert.equal((await readWeeklyDemand("2026-11-02", { ...env, fresh: true })).kg, 1500);
+    pending.resolve();
+    await older;
+    assert.equal((await readWeeklyDemand("2026-11-02", env)).kg, 1500);
+    assert.equal(files, 2);
+  }
+});

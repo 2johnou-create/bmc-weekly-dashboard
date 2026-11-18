@@ -81,3 +81,49 @@ test("A cached purchase calendar refreshes from the live sheet and never serves 
   assert.equal(failed.asOf, null);
   assert.deepEqual(failed.events, []);
 });
+
+test("Manual purchase refresh bypasses the TTL and cannot revive the old calendar after a failure", async () => {
+  const now = new Date("2026-11-19T00:00:00Z");
+  let value = 1200.45, available = true, calls = 0;
+  const fetcher = async (url, options) => {
+    calls++;
+    const fresh = new URL(url).searchParams.has("_refresh");
+    if (fresh) {
+      assert.equal(options.headers["Cache-Control"], "no-cache");
+      assert.equal(options.headers.Pragma, "no-cache");
+    }
+    return available ? new Response(workbook({ rows: currentRows.replace("1200.45", String(value)) })) : new Response(null, { status: 503 });
+  };
+  assert.equal((await readPurchases({ now, fetcher })).events[0].value, 1200.45);
+  value = 1500;
+  assert.equal((await readPurchases({ now, fetcher })).events[0].value, 1200.45);
+  assert.equal(calls, 1);
+  assert.equal((await readPurchases({ now: new Date(now.getTime() + 1000), fetcher, fresh: true })).events[0].value, 1500);
+  available = false;
+  assert.equal((await readPurchases({ now: new Date(now.getTime() + 2000), fetcher, fresh: true })).status, "unavailable");
+  assert.equal((await readPurchases({ now: new Date(now.getTime() + 3000), fetcher })).status, "unavailable");
+  assert.equal(calls, 4);
+});
+
+test("An older purchase request cannot replace or delete a newer forced result", async () => {
+  for (const olderFails of [false, true]) {
+    const pending = Promise.withResolvers();
+    const now = new Date("2026-11-19T00:00:00Z");
+    let calls = 0;
+    const fetcher = async () => {
+      calls++;
+      if (calls === 1) {
+        await pending.promise;
+        return olderFails ? new Response(null, { status: 503 }) : new Response(workbook({ rows: currentRows }));
+      }
+      return new Response(workbook({ rows: currentRows.replace("1200.45", "1500") }));
+    };
+    const older = readPurchases({ now, fetcher });
+    const newer = await readPurchases({ now: new Date(now.getTime() + 1000), fetcher, fresh: true });
+    assert.equal(newer.events[0].value, 1500);
+    pending.resolve();
+    await older;
+    assert.equal((await readPurchases({ now: new Date(now.getTime() + 2000), fetcher })).events[0].value, 1500);
+    assert.equal(calls, 2);
+  }
+});

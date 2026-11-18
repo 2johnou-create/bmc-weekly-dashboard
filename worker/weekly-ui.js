@@ -752,9 +752,12 @@ export const weeklyPage = String.raw`<!doctype html>
       showText('weekNoteFeedback', '');
     }
     function noteIsActive(weekStart, state) { return signedIn && weekNotes.get(weekStart) === state; }
-    async function loadWeekNote(weekStart) {
+    async function loadWeekNote(weekStart, { fresh = false } = {}) {
       const state = weekNoteState(weekStart);
-      if (!signedIn || state.reading || state.saving) return;
+      if (!signedIn) return false;
+      if (state.saving) return 'saving';
+      if (state.reading && !fresh) return;
+      state.reading?.abort();
       const controller = new AbortController();
       state.reading = controller;
       const timeout = setTimeout(() => controller.abort(), 12000);
@@ -768,10 +771,12 @@ export const weeklyPage = String.raw`<!doctype html>
         state.needsReload = false;
         if (state.error) state.message = '';
         state.error = false;
+        return true;
       } catch (error) {
         if (!noteIsActive(weekStart, state) || state.reading !== controller) return;
         state.error = true;
         state.message = error.name === 'AbortError' ? 'Loading the note timed out. Try Refresh note.' : 'The note could not be loaded. Try Refresh note.';
+        return false;
       } finally {
         clearTimeout(timeout);
         if (state.reading === controller) {
@@ -785,7 +790,7 @@ export const weeklyPage = String.raw`<!doctype html>
       showText('loginMessage', 'Your session has ended. Sign in again.');
       el('password').focus();
     }
-    function render(data) {
+    function render(data, { fresh = false } = {}) {
       const { week, metrics } = data;
       const previousStart = changeWeek(week.start, -7);
       const previousRange = weekRange(previousStart, changeWeek(previousStart, week.isCurrent ? 6 : 4));
@@ -802,7 +807,7 @@ export const weeklyPage = String.raw`<!doctype html>
       }
       loadedWeek = week;
       renderWeekNote(week.start);
-      loadWeekNote(week.start);
+      const noteRequest = loadWeekNote(week.start, { fresh });
       el('capture').hidden = !week.isCurrent;
       el('greenCapture').hidden = false;
       el('fridayCapture').hidden = week.isCurrent;
@@ -815,6 +820,7 @@ export const weeklyPage = String.raw`<!doctype html>
       const checked = formatTimestamp(data.generatedAt);
       set('status', checked ? 'Last checked ' + checked + ' Sydney time' : 'Figures loaded');
       el('status').classList.remove('error');
+      return noteRequest;
     }
     function setWeekQuery(week) {
       const url = new URL(location.href);
@@ -831,6 +837,8 @@ export const weeklyPage = String.raw`<!doctype html>
       if (active) return;
       currentRequest?.abort();
       currentRequest = null;
+      el('refresh').disabled = false;
+      set('refresh', 'Refresh');
       el('report').setAttribute('aria-busy', 'false');
       el('figures').hidden = true;
       el('sources').hidden = true;
@@ -860,10 +868,12 @@ export const weeklyPage = String.raw`<!doctype html>
       loadedWeek = undefined;
     }
     async function readJson(response) { return response.json().catch(() => ({})); }
-    async function load(announce = true) {
+    async function load(announce = true, { fresh = false } = {}) {
       if (!signedIn) return;
+      if (currentRequest?.fresh && !fresh) return;
       currentRequest?.abort();
       const controller = new AbortController();
+      controller.fresh = fresh;
       currentRequest = controller;
       const weekToLoad = requestedWeek;
       const timeout = setTimeout(() => controller.abort(), 30000);
@@ -872,17 +882,20 @@ export const weeklyPage = String.raw`<!doctype html>
       el('next').disabled = true;
       el('currentWeek').disabled = true;
       el('refresh').disabled = true;
+      set('refresh', fresh ? 'Refreshing…' : 'Refresh');
       if (!loadedWeek || (weekToLoad && weekToLoad !== loadedWeek.start) || (!weekToLoad && !loadedWeek.isCurrent)) {
         el('figures').hidden = true;
         el('sources').hidden = true;
       }
       if (announce || !loadedWeek) {
-        set('status', 'Loading weekly figures…');
+        set('status', fresh ? 'Refreshing weekly figures…' : 'Loading weekly figures…');
         el('status').classList.remove('error');
       }
       try {
-        const query = weekToLoad ? '?week=' + encodeURIComponent(weekToLoad) : '';
-        const response = await fetch('/api/weekly-report' + query, { cache: 'no-store', signal: controller.signal });
+        const query = new URLSearchParams();
+        if (weekToLoad) query.set('week', weekToLoad);
+        if (fresh) query.set('refresh', '1');
+        const response = await fetch('/api/weekly-report' + (query.size ? '?' + query : ''), { cache: 'no-store', signal: controller.signal });
         if (currentRequest !== controller) return;
         if (response.status === 401) {
           showSession(false);
@@ -893,7 +906,15 @@ export const weeklyPage = String.raw`<!doctype html>
         const data = await readJson(response);
         if (currentRequest !== controller || !signedIn) return;
         if (!response.ok) throw new Error(data.error || 'The report could not be loaded.');
-        render(data);
+        const noteRequest = render(data, { fresh });
+        if (fresh) {
+          const noteChecked = await noteRequest;
+          if (currentRequest !== controller || !signedIn) return;
+          const checked = new Date().toLocaleTimeString('en-AU', { timeZone: 'Australia/Sydney', hour: 'numeric', minute: '2-digit', second: '2-digit' });
+          set('status', 'Refresh complete. Checked ' + checked + ' Sydney time.' +
+            (noteChecked === false ? ' The meeting note could not be checked. Use Refresh note to try again.' : '') +
+            (noteChecked === 'saving' ? ' The meeting note is still saving.' : ''));
+        }
         if (weekToLoad && loadedWeek.isCurrent) requestedWeek = '';
         setWeekQuery(requestedWeek);
       } catch (error) {
@@ -911,6 +932,7 @@ export const weeklyPage = String.raw`<!doctype html>
           el('next').disabled = !loadedWeek || loadedWeek.isCurrent;
           el('currentWeek').disabled = false;
           el('refresh').disabled = false;
+          set('refresh', 'Refresh');
           currentRequest = null;
         }
       }
@@ -926,7 +948,7 @@ export const weeklyPage = String.raw`<!doctype html>
       load();
     });
     el('currentWeek').addEventListener('click', () => { requestedWeek = ''; load(); });
-    el('refresh').addEventListener('click', () => load());
+    el('refresh').addEventListener('click', () => load(true, { fresh: true }));
     el('weekNoteInput').addEventListener('input', event => {
       if (!loadedWeek) return;
       const weekStart = loadedWeek.start;

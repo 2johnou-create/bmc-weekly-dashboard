@@ -124,7 +124,7 @@ function stockMetric(inventory) {
   }
 }
 
-export async function collectWeeklyReport({ weekStart, stockroomCookie, env, now = new Date(), fetcher = fetch }) {
+export async function collectWeeklyReport({ weekStart, stockroomCookie, env, now = new Date(), fetcher = fetch, fresh = false }) {
   const week = dashboardWeek(weekStart, now);
   const previousWeek = addDays(week.start, -7);
   const historical = !week.isCurrent;
@@ -137,7 +137,7 @@ export async function collectWeeklyReport({ weekStart, stockroomCookie, env, now
   const stockroomHeaders = { Cookie: stockroomCookie, Origin: SOURCE_ORIGINS.stockroom };
   // Check Stockroom access before reading other business data.
   const inventory = await fetchSourceJson(SOURCE_ORIGINS.stockroom + "/api/inventory", stockroomHeaders, fetcher);
-  const demandOptions = { fetch: fetcher, now: () => now.getTime() };
+  const demandOptions = { fetch: fetcher, now: () => now.getTime(), fresh };
   const [{ production, green }, mondayReading, stock, [weekDemand, previousDemand, dispatch, previousDispatch]] = await Promise.all([
     historical ? readCropsterFriday(env.DB, week.start) : readCropsterReadings({ db: env.DB, weekStart: week.start, followingWeekStart: addDays(week.start, 7), now }),
     readCropsterMonday({ db: env.DB, weekStart: week.start }),

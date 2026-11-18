@@ -171,3 +171,89 @@ test("an expired cache with a failed folder refresh returns unavailable, not old
   assert.equal(result.orders, null);
   assert.equal(result.status, "unavailable");
 });
+
+test("explicit refresh bypasses the cache and refreshes only the configured public sources", async () => {
+  let amount = 40;
+  const calls = [];
+  const fetcher = async (url, options) => {
+    calls.push({ url, options });
+    const folder = new URL(url).pathname === new URL(ONLINE_ORDERS_FOLDER_URL).pathname;
+    return new Response(folder ? listing([{}]) : ONLINE_ORDERS_CSV_HEADERS + `1001,2026-11-02,${amount},AUD\n`);
+  };
+  const env = { fetch: fetcher, now: () => 100_000 };
+  assert.equal((await readOnlineOrders(week, env)).value, 40);
+  amount = 60;
+  assert.equal((await readOnlineOrders(week, env)).value, 40);
+  assert.equal(calls.length, 2);
+  assert.equal((await readOnlineOrders(week, { ...env, fresh: true })).value, 60);
+  assert.equal(calls.length, 4);
+  for (const call of calls.slice(2)) {
+    const url = new URL(call.url);
+    assert.equal(url.hostname, "drive.google.com");
+    assert.match(url.searchParams.get("_refresh"), /^\d{1,16}-\d{1,16}$/);
+    assert.equal(call.options.cache, "no-store");
+    assert.equal(call.options.headers["Cache-Control"], "no-cache");
+    assert.equal(call.options.headers.Pragma, "no-cache");
+    assert.equal(call.options.headers.Authorization, undefined);
+  }
+  assert.equal(new URL(calls[2].url).pathname, new URL(ONLINE_ORDERS_FOLDER_URL).pathname);
+  assert.equal(new URL(calls[3].url).pathname, "/uc");
+  assert.equal((await readOnlineOrders(week, env)).value, 60);
+  assert.equal(calls.length, 4);
+});
+
+test("failed explicit refresh clears a still-valid cached total before the next poll", async () => {
+  let mode = "initial", reads = 0;
+  const fetcher = async url => {
+    reads++;
+    if (mode === "failure") return new Response(null, { status: 503 });
+    const folder = new URL(url).pathname === new URL(ONLINE_ORDERS_FOLDER_URL).pathname;
+    return new Response(folder ? listing([{}]) : ONLINE_ORDERS_CSV_HEADERS + `1001,2026-11-02,${mode === "initial" ? 40 : 60},AUD\n`);
+  };
+  const env = { fetch: fetcher, now: () => 100_000 };
+  assert.equal((await readOnlineOrders(week, env)).value, 40);
+  mode = "failure";
+  assert.equal((await readOnlineOrders(week, { ...env, fresh: true })).status, "unavailable");
+  mode = "recovered";
+  assert.equal((await readOnlineOrders(week, env)).value, 60);
+  assert.equal(reads, 5);
+});
+
+test("a newer explicit refresh owns the cache when an earlier poll finishes afterward", async () => {
+  let releaseOlder, reads = 0;
+  const fetcher = async url => {
+    reads++;
+    const parsed = new URL(url), folder = parsed.pathname === new URL(ONLINE_ORDERS_FOLDER_URL).pathname;
+    if (folder && !parsed.searchParams.has("_refresh")) return new Promise(resolve => { releaseOlder = () => resolve(new Response(listing([{}]))); });
+    if (folder) return new Response(listing([{}]));
+    return new Response(ONLINE_ORDERS_CSV_HEADERS + `1001,2026-11-02,${parsed.searchParams.has("_refresh") ? 60 : 40},AUD\n`);
+  };
+  const env = { fetch: fetcher, now: () => 100_000 };
+  const older = readOnlineOrders(week, env);
+  assert.equal((await readOnlineOrders(week, { ...env, fresh: true })).value, 60);
+  releaseOlder();
+  assert.equal((await older).value, 40);
+  assert.equal((await readOnlineOrders(week, env)).value, 60);
+  assert.equal(reads, 4);
+});
+
+test("an older in-flight poll cannot revive data after an explicit refresh fails", async () => {
+  let releaseOlder, stage = "older", reads = 0;
+  const fetcher = async url => {
+    reads++;
+    const folder = new URL(url).pathname === new URL(ONLINE_ORDERS_FOLDER_URL).pathname;
+    if (folder && stage === "older") return new Promise(resolve => { releaseOlder = () => resolve(new Response(listing([{}]))); });
+    if (folder && stage === "failed") return new Response(null, { status: 503 });
+    if (folder) return new Response(listing([{}]));
+    return new Response(ONLINE_ORDERS_CSV_HEADERS + `1001,2026-11-02,${stage === "recovered" ? 60 : 40},AUD\n`);
+  };
+  const env = { fetch: fetcher, now: () => 100_000 };
+  const older = readOnlineOrders(week, env);
+  stage = "failed";
+  assert.equal((await readOnlineOrders(week, { ...env, fresh: true })).status, "unavailable");
+  releaseOlder();
+  assert.equal((await older).value, 40);
+  stage = "recovered";
+  assert.equal((await readOnlineOrders(week, env)).value, 60);
+  assert.equal(reads, 5);
+});

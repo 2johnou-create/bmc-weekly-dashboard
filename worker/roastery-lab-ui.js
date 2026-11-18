@@ -430,6 +430,7 @@ export const roasteryLabPage = String.raw`<!doctype html>
     let priceVersion;
     let consumptionVersion;
     let purchases;
+    let purchaseRenderDay;
     let purchaseMonth = todaySydney().slice(0, 7);
     let selectedPurchaseDate = todaySydney();
     const dirty = new Set();
@@ -589,9 +590,11 @@ export const roasteryLabPage = String.raw`<!doctype html>
       });
       el('purchaseTotalRows').replaceChildren(...totals);
     }
-    function renderPurchases(next = { status: 'unavailable' }) {
-      const same = JSON.stringify(purchases) === JSON.stringify(next);
+    function renderPurchases(next = { status: 'unavailable' }, { fresh = false } = {}) {
+      const today = todaySydney();
+      const same = !fresh && purchaseRenderDay === today && JSON.stringify(purchases) === JSON.stringify(next);
       purchases = next;
+      purchaseRenderDay = today;
       const upcoming = purchaseEvents().filter(event => event.kind === 'upcoming' && event.date >= todaySydney());
       const nextEvent = upcoming.find(event => event.date >= todaySydney());
       el('purchasePreview').textContent = nextEvent
@@ -850,7 +853,7 @@ export const roasteryLabPage = String.raw`<!doctype html>
         (source.status === 'partial' ? ' Some readings are unavailable.' : '');
       return 'Cropster data is unavailable.';
     }
-    function renderReport(data) {
+    function renderReport(data, { fresh = false } = {}) {
       const nextPriceVersion = JSON.stringify(data.prices || {});
       const nextConsumptionVersion = JSON.stringify(data.consumption || {});
       if (nextPriceVersion !== priceVersion) {
@@ -862,7 +865,7 @@ export const roasteryLabPage = String.raw`<!doctype html>
         renderConsumption(data.consumption);
       }
       renderCoffeeC(data.coffeeC);
-      renderPurchases(data.purchases);
+      renderPurchases(data.purchases, { fresh });
       renderSettings(data.settings);
       message('status', sourceStatus(data.source));
       el('sourceNote').textContent = data.source?.note || '';
@@ -872,10 +875,12 @@ export const roasteryLabPage = String.raw`<!doctype html>
     function abortLoad() {
       activeRequest?.abort();
       activeRequest = undefined;
+      el('refresh').disabled = busy;
+      el('refresh').textContent = 'Refresh';
     }
     function setBusy(value) {
       busy = value;
-      el('refresh').disabled = value;
+      el('refresh').disabled = value || Boolean(activeRequest);
       el('cropsterEditor').disabled = value;
       updateEditors();
     }
@@ -895,6 +900,7 @@ export const roasteryLabPage = String.raw`<!doctype html>
       priceVersion = undefined;
       consumptionVersion = undefined;
       purchases = undefined;
+      purchaseRenderDay = undefined;
       purchaseMonth = todaySydney().slice(0, 7);
       selectedPurchaseDate = todaySydney();
       dirty.clear();
@@ -913,24 +919,39 @@ export const roasteryLabPage = String.raw`<!doctype html>
       message('loginMessage', 'Sign in again to open Roastery Lab.', true);
       el('password').focus();
     }
-    async function load(showLoading = true) {
-      if (!signedIn || busy) return;
+    async function load(showLoading = true, { fresh = false } = {}) {
+      if (!signedIn || busy || activeRequest && !fresh) return;
       abortLoad();
       const controller = new AbortController();
       activeRequest = controller;
-      if (showLoading) message('status', 'Loading Roastery Lab…');
+      const generation = sessionGeneration;
+      const timeout = setTimeout(() => controller.abort(), 30000);
+      el('refresh').disabled = true;
+      el('refresh').textContent = fresh ? 'Refreshing…' : 'Refresh';
+      if (showLoading) message('status', fresh ? 'Refreshing Roastery Lab…' : 'Loading Roastery Lab…');
       try {
-        const response = await fetch('/api/roastery-lab', { cache: 'no-store', signal: controller.signal });
-        if (controller !== activeRequest) return;
+        const response = await fetch('/api/roastery-lab' + (fresh ? '?refresh=1' : ''), { cache: 'no-store', signal: controller.signal });
+        if (controller !== activeRequest || generation !== sessionGeneration || !signedIn) return;
         if (response.status === 401) { expireSession(); return; }
         const data = await readJson(response);
-        if (controller !== activeRequest) return;
+        if (controller !== activeRequest || generation !== sessionGeneration || !signedIn) return;
         if (!response.ok || !data.source || !data.settings) throw new Error(data.error || 'Roastery Lab could not be loaded. Try refreshing.');
-        renderReport(data);
+        renderReport(data, { fresh });
+        if (fresh) {
+          const checked = new Date(data.generatedAt || Date.now()).toLocaleTimeString('en-AU', { timeZone: 'Australia/Sydney', hour: 'numeric', minute: '2-digit', second: '2-digit' });
+          message('status', 'Refresh complete. Checked ' + checked + ' Sydney time. ' + sourceStatus(data.source));
+        }
       } catch (error) {
-        if (controller === activeRequest) message('status', error.message, true);
+        if (controller === activeRequest && generation === sessionGeneration && signedIn) {
+          message('status', error.name === 'AbortError' ? 'The refresh took too long. Select Refresh to try again.' : error.message, true);
+        }
       } finally {
-        if (controller === activeRequest) activeRequest = undefined;
+        clearTimeout(timeout);
+        if (controller === activeRequest) {
+          activeRequest = undefined;
+          el('refresh').disabled = busy;
+          el('refresh').textContent = 'Refresh';
+        }
       }
     }
     el('addRelease').addEventListener('click', () => {
@@ -1065,7 +1086,7 @@ export const roasteryLabPage = String.raw`<!doctype html>
         el('logout').disabled = false;
       }
     });
-    el('refresh').addEventListener('click', () => load());
+    el('refresh').addEventListener('click', () => load(true, { fresh: true }));
     fetch('/api/auth', { cache: 'no-store' }).then(readJson).then(data => {
       showSession(data.authenticated === true);
       if (signedIn) load();

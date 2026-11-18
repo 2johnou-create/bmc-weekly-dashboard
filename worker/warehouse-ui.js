@@ -158,7 +158,7 @@ export const warehousePage = String.raw`<!doctype html>
     <h1>Warehouse</h1><form id="signInForm"><label for="password">Stock Take App password</label><input id="password" type="password" autocomplete="current-password" maxlength="256" required><button id="signIn" class="button primary" type="submit">Sign in</button><p id="loginMessage" role="alert" hidden></p></form>
   </main>
   <main id="warehouse" class="wrap" hidden tabindex="-1">
-    <div class="intro"><div><h1>Warehouse</h1><p>Illustrative activity · dashboard figures refresh every minute</p></div><p id="reportTime" class="report-time"></p></div>
+    <div class="intro"><div><h1>Warehouse</h1><p>Illustrative activity · dashboard figures refresh every minute</p></div><p id="reportTime" class="report-time" aria-live="polite"></p></div>
     <p id="status" class="status-line" role="status" hidden></p>
     <div class="workspace">
       <div class="stage-column">
@@ -820,6 +820,8 @@ export const warehousePage = String.raw`<!doctype html>
       if (!authenticated) {
         activeRequest?.abort();
         activeRequest = null;
+        el("refresh").disabled = false;
+        el("refresh").textContent = "Refresh";
         clearReport();
       } else {
         startScene();
@@ -848,18 +850,20 @@ export const warehousePage = String.raw`<!doctype html>
     async function readJson(response) {
       return response.json().catch(() => ({}));
     }
-    async function load(manual = false) {
-      if (!signedIn || activeRequest) return;
+    async function load(manual = false, { fresh = manual } = {}) {
+      if (!signedIn || activeRequest && !fresh) return;
+      activeRequest?.abort();
       const generation = sessionGeneration;
       const controller = new AbortController();
       activeRequest = controller;
       const timeout = setTimeout(() => controller.abort(), 35e3);
       el("refresh").disabled = true;
+      el("refresh").textContent = fresh ? "Refreshing…" : "Refresh";
       if (manual || !data) setMessage("status", "Refreshing dashboard figures…");
       try {
-        const response = await fetch("/api/warehouse", { cache: "no-store", credentials: "same-origin", signal: controller.signal });
+        const response = await fetch("/api/warehouse" + (fresh ? "?refresh=1" : ""), { cache: "no-store", credentials: "same-origin", signal: controller.signal });
         const next = await readJson(response);
-        if (generation !== sessionGeneration || !signedIn) return;
+        if (activeRequest !== controller || generation !== sessionGeneration || !signedIn) return;
         if (response.status === 401) {
           showSession(false);
           setMessage("loginMessage", "Your session ended. Sign in again to read the dashboard.");
@@ -869,8 +873,12 @@ export const warehousePage = String.raw`<!doctype html>
         data = next;
         renderData();
         setMessage("status", "");
+        if (fresh) {
+          const checked = new Date(next.generatedAt || Date.now()).toLocaleTimeString("en-AU", { timeZone: "Australia/Sydney", hour: "numeric", minute: "2-digit", second: "2-digit" });
+          el("reportTime").replaceChildren(node("strong", weekLabel()), document.createTextNode("Refresh complete. Checked " + checked + " Sydney time"));
+        }
       } catch {
-        if (generation === sessionGeneration && signedIn) {
+        if (activeRequest === controller && generation === sessionGeneration && signedIn) {
           const timestamp = date(data?.generatedAt, true);
           setMessage("status", data ? "Refresh failed. Showing the last dashboard read" + (timestamp ? " from " + timestamp + " Sydney time" : "") + ". Use Refresh to try again." : "Dashboard figures could not be loaded. Use Refresh to try again.");
         }
@@ -879,6 +887,7 @@ export const warehousePage = String.raw`<!doctype html>
         if (activeRequest === controller) {
           activeRequest = null;
           el("refresh").disabled = false;
+          el("refresh").textContent = "Refresh";
         }
       }
     }

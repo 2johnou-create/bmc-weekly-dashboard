@@ -58,11 +58,11 @@ async function activeSession(request, env) {
   }
   return session;
 }
-async function roasteryReport(env) {
+async function roasteryReport(env, { fresh = false } = {}) {
   const [data, coffeeC, purchases] = await Promise.all([
-    readRoasteryLab(env.DB), readCoffeeC(), readPurchases(),
+    readRoasteryLab(env.DB), readCoffeeC({ fresh }), readPurchases({ fresh }),
   ]);
-  return { ...data, coffeeC, purchases };
+  return { ...data, coffeeC, purchases, generatedAt: new Date().toISOString() };
 }
 function notesUnavailable() { return { status: "unavailable", source: "Entered issue notes", asOf: null, note: "Customer issue notes could not be loaded. Please try again.", count: null, items: [] }; }
 function onlineUnavailable() { return { status: "unavailable", source: "Online orders folder", asOf: null, note: "The online orders folder could not be read. Please try again.", orders: null, value: null, currency: "AUD", url: ONLINE_ORDERS_FOLDER_URL }; }
@@ -83,6 +83,7 @@ async function htmlHeaders(document) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    const fresh = url.searchParams.get("refresh") === "1";
     try {
       if (documents.has(url.pathname) && ["GET", "HEAD"].includes(request.method)) {
         const document = documents.get(url.pathname);
@@ -141,9 +142,9 @@ export default {
         catch { return json({ error: "Choose this week or an earlier Monday." }, 400); }
         const [data, demand, notes, online] = await Promise.all([
           collectDashboard({ weekStart: week.start, stockroomCookie: session.stockroomCookie, env }),
-          readWeeklyDemand(week.start, env),
+          readWeeklyDemand(week.start, { ...env, fresh }),
           listIssues(env.DB).then(issuesMetric).catch(notesUnavailable),
-          readOnlineOrders(week.start, env).catch(onlineUnavailable),
+          readOnlineOrders(week.start, { ...env, fresh }).catch(onlineUnavailable),
         ]);
         data.metrics.demand = demand;
         data.metrics.issues = notes;
@@ -160,7 +161,7 @@ export default {
         try { week = dashboardWeek(url.searchParams.get("week") || undefined); }
         catch { throw new HttpError("Choose this week or an earlier Monday."); }
         try {
-          return json(await collectWeeklyReport({ weekStart: week.start, stockroomCookie: session.stockroomCookie, env }));
+          return json(await collectWeeklyReport({ weekStart: week.start, stockroomCookie: session.stockroomCookie, env, fresh }));
         } catch (error) {
           if ([401, 403].includes(error?.status)) throw new HttpError("Your Stockroom session has ended. Sign in again.", 401);
           throw new HttpError("Stockroom could not verify your access. Try Refresh.", 503);
@@ -170,7 +171,7 @@ export default {
         if (request.method !== "GET") return json({ error: "Method not allowed." }, 405, { Allow: "GET" });
         const session = await readSession(request, env);
         if (!session) throw new HttpError("Sign in with your Stock Take App password.", 401);
-        return json(await collectWarehouse({ env, stockroomCookie: session.stockroomCookie }));
+        return json(await collectWarehouse({ env, stockroomCookie: session.stockroomCookie, fresh }));
       }
       if (url.pathname === "/api/weekly-note") {
         if (!["GET", "PUT"].includes(request.method)) return json({ error: "Method not allowed." }, 405, { Allow: "GET, PUT" });
@@ -194,7 +195,7 @@ export default {
         await activeSession(request, env);
         if (action === "settings") return json(await saveLabSettings(env.DB, await jsonInput(request, labSettingsBody)));
         if (action === "cropster") await saveLabCropster(env.DB, await jsonInput(request, labCropsterBody));
-        return json(await roasteryReport(env));
+        return json(await roasteryReport(env, { fresh: fresh || action === "cropster" }));
       }
       return json({ error: "Not found." }, 404);
     } catch (error) {

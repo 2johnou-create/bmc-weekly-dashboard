@@ -88,3 +88,47 @@ test("missing, inconsistent and oversized source data never produce a quote", as
     assert.equal((await readCoffeeC({ now, fetcher })).price, null);
   }
 });
+
+test("A manual Coffee C refresh bypasses its cache and clears failed forced data", async () => {
+  let price = 123.45, available = true, calls = 0;
+  const fetcher = async (url, options) => {
+    calls++;
+    if (calls > 2 && calls <= 4) {
+      assert.equal(options.headers["Cache-Control"], "no-cache");
+      assert.equal(options.headers.Pragma, "no-cache");
+    }
+    if (!available) return new Response(null, { status: 503 });
+    return url === expiryUrl ? new Response(expiry, { headers: { "content-type": "text/csv" } }) : Response.json([{ ...quote, lastPrice: price }]);
+  };
+  assert.equal((await readCoffeeC({ now, fetcher })).price, 123.45);
+  price = 125;
+  assert.equal((await readCoffeeC({ now, fetcher })).price, 123.45);
+  assert.equal(calls, 2);
+  assert.equal((await readCoffeeC({ now, fetcher, fresh: true })).price, 125);
+  available = false;
+  assert.equal((await readCoffeeC({ now, fetcher, fresh: true })).status, "unavailable");
+  assert.equal((await readCoffeeC({ now, fetcher })).status, "unavailable");
+  assert.equal(calls, 8);
+});
+
+test("An old Coffee C request's success or failure cannot overwrite a newer forced quote", async () => {
+  for (const olderFails of [false, true]) {
+    const pending = Promise.withResolvers();
+    let quoteCalls = 0;
+    const fetcher = async url => {
+      if (url === expiryUrl) return new Response(expiry, { headers: { "content-type": "text/csv" } });
+      quoteCalls++;
+      if (quoteCalls === 1) {
+        await pending.promise;
+        return olderFails ? new Response(null, { status: 503 }) : Response.json([quote]);
+      }
+      return Response.json([{ ...quote, lastPrice: 125 }]);
+    };
+    const older = readCoffeeC({ now, fetcher });
+    assert.equal((await readCoffeeC({ now, fetcher, fresh: true })).price, 125);
+    pending.resolve();
+    await older;
+    assert.equal((await readCoffeeC({ now, fetcher })).price, 125);
+    assert.equal(quoteCalls, 2);
+  }
+});
