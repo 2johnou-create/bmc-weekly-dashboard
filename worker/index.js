@@ -13,6 +13,8 @@ import { listIssues, createIssue, updateIssue, issuesMetric } from "./issues.js"
 import { readWeeklyNote, saveWeeklyNote } from "./weekly-note.js";
 import { readRoasteryLab, saveLabCropster } from "./roastery-lab.js";
 import { saveLabSettings } from "./roastery-lab-settings.js";
+import { readCoffeeC } from "./coffee-c.js";
+import { readPurchases } from "./purchases.js";
 import { readOnlineOrders, ONLINE_ORDERS_FOLDER_URL, ONLINE_ORDERS_CSV_HEADERS } from "./online-orders.js";
 
 const commonHeaders = {
@@ -52,6 +54,12 @@ async function activeSession(request, env) {
     throw new HttpError("Stockroom access could not be checked. Please try again.", 503);
   }
   return session;
+}
+async function roasteryReport(env) {
+  const [data, coffeeC, purchases] = await Promise.all([
+    readRoasteryLab(env.DB), readCoffeeC(), readPurchases(),
+  ]);
+  return { ...data, coffeeC, purchases };
 }
 function notesUnavailable() { return { status: "unavailable", source: "Entered issue notes", asOf: null, note: "Customer issue notes could not be loaded. Please try again.", count: null, items: [] }; }
 function onlineUnavailable() { return { status: "unavailable", source: "Online orders folder", asOf: null, note: "The online orders folder could not be read. Please try again.", orders: null, value: null, currency: "AUD", url: ONLINE_ORDERS_FOLDER_URL }; }
@@ -170,7 +178,7 @@ export default {
         await activeSession(request, env);
         if (action === "settings") return json(await saveLabSettings(env.DB, await jsonInput(request, labSettingsBody)));
         if (action === "cropster") await saveLabCropster(env.DB, await jsonInput(request, labCropsterBody));
-        return json(await readRoasteryLab(env.DB));
+        return json(await roasteryReport(env));
       }
       return json({ error: "Not found." }, 404);
     } catch (error) {

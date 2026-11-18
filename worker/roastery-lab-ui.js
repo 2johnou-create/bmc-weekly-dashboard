@@ -120,6 +120,39 @@ export const roasteryLabPage = String.raw`<!doctype html>
     .source textarea { min-height: 8rem; }
     .source-links { display: flex; flex-wrap: wrap; gap: .4rem .85rem; margin: .55rem 0 .65rem; }
     .source-links a { font-weight: 700; }
+    .coffee-c .large { margin-top: .65rem; }
+    .quote-change { display: block; font-size: .9rem; margin-top: .35rem; font-weight: 650; font-variant-numeric: tabular-nums; }
+    .market-grid { margin-top: clamp(.7rem, 1.3vw, 1.15rem); }
+    .calendar-nav { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin-bottom: .65rem; }
+    .calendar-nav h2 { flex: 1; margin: 0; min-width: 8rem; }
+    .calendar-nav .button { padding-inline: .6rem; font-size: .82rem; }
+    .calendar { width: 100%; table-layout: fixed; border-collapse: collapse; text-align: center; }
+    .calendar th { padding-bottom: .25rem; color: var(--muted); font-size: .75rem; font-weight: 600; }
+    .calendar abbr { text-decoration: none; }
+    .calendar td { padding: .12rem; }
+    .calendar-day { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .15rem; min-height: 2.65rem; width: 100%; padding: .2rem 0; border: 1px solid transparent; border-radius: .3rem; background: transparent; color: var(--ink); font-size: .87rem; font-variant-numeric: tabular-nums; }
+    .calendar-day:hover { border-color: var(--muted); }
+    .calendar-day[aria-current=date] { text-decoration: underline; text-underline-offset: .2em; font-weight: 750; }
+    .calendar-day[aria-pressed=true] { color: white; background: var(--green); }
+    .calendar-markers { display: flex; align-items: center; gap: .2rem; min-height: .35rem; }
+    .calendar-marker { display: inline-block; width: .4rem; height: .4rem; flex: none; }
+    .calendar-marker.ordered { background: var(--green); border-radius: 50%; }
+    .calendar-marker.upcoming { border: 1.5px solid var(--accent); }
+    .calendar-day[aria-pressed=true] .calendar-marker.ordered { background: white; }
+    .calendar-day[aria-pressed=true] .calendar-marker.upcoming { border-color: white; }
+    .calendar-legend { display: flex; flex-wrap: wrap; gap: .35rem 1rem; color: var(--muted); font-size: .75rem; margin: .5rem 0 .8rem; }
+    .calendar-legend span { display: inline-flex; align-items: center; gap: .4rem; }
+    .purchase-list { list-style: none; padding: 0; margin: 0; }
+    .purchase-list li + li { border-top: 1px solid var(--line); margin-top: .65rem; padding-top: .65rem; }
+    .purchase-title { font-weight: 700; overflow-wrap: anywhere; white-space: pre-line; }
+    .purchase-meta { font-size: .8rem; color: var(--muted); overflow-wrap: anywhere; }
+    .purchase-quantity { margin-top: .2rem; font-variant-numeric: tabular-nums; }
+    .purchase-note { white-space: pre-wrap; }
+    .purchase-extra { margin-top: .9rem; }
+    .purchase-extra > summary { font-weight: 700; width: fit-content; }
+    .purchase-extra h2 { margin-top: .85rem; }
+    .purchase-extra .table td { white-space: normal; overflow-wrap: anywhere; }
+    .purchase-source { display: inline-block; margin-top: .6rem; font-weight: 700; }
     .loading { padding: 2rem; text-align: center; }
     .login { display: grid; place-items: center; min-height: 60vh; padding: 1rem; }
     .sign-in { width: min(100%, 25rem); padding: 1.45rem; background: var(--paper); border: 1px solid var(--line); border-top: 4px solid var(--accent); border-radius: .55rem; }
@@ -250,6 +283,66 @@ export const roasteryLabPage = String.raw`<!doctype html>
           </div>
         </details>
       </div>
+      <div class="grid market-grid">
+        <details class="card coffee-c">
+          <summary>
+            <span class="card-head"><span class="card-title">Coffee C futures</span><span class="disclosure" aria-hidden="true"></span></span>
+            <span id="coffeeCPrice" class="large">—</span>
+            <span id="coffeeCChange" class="quote-change" hidden></span>
+            <span id="coffeeCContract" class="caption" hidden></span>
+            <span id="coffeeCTiming" class="caption"></span>
+            <span id="coffeeCAsOf" class="caption"></span>
+          </summary>
+          <div class="card-body">
+            <p id="coffeeCNote" class="note" hidden></p>
+            <a id="coffeeCSource" class="purchase-source" target="_blank" rel="noopener noreferrer" hidden>Open quote source</a>
+          </div>
+        </details>
+        <details id="purchaseCard" class="card purchases" open>
+          <summary>
+            <span class="card-head"><span class="card-title">Coffee purchases</span><span class="disclosure" aria-hidden="true"></span></span>
+            <span id="purchasePreview" class="preview muted"></span>
+          </summary>
+          <div class="card-body">
+            <div class="calendar-nav">
+              <h2 id="purchaseMonth" aria-live="polite"></h2>
+              <button id="purchasePrevious" type="button" class="button" aria-label="Previous month">‹</button>
+              <button id="purchaseToday" type="button" class="button">Today</button>
+              <button id="purchaseNext" type="button" class="button" aria-label="Next month">›</button>
+            </div>
+            <p class="note">Order dates. Planned orders are estimates.</p>
+            <table class="calendar" aria-labelledby="purchaseMonth">
+              <thead><tr>
+                <th scope="col"><abbr title="Monday">M</abbr></th><th scope="col"><abbr title="Tuesday">T</abbr></th><th scope="col"><abbr title="Wednesday">W</abbr></th><th scope="col"><abbr title="Thursday">T</abbr></th><th scope="col"><abbr title="Friday">F</abbr></th><th scope="col"><abbr title="Saturday">S</abbr></th><th scope="col"><abbr title="Sunday">S</abbr></th>
+              </tr></thead>
+              <tbody id="purchaseDays"></tbody>
+            </table>
+            <div class="calendar-legend" aria-label="Calendar markers">
+              <span><i class="calendar-marker ordered" aria-hidden="true"></i>Ordered</span>
+              <span><i class="calendar-marker upcoming" aria-hidden="true"></i>Planned order</span>
+            </div>
+            <section aria-labelledby="selectedPurchaseDate">
+              <h2 id="selectedPurchaseDate" aria-live="polite"></h2>
+              <p id="selectedPurchaseEmpty" class="note"></p>
+              <ul id="selectedPurchases" class="purchase-list"></ul>
+            </section>
+            <details class="purchase-extra">
+              <summary>Month totals and planned orders</summary>
+              <h2 id="purchaseTotalsTitle">Recorded order totals</h2>
+              <table id="purchaseTotals" class="table" aria-labelledby="purchaseTotalsTitle">
+                <thead><tr><th scope="col">Status</th><th scope="col">Purchases</th><th scope="col">Kg</th><th id="purchaseValueHeading" scope="col">Value</th></tr></thead>
+                <tbody id="purchaseTotalRows"></tbody>
+              </table>
+              <h2>Planned orders</h2>
+              <p id="upcomingPurchaseEmpty" class="note"></p>
+              <ul id="upcomingPurchases" class="purchase-list"></ul>
+            </details>
+            <p id="purchaseNote" class="note" hidden></p>
+            <p id="purchaseAsOf" class="note" hidden></p>
+            <a id="purchaseSource" class="purchase-source" target="_blank" rel="noopener noreferrer" hidden>Open purchase sheet</a>
+          </div>
+        </details>
+      </div>
       <form id="settingsForm" class="settings grid">
         <details class="card">
           <summary>
@@ -319,6 +412,9 @@ export const roasteryLabPage = String.raw`<!doctype html>
     const monthFormat = new Intl.DateTimeFormat('en-AU', { timeZone: 'UTC', month: 'short', year: 'numeric' });
     const releaseFormat = new Intl.DateTimeFormat('en-AU', { timeZone: 'UTC', day: 'numeric', month: 'short', year: 'numeric' });
     const timeFormat = new Intl.DateTimeFormat('en-AU', { timeZone: 'Australia/Sydney', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+    const fullMonthFormat = new Intl.DateTimeFormat('en-AU', { timeZone: 'UTC', month: 'long', year: 'numeric' });
+    const quoteFormat = new Intl.NumberFormat('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const sydneyCalendar = new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Sydney', year: 'numeric', month: '2-digit', day: '2-digit' });
     const blendNames = ['Liberty', 'Rhythm', 'OH'];
     const maximumReleases = 12;
     const missing = '—';
@@ -332,6 +428,9 @@ export const roasteryLabPage = String.raw`<!doctype html>
     let releaseSequence = 0;
     let priceVersion;
     let consumptionVersion;
+    let purchases;
+    let purchaseMonth = todaySydney().slice(0, 7);
+    let selectedPurchaseDate = todaySydney();
     const dirty = new Set();
 
     function node(tag, content, className) {
@@ -360,6 +459,164 @@ export const roasteryLabPage = String.raw`<!doctype html>
     }
     function monthText(month) {
       return typeof month === 'string' && /^\d{4}-\d{2}$/.test(month) ? dateText(month + '-01', monthFormat) : '';
+    }
+    function todaySydney() {
+      const parts = Object.fromEntries(sydneyCalendar.formatToParts(new Date()).map(part => [part.type, part.value]));
+      return parts.year + '-' + parts.month + '-' + parts.day;
+    }
+    function validCalendarDate(value) {
+      return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) &&
+        Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
+    }
+    function safeSourceLink(id, value) {
+      const link = el(id);
+      let url;
+      try { url = new URL(value); } catch {}
+      const allowed = url?.protocol === 'https:' && !url.username && !url.password;
+      link.hidden = !allowed;
+      if (allowed) link.href = url.href;
+      else link.removeAttribute('href');
+    }
+    function renderCoffeeC(quote = {}) {
+      const available = quote.status !== 'unavailable' && Number.isFinite(quote.price);
+      el('coffeeCPrice').replaceChildren(available ? quoteFormat.format(quote.price) : missing,
+        ' ', node('span', 'US¢/lb', 'unit'));
+      const changes = [];
+      if (available && Number.isFinite(quote.change)) changes.push((quote.change > 0 ? '+' : '') + quoteFormat.format(quote.change) + ' US¢/lb');
+      if (available && Number.isFinite(quote.changePercent)) changes.push((quote.changePercent > 0 ? '+' : '') + percent(quote.changePercent));
+      el('coffeeCChange').textContent = changes.length ? 'Change ' + changes.join(' / ') : '';
+      el('coffeeCChange').hidden = !changes.length;
+      el('coffeeCContract').textContent = quote.contract ? 'Contract ' + quote.contract : '';
+      el('coffeeCContract').hidden = !quote.contract;
+      const delay = Number.isFinite(quote.delayMinutes) && quote.delayMinutes > 0
+        ? 'Delayed at least ' + numbers.format(quote.delayMinutes) + ' minutes. Last traded price.'
+        : 'Last traded price. Quote delay unconfirmed.';
+      const market = quote.marketStatus === 'closed' ? 'Market closed. ' : '';
+      const stale = quote.status === 'stale' ? 'Last available quote. ' : '';
+      el('coffeeCTiming').textContent = available ? market + stale + delay : 'Quote unavailable';
+      const timestamp = dateText(quote.asOf, timeFormat);
+      el('coffeeCAsOf').textContent = timestamp ? 'As of ' + timestamp + ' Sydney time' : 'Trade time unavailable';
+      el('coffeeCNote').textContent = quote.note || '';
+      el('coffeeCNote').hidden = !quote.note;
+      safeSourceLink('coffeeCSource', quote.sourceUrl);
+    }
+    function purchaseMoney(event) {
+      if (!Number.isFinite(event.value)) return '';
+      if (!event.currency && event.currencySymbol === '$') return '$' + quoteFormat.format(event.value) + ' as recorded';
+      if (!/^[A-Z]{3}$/.test(event.currency || '')) return '';
+      const money = new Intl.NumberFormat('en-AU', { style: 'currency', currency: event.currency, currencyDisplay: 'code' });
+      return money.format(event.value);
+    }
+    function purchaseListItem(event, includeDate = false) {
+      const item = node('li');
+      item.append(node('p', event.coffee || 'Coffee to be confirmed', 'purchase-title'));
+      const kind = event.kind === 'ordered' ? 'Ordered' : 'Planned order';
+      const details = [includeDate && dateText(event.date), kind, event.supplier].filter(Boolean);
+      item.append(node('p', details.join(' · '), 'purchase-meta'));
+      const quantity = [withUnit(event.kg, 'kg'), Number.isFinite(event.bags) && withUnit(event.bags, 'bags'), purchaseMoney(event)].filter(Boolean);
+      item.append(node('p', quantity.join(' · '), 'purchase-quantity'));
+      if (event.quantityText) item.append(node('p', event.quantityText, 'purchase-meta purchase-note'));
+      const payment = [event.invoice && 'Invoice ' + event.invoice,
+        validCalendarDate(event.dueDate) && 'Payment due ' + dateText(event.dueDate)].filter(Boolean);
+      if (payment.length) item.append(node('p', payment.join(' · '), 'purchase-meta'));
+      if (event.note) item.append(node('p', event.note, 'note purchase-note'));
+      return item;
+    }
+    function purchaseEvents() {
+      return (purchases?.events || []).filter(event => validCalendarDate(event.date) && ['ordered', 'upcoming'].includes(event.kind))
+        .sort((left, right) => left.date.localeCompare(right.date) || (left.coffee || '').localeCompare(right.coffee || ''));
+    }
+    function renderSelectedPurchases(events) {
+      const selected = events.filter(event => event.date === selectedPurchaseDate);
+      el('selectedPurchaseDate').textContent = dateText(selectedPurchaseDate);
+      el('selectedPurchases').replaceChildren(...selected.map(event => purchaseListItem(event)));
+      el('selectedPurchaseEmpty').hidden = Boolean(selected.length);
+      el('selectedPurchaseEmpty').textContent = purchases?.status === 'unavailable'
+        ? 'Purchase data is unavailable.' : 'No dated purchases recorded for this day.';
+    }
+    function renderPurchaseCalendar() {
+      const events = purchaseEvents();
+      const today = todaySydney();
+      const focusedDate = el('purchaseDays').contains(document.activeElement) ? document.activeElement.dataset.date : null;
+      const first = new Date(purchaseMonth + '-01T12:00:00Z');
+      const days = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 0)).getUTCDate();
+      const offset = (first.getUTCDay() + 6) % 7;
+      const rows = [];
+      let row;
+      for (let position = 0; position < Math.ceil((offset + days) / 7) * 7; position++) {
+        if (position % 7 === 0) { row = node('tr'); rows.push(row); }
+        const cell = node('td');
+        const day = position - offset + 1;
+        if (day > 0 && day <= days) {
+          const date = purchaseMonth + '-' + String(day).padStart(2, '0');
+          const dated = events.filter(event => event.date === date);
+          const ordered = dated.filter(event => event.kind === 'ordered').length;
+          const upcoming = dated.filter(event => event.kind === 'upcoming').length;
+          const button = node('button', undefined, 'calendar-day');
+          button.type = 'button';
+          button.dataset.date = date;
+          button.setAttribute('aria-pressed', String(date === selectedPurchaseDate));
+          const counts = [ordered && ordered + ' ordered', upcoming && upcoming + ' planned'].filter(Boolean);
+          button.setAttribute('aria-label', dateText(date) + (counts.length ? ', ' + counts.join(', ') + ' purchases' : ', no recorded purchases'));
+          if (date === today) button.setAttribute('aria-current', 'date');
+          const markers = node('span', undefined, 'calendar-markers');
+          markers.setAttribute('aria-hidden', 'true');
+          if (ordered) markers.append(node('i', undefined, 'calendar-marker ordered'));
+          if (upcoming) markers.append(node('i', undefined, 'calendar-marker upcoming'));
+          button.append(node('span', String(day)), markers);
+          cell.append(button);
+        }
+        row.append(cell);
+      }
+      el('purchaseMonth').textContent = fullMonthFormat.format(first);
+      el('purchaseDays').replaceChildren(...rows);
+      if (focusedDate) el('purchaseDays').querySelector('button[data-date="' + focusedDate + '"]')?.focus({ preventScroll: true });
+      renderSelectedPurchases(events);
+      const monthEvents = events.filter(event => event.date.startsWith(purchaseMonth));
+      const isUnavailable = purchases?.status === 'unavailable';
+      const audValues = monthEvents.length > 0 && monthEvents.every(event => event.currency === 'AUD');
+      const sourceDollars = monthEvents.length > 0 && monthEvents.every(event => !event.currency && event.currencySymbol === '$');
+      el('purchaseValueHeading').textContent = audValues ? 'AUD value' : sourceDollars ? '$ as recorded' : 'Value';
+      el('purchaseTotalsTitle').textContent = fullMonthFormat.format(first) + ' recorded order totals';
+      const totals = ['ordered', 'upcoming'].map(kind => {
+        const group = monthEvents.filter(event => event.kind === kind);
+        const sum = field => !isUnavailable && group.every(event => Number.isFinite(event[field]))
+          ? group.reduce((total, event) => total + event[field], 0) : null;
+        const value = audValues || sourceDollars ? sum('value') : null;
+        return makeTableRow(kind === 'ordered' ? 'Ordered' : 'Planned',
+          isUnavailable ? missing : format(group.length), format(sum('kg')), format(value, audValues ? currency : quoteFormat));
+      });
+      el('purchaseTotalRows').replaceChildren(...totals);
+    }
+    function renderPurchases(next = { status: 'unavailable' }) {
+      const same = JSON.stringify(purchases) === JSON.stringify(next);
+      purchases = next;
+      const upcoming = purchaseEvents().filter(event => event.kind === 'upcoming' && event.date >= todaySydney());
+      const nextEvent = upcoming.find(event => event.date >= todaySydney());
+      el('purchasePreview').textContent = nextEvent
+        ? dateText(nextEvent.date) + ' · ' + (nextEvent.coffee || 'Coffee to be confirmed')
+        : purchases.status === 'unavailable' ? 'Purchase data unavailable' : 'No upcoming planned orders';
+      el('purchasePreview').classList.toggle('muted', !nextEvent);
+      el('purchaseNote').textContent = purchases.note || '';
+      el('purchaseNote').hidden = !purchases.note;
+      const timestamp = dateText(purchases.asOf, timeFormat);
+      el('purchaseAsOf').textContent = [purchases.sheetName, timestamp && 'Read ' + timestamp + ' Sydney time'].filter(Boolean).join(' · ');
+      el('purchaseAsOf').hidden = !el('purchaseAsOf').textContent;
+      safeSourceLink('purchaseSource', purchases.sourceUrl);
+      if (!same) {
+        renderPurchaseCalendar();
+        el('upcomingPurchases').replaceChildren(...upcoming.map(event => purchaseListItem(event, true)));
+        el('upcomingPurchaseEmpty').hidden = Boolean(upcoming.length);
+        el('upcomingPurchaseEmpty').textContent = purchases.status === 'unavailable'
+          ? 'Purchase data is unavailable.' : 'No planned orders recorded.';
+      }
+    }
+    function changePurchaseMonth(offset) {
+      const first = new Date(purchaseMonth + '-01T12:00:00Z');
+      first.setUTCMonth(first.getUTCMonth() + offset);
+      purchaseMonth = first.toISOString().slice(0, 7);
+      selectedPurchaseDate = purchaseMonth + '-01';
+      renderPurchaseCalendar();
     }
     function makeTableRow(firstCell, ...columns) {
       const row = node('tr');
@@ -603,6 +860,8 @@ export const roasteryLabPage = String.raw`<!doctype html>
         consumptionVersion = nextConsumptionVersion;
         renderConsumption(data.consumption);
       }
+      renderCoffeeC(data.coffeeC);
+      renderPurchases(data.purchases);
       renderSettings(data.settings);
       message('status', sourceStatus(data.source));
       el('sourceNote').textContent = data.source?.note || '';
@@ -634,12 +893,16 @@ export const roasteryLabPage = String.raw`<!doctype html>
       conflictPending = false;
       priceVersion = undefined;
       consumptionVersion = undefined;
+      purchases = undefined;
+      purchaseMonth = todaySydney().slice(0, 7);
+      selectedPurchaseDate = todaySydney();
       dirty.clear();
       setBusy(false);
       el('board').hidden = true;
-      for (const id of ['blendHighlights', 'blendDetails', 'otherPriceRows', 'monthRows', 'lastMonthRows', 'forecastRows', 'releaseRows', 'latestReleases']) el(id).replaceChildren();
-      for (const id of ['releasePreview', 'qaPreview', 'latestQa', 'stockAsOf', 'forecastNote', 'sourceNote', 'status', 'consumptionNote', 'lastMonthTitle', 'consumptionWindow', 'priceDates', 'lossNote']) el(id).textContent = '';
-      for (const id of ['avgKg', 'avgBags']) el(id).textContent = missing;
+      for (const id of ['blendHighlights', 'blendDetails', 'otherPriceRows', 'monthRows', 'lastMonthRows', 'forecastRows', 'releaseRows', 'latestReleases', 'purchaseDays', 'selectedPurchases', 'upcomingPurchases', 'purchaseTotalRows']) el(id).replaceChildren();
+      for (const id of ['releasePreview', 'qaPreview', 'latestQa', 'stockAsOf', 'forecastNote', 'sourceNote', 'status', 'consumptionNote', 'lastMonthTitle', 'consumptionWindow', 'priceDates', 'lossNote', 'coffeeCChange', 'coffeeCContract', 'coffeeCTiming', 'coffeeCAsOf', 'coffeeCNote', 'purchasePreview', 'purchaseNote', 'purchaseAsOf', 'purchaseMonth', 'selectedPurchaseDate', 'selectedPurchaseEmpty', 'upcomingPurchaseEmpty']) el(id).textContent = '';
+      for (const id of ['avgKg', 'avgBags', 'coffeeCPrice']) el(id).textContent = missing;
+      for (const id of ['coffeeCSource', 'purchaseSource']) safeSourceLink(id, undefined);
       for (const id of ['qa', 'cropsterInput', 'password']) el(id).value = '';
       settingsMessage('');
       message('cropsterMessage', '');
@@ -673,6 +936,22 @@ export const roasteryLabPage = String.raw`<!doctype html>
       if (el('releaseRows').childElementCount >= maximumReleases) return;
       addRelease().focus();
       editSettings('releases');
+    });
+    el('purchasePrevious').addEventListener('click', () => changePurchaseMonth(-1));
+    el('purchaseNext').addEventListener('click', () => changePurchaseMonth(1));
+    el('purchaseToday').addEventListener('click', () => {
+      selectedPurchaseDate = todaySydney();
+      purchaseMonth = selectedPurchaseDate.slice(0, 7);
+      renderPurchaseCalendar();
+    });
+    el('purchaseDays').addEventListener('click', event => {
+      const button = event.target.closest('button[data-date]');
+      if (!button) return;
+      selectedPurchaseDate = button.dataset.date;
+      for (const day of el('purchaseDays').querySelectorAll('button')) {
+        day.setAttribute('aria-pressed', String(day === button));
+      }
+      renderSelectedPurchases(purchaseEvents());
     });
     el('releaseRows').addEventListener('input', () => editSettings('releases'));
     el('qa').addEventListener('input', () => editSettings('qa'));

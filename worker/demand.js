@@ -138,7 +138,7 @@ function excelDate(value, date1904) {
   const parsed = new Date(`${date}T00:00:00Z`);
   return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === date ? date : null;
 }
-export function parseWeeklyDemandWorkbook(bytes, weekStart, filename = "") {
+function workbookArchive(bytes) {
   if (!(bytes instanceof Uint8Array) || bytes.byteLength > MAX_BYTES || bytes[0] !== 80 || bytes[1] !== 75) throw new Error("The source did not return an Excel workbook.");
   let entries = 0, totalSize = 0;
   const names = new Set();
@@ -148,6 +148,31 @@ export function parseWeeklyDemandWorkbook(bytes, weekStart, filename = "") {
     if (!Number.isSafeInteger(file.originalSize) || file.originalSize > MAX_BYTES || (totalSize += file.originalSize) > 8_000_000) throw new Error("Workbook is too large.");
     return /^xl\/(?:workbook\.xml|_rels\/workbook\.xml\.rels|sharedStrings\.xml|worksheets\/sheet\d+\.xml)$/.test(file.name);
   } });
+  return archive;
+}
+
+export function parseWorkbookSheet(bytes, sheetIndex, expectedName) {
+  const archive = workbookArchive(bytes);
+  const workbook = safeXml(archive["xl/workbook.xml"]);
+  const rels = safeXml(archive["xl/_rels/workbook.xml.rels"]);
+  const list = [...workbook.matchAll(/<sheet\b([^>]+)\/?\s*>/g)];
+  const selected = list[sheetIndex];
+  if (!selected || attribute(selected[1], "name") !== expectedName) throw new Error("The source worksheet order or name changed.");
+  const relation = attribute(selected[1], "r:id");
+  const relationships = new Map([...rels.matchAll(/<Relationship\b([^>]+)\/?\s*>/g)].map(match => [attribute(match[1], "Id"), attribute(match[1], "Target")]));
+  const target = relationships.get(relation);
+  if (!target || target.split("/").includes("..")) throw new Error("Workbook relationship is not supported.");
+  const sharedXml = archive["xl/sharedStrings.xml"] ? safeXml(archive["xl/sharedStrings.xml"]) : "";
+  const shared = [...sharedXml.matchAll(/<(?:\w+:)?si\b[^>]*>([\s\S]*?)<\/(?:\w+:)?si>/g)].map(match => texts(match[1]));
+  if (shared.length > 20_000) throw new Error("Workbook text is too large.");
+  return {
+    cells: cells(safeXml(archive[target.startsWith("/") ? target.slice(1) : `xl/${target}`]), shared),
+    date1904: /<workbookPr\b[^>]*date1904=["'](?:1|true)["']/i.test(workbook),
+  };
+}
+
+export function parseWeeklyDemandWorkbook(bytes, weekStart, filename = "") {
+  const archive = workbookArchive(bytes);
   const workbook = safeXml(archive["xl/workbook.xml"]), rels = safeXml(archive["xl/_rels/workbook.xml.rels"]);
   // The Monday Roast Schedule uses an explicitly dated workbook name. Older naming
   // formats still need their internal date to confirm the reporting week.
@@ -184,7 +209,7 @@ function allowedUrl(value) {
   if (!allowed) throw new Error("Source redirect is not allowed.");
   return url.href;
 }
-async function readBytes(url, fetcher, signal) {
+export async function readBytes(url, fetcher, signal) {
   for (let redirect = 0; redirect <= 3; redirect++) {
     url = allowedUrl(url);
     const response = await fetcher(url, { redirect: "manual", cache: "no-store", signal, headers: { Accept: "*/*" } });

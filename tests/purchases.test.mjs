@@ -1,0 +1,83 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { zipSync, strToU8 } from "../vendor/fflate.mjs";
+import { parsePurchaseWorkbook, readPurchases } from "../worker/purchases.js";
+
+const inline = (ref, value) => '<c r="' + ref + '" t="inlineStr"><is><t>' + value + '</t></is></c>';
+const numeric = (ref, value) => '<c r="' + ref + '"><v>' + value + '</v></c>';
+
+function workbook({ sheetName = "ORDER PLAN", rows = "" } = {}) {
+  const header = ["SUPPLIER", "COFFEE", "INVOICE NUMBER", "DATE ORDERED", "PAY DUE DATE", "TOTAL DELIVERY COST"];
+  const files = {
+    "xl/workbook.xml": '<workbook xmlns:r="relationships"><sheets><sheet name="Overview" sheetId="1" r:id="rId1"/><sheet name="' + sheetName + '" sheetId="2" r:id="rId2"/></sheets></workbook>',
+    "xl/_rels/workbook.xml.rels": '<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Target="/xl/worksheets/sheet2.xml"/></Relationships>',
+    "xl/worksheets/sheet1.xml": "<worksheet><sheetData/></worksheet>",
+    "xl/worksheets/sheet2.xml": "<worksheet><sheetData>" + header.map((label, index) => inline(String.fromCharCode(66 + index) + "1", label)).join("") + rows + "</sheetData></worksheet>",
+  };
+  return zipSync(Object.fromEntries(Object.entries(files).map(([path, xml]) => [path, strToU8(xml)])));
+}
+
+const currentRows = inline("A2", "NOV") + inline("B2", "Example supplier") + inline("C2", "6x Example Brazil&#10;8x Example Peru") +
+  inline("D2", "ordered") + numeric("E2", 46345) + numeric("F2", 46405) + numeric("G2", 1200.45) +
+  inline("B3", "Other supplier") + inline("D3", "EST") + numeric("E3", 46356) + numeric("G3", 1350) +
+  inline("B4", "Others") + inline("C4", "Gift Box Singles of 5x 10gk") + inline("D4", "EST") + numeric("E4", 46335);
+
+test("Purchase calendar uses placed-order dates and preserves unspecified quantities and currency", () => {
+  const data = parsePurchaseWorkbook(workbook({ rows: currentRows }), "2026-11-19");
+  assert.equal(data.events.length, 2);
+  assert.equal(data.status, "live");
+  const [ordered, planned] = data.events;
+  assert.equal(ordered.date, "2026-11-19");
+  assert.equal(ordered.dueDate, "2027-01-18");
+  assert.equal(ordered.kind, "ordered");
+  assert.equal(ordered.coffee, "6x Example Brazil\n8x Example Peru");
+  assert.equal(ordered.kg, null);
+  assert.equal(ordered.bags, null);
+  assert.equal(ordered.value, 1200.45);
+  assert.equal(ordered.currency, null);
+  assert.equal(ordered.currencySymbol, "$");
+  assert.equal(planned.date, "2026-11-30");
+  assert.equal(planned.kind, "upcoming");
+  assert.equal(planned.coffee, "");
+});
+
+test("A date without a year resolves only within a month with one recorded year", () => {
+  const rows = inline("A2", "OCT") + inline("B2", "Example supplier") + numeric("E2", 46301) +
+    inline("B3", "Example supplier") + inline("C3", "10x Example coffee (@20kg / bag)") + inline("E3", "11th-Oct");
+  const resolved = parsePurchaseWorkbook(workbook({ rows }), "2026-11-19");
+  assert.equal(resolved.events[1].date, "2026-10-11");
+  assert.equal(resolved.events[1].kg, 200);
+  assert.equal(resolved.events[1].bags, 10);
+  const ambiguous = parsePurchaseWorkbook(workbook({ rows: rows + inline("B4", "Example supplier") + inline("E4", "2025-10-10") }), "2026-11-19");
+  assert.equal(ambiguous.events.some(row => row.kg === 200), false);
+  assert.equal(ambiguous.status, "partial");
+});
+
+test("A renamed second tab fails safely and unresolved old dates are disclosed", () => {
+  assert.throws(() => parsePurchaseWorkbook(workbook({ sheetName: "Copy", rows: currentRows })), /order or name changed/);
+  const data = parsePurchaseWorkbook(workbook({ rows: currentRows + inline("B5", "Old supplier") + inline("E5", "invoice reference") }));
+  assert.equal(data.status, "partial");
+  assert.match(data.note, /missing or invalid order dates/);
+});
+
+test("A cached purchase calendar refreshes from the live sheet and never serves an expired failure as fresh", async () => {
+  let healthy = true;
+  let calls = 0;
+  const fetcher = async (url, options) => {
+    calls++;
+    assert.equal(options.redirect, "manual");
+    assert.match(url, /export\?format=xlsx$/);
+    return healthy ? new Response(workbook({ rows: currentRows })) : new Response(null, { status: 503 });
+  };
+  const now = new Date("2026-11-19T00:00:00Z");
+  const initial = await readPurchases({ now, fetcher });
+  initial.events.length = 0;
+  const cached = await readPurchases({ now: new Date(now.getTime() + 1_000), fetcher });
+  assert.equal(cached.events.length, 2);
+  assert.equal(calls, 1);
+  healthy = false;
+  const failed = await readPurchases({ now: new Date(now.getTime() + 60_000), fetcher });
+  assert.equal(failed.status, "unavailable");
+  assert.equal(failed.asOf, null);
+  assert.deepEqual(failed.events, []);
+});
