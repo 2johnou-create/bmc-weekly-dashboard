@@ -4,6 +4,8 @@ import { labReport, readRoasteryLab } from "./roastery-lab.js";
 import { readCoffeeC } from "./coffee-c.js";
 import { PURCHASE_SOURCE_URL, PURCHASE_SHEET, readPurchases } from "./purchases.js";
 import { readWeeklyNote } from "./weekly-note.js";
+import { readWarehouseWeather } from "./weather.js";
+import { roasterMessagingCapability } from "./roaster-messages.js";
 
 function settled(result, fallback) {
   return result.status === "fulfilled" ? result.value : fallback;
@@ -29,12 +31,13 @@ export async function collectWarehouse({ env = {}, stockroomCookie, now = new Da
   // The weekly report verifies Stockroom access before any supplemental source is read.
   const weekly = await collectWeeklyReport({ env, stockroomCookie, now, fetcher, fresh });
   const weekStart = weekly.week.start;
-  const [lab, coffeeC, purchases, packing, notes] = await Promise.allSettled([
+  const [lab, coffeeC, purchases, packing, notes, weather] = await Promise.allSettled([
     readRoasteryLab(env.DB, now),
     readCoffeeC({ now, fetcher, fresh }),
     readPurchases({ now, fetcher, fresh }),
     readPacking(weekStart, stockroomCookie, fetcher),
     readWeeklyNote(env.DB, weekStart),
+    readWarehouseWeather({ now, fetcher, fresh }),
   ]);
 
   return {
@@ -59,6 +62,12 @@ export async function collectWarehouse({ env = {}, stockroomCookie, now = new Da
       weekStart, lines: [], revision: null, updatedAt: null, status: "unavailable",
       note: "The weekly note could not be loaded. Try refreshing.",
     }),
+    weather: settled(weather, {
+      status: "unavailable", temperatureC: null, time: null, asOf: null,
+      location: "Marrickville", sourceUrl: "https://api.met.no/", licenseUrl: "https://api.met.no/doc/License",
+      note: "The Marrickville outdoor forecast could not be loaded. Try refreshing.",
+    }),
+    messaging: roasterMessagingCapability(env),
     generatedAt: now.toISOString(),
   };
 }

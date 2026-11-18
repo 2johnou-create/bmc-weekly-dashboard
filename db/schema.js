@@ -83,3 +83,19 @@ export const dashboardRoasteryLabCropster = sqliteTable("dashboard_roastery_lab_
 }, table => [
   check("dashboard_roastery_lab_cropster_part", sql`${table.part} IN ('inventory', 'recipes', 'use', 'loss')`),
 ]);
+
+export const warehouseExpenseReadings = sqliteTable("warehouse_expense_readings", {
+  weekStart: text("week_start").primaryKey(),
+  payload: text("payload_json").notNull(),
+  capturedAt: integer("captured_at").notNull(),
+});
+
+export const warehouseRoasterMessages = sqliteTable("warehouse_roaster_messages", {
+  id: text("id").primaryKey(),
+  digest: text("digest").notNull(),
+  status: text("status").notNull(),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+}, table => [
+  check("warehouse_roaster_messages_status", sql`${table.status} IN ('queued', 'sent')`),
+]);

@@ -13,6 +13,7 @@ The landing page shows the weekly report. The previous operations view and saved
 | Current green bean stock | The most recent Marrickville location reading from Cropster’s Green Inventory Report, in kg and AUD. |
 | Current non-coffee stock | All active items’ latest saved counts from the Stock Take App, valued in AUD to the cent. Missing prices or quantities are flagged and the known-price subtotal is shown. |
 | Wholesale orders | Primary delivery orders for all seven days of the selected Sydney week. Done counts completed orders. An inherited plan’s scheduled and pending counts are provisional until the weekly import is confirmed. |
+| Expenses | The selected Monday’s column in Cost Sheet Warehouse Expenses, Sheet1. The recorded total is row 36, with purchases in rows 3–35. Values strictly above $18,900 appear in red. Source dollars retain their recorded currency symbol. |
 
 ## Operations details sources
 
@@ -40,6 +41,12 @@ The **Note** card stores one editable list of points per reporting week. Each li
 Switch between **Steam Room** and **Roastery Lab** in the header. Both pages use the Stock Take App sign-in.
 
 The **Warehouse** page adds an interactive 3D cutaway of the roastery. Select the roaster, packing benches, green pallets, dispatch, lab or purchasing area to see figures from the same dashboard sources. The view uses the current Sydney week and refreshes every minute while visible. Staff, vehicles, sacks and machine motion illustrate activity. Their movement does not represent tracked people or vehicle positions. Scene controls support orbit, zoom, area focus, pause and reduced motion. The source readings retain their dates, scope and missing-data labels.
+
+The corner clock uses Australia/Sydney, including daylight saving. Temperature is the nearest hourly outdoor forecast for Marrickville from MET Norway, with source attribution and a freshness label. It is not an indoor sensor reading. Source checks respect the provider’s minimum three-hour interval while manual refresh recalculates the current forecast hour.
+
+Select John, the worker with the red cap beside the roaster, to open a following speech bubble and a short message form. Messages use the fixed roaster email address through a private Google bridge. The form only confirms delivery after the bridge confirms sending; failed attempts retain their draft. Messaging stays visibly unavailable until the bridge is configured. See [bridge setup](integrations/warehouse-bridge/setup.md).
+
+Expenses use that same private bridge to re-read the sheet. A saved verified reading can also be imported under Data sources. It remains labelled with its capture time and never claims a live sheet check. Date matching uses the displayed Monday header, including the sheet’s day/month date conventions; blank future columns do not count as recorded zero spending. The source remains private and its operational data stays out of GitHub.
 
 - Signature blend green cost uses the saved Cropster recipe shares multiplied by the matching current lot's raw AUD price per kilogram. Roast loss is shown separately, using the recorded green and roasted weights over the stated period. Missing ingredient prices leave the blend price blank.
 - Green consumption averages the last three completed Sydney calendar months. It uses green input in the Production Report, excluding transfers. The latest completed month has its own actuals. Bag figures require recorded bags or verified conversion data and remain blank where only kilograms are available.

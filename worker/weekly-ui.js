@@ -54,12 +54,19 @@ export const weeklyPage = String.raw`<!doctype html>
     .report-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: clamp(.7rem, 1.3vw, 1.15rem); align-items: start; }
     .meeting-card { grid-column: span 2; min-width: 0; color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: .55rem; }
     .meeting-card.featured { grid-column: span 3; }
-    .meeting-card.week-note { grid-column: 1 / -1; }
+    .meeting-card.week-note, .meeting-card.expenses { grid-column: span 3; }
     .meeting-card.demand { border-top: 4px solid var(--accent); }
     .meeting-card.production { color: #fff; background: var(--green); border-color: var(--green); border-top-width: 4px; }
     .meeting-card summary { cursor: pointer; display: block; min-height: 12.65rem; padding: clamp(1rem, 1.7vw, 1.55rem); border-radius: inherit; }
     .meeting-card.featured summary { min-height: 13.8rem; }
     .meeting-card.week-note summary { display: flex; align-items: center; gap: .65rem 1rem; min-height: 0; padding-block: .65rem; }
+    .meeting-card.expenses summary { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: .25rem .7rem; min-height: 0; padding-block: .65rem; }
+    .expenses .metric-figure { margin: 0; font-size: clamp(1.7rem, 3.2vw, 2.65rem); }
+    .expenses .expense-copy { display: grid; gap: .2rem; }
+    .expenses .over-limit { color: var(--accent); }
+    .expenses .status-flag { grid-column: 1 / -1; margin: 0; }
+    .expense-freshness { grid-column: 1 / -1; font-size: .73rem; line-height: 1.35; color: var(--muted); }
+    .expense-capture textarea { display: block; width: 100%; min-height: 7rem; margin-block: .45rem .65rem; padding: .5rem; border: 1px solid var(--line); border-radius: .3rem; resize: vertical; }
     .week-note .disclosure { margin-inline-start: auto; }
     .week-note-preview { flex: 1; min-width: 0; color: var(--muted); font-size: .87rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .week-note-points { margin: 0 0 1rem; padding-inline-start: 1.25rem; overflow-wrap: anywhere; }
@@ -177,7 +184,7 @@ export const weeklyPage = String.raw`<!doctype html>
     @media (max-width: 36rem) {
       .wrap { width: calc(100% - 1.5rem); }
       .report-grid { grid-template-columns: 1fr; }
-      .meeting-card, .meeting-card.featured, .meeting-card.wholesale { grid-column: auto; }
+      .meeting-card, .meeting-card.featured, .meeting-card.wholesale, .meeting-card.week-note, .meeting-card.expenses { grid-column: auto; }
       .meeting-card summary, .meeting-card.featured summary { min-height: 0; }
       .brand img { height: 2.35rem; }
       .bar { flex-wrap: wrap; gap: .2rem .45rem; padding-block: .35rem; }
@@ -185,6 +192,9 @@ export const weeklyPage = String.raw`<!doctype html>
       .actions { gap: .25rem; }
       .actions .button, .week-nav .button { font-size: .8rem; padding-inline: .55rem; }
       .production .metric-figure { font-size: clamp(2.1rem, 8vw, 3rem); }
+      .meeting-card.expenses summary { grid-template-columns: minmax(0, 1fr) auto; }
+      .expenses .metric-figure { grid-row: 2; grid-column: 1 / -1; }
+      .expenses .disclosure { grid-row: 1; grid-column: 2; }
     }
     @media print {
       :root, .meeting-card.production { background: white; color: black; }
@@ -351,6 +361,27 @@ export const weeklyPage = String.raw`<!doctype html>
           <p id="wholesaleNote" class="detail-note" hidden></p>
         </div>
       </details>
+      <details class="meeting-card expenses">
+        <summary>
+          <span class="expense-copy"><span class="card-title">Expenses</span><span id="expensesPeriod" class="metric-label">Week to date</span></span>
+          <span id="expensesValue" class="metric-figure">—</span>
+          <span class="disclosure" aria-hidden="true"></span>
+          <span id="expensesFlag" class="status-flag" hidden></span>
+          <span id="expensesFreshness" class="expense-freshness" hidden></span>
+        </summary>
+        <div class="card-body">
+          <h2>Source total · BMR Wholesale COGS</h2>
+          <p id="expensesMonday" class="detail-note"></p>
+          <p id="expensesCurrency" class="detail-note"></p>
+          <table id="expensesBreakdown" class="detail-table" hidden>
+            <thead><tr><th scope="col">Expense</th><th scope="col">Value</th></tr></thead>
+            <tbody id="expensesItems"></tbody>
+          </table>
+          <p id="expensesSource" class="source-note" hidden></p>
+          <p id="expensesNote" class="detail-note" hidden></p>
+          <a id="expensesSourceLink" class="cropster-link" target="_blank" rel="noopener noreferrer" hidden>Open expense sheet</a>
+        </div>
+      </details>
       <details id="weekNote" class="meeting-card week-note">
         <summary>
           <span class="card-title">Note</span><span id="weekNotePreview" class="week-note-preview">Loading this week’s note…</span><span class="disclosure" aria-hidden="true"></span>
@@ -374,6 +405,17 @@ export const weeklyPage = String.raw`<!doctype html>
     <details id="sources" class="source-details" hidden>
       <summary>Data sources</summary>
       <ul id="sourceList" class="source-list"></ul>
+      <details id="expensesCapture" class="source-details">
+        <summary>Save a verified sheet reading</summary>
+        <form id="expensesCaptureForm" class="capture-form expense-capture">
+          <label for="expensesCaptureInput">Verified expense sheet reading</label>
+          <p id="expensesCaptureHelp" class="detail-note">Paste the verified reading from the private expense sheet for the selected Monday. This saves a dated reading while the sheet connection is being set up.</p>
+          <p id="expensesCaptureWeek" class="detail-note"></p>
+          <textarea id="expensesCaptureInput" maxlength="100000" spellcheck="false" aria-describedby="expensesCaptureHelp expensesCaptureWeek" required></textarea>
+          <button id="expensesCaptureSave" type="submit" class="button primary">Save verified reading</button>
+          <p id="expensesCaptureMessage" class="detail-note" role="status" hidden></p>
+        </form>
+      </details>
       <details id="capture" class="source-details" hidden>
         <summary>Record Cropster readings</summary>
         <form id="captureForm" class="capture-form">
@@ -430,7 +472,7 @@ export const weeklyPage = String.raw`<!doctype html>
         </form>
       </details>
     </details>
-    <footer class="links"><p>Sydney reporting week · AUD values</p><a href="/details">Operations details and issue notes</a></footer>
+    <footer class="links"><p>Sydney reporting week · expenses use $ as recorded</p><a href="/details">Operations details and issue notes</a></footer>
   </main>
   <script>
     const el = id => document.getElementById(id);
@@ -438,6 +480,7 @@ export const weeklyPage = String.raw`<!doctype html>
     const detailKg = new Intl.NumberFormat('en-AU', { maximumFractionDigits: 2 });
     const currency = new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', maximumFractionDigits: 0 });
     const detailCurrency = new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD' });
+    const expenseAmount = new Intl.NumberFormat('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const dateTime = new Intl.DateTimeFormat('en-AU', { timeZone: 'Australia/Sydney', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
     const calendarDay = new Intl.DateTimeFormat('en-AU', { timeZone: 'UTC', day: 'numeric', month: 'short' });
     const unavailable = '—';
@@ -446,6 +489,7 @@ export const weeklyPage = String.raw`<!doctype html>
     let requestedWeek = new URL(location.href).searchParams.get('week') || '';
     let currentRequest;
     let signedIn = false;
+    let expensesCaptureGeneration = 0;
     const weekNotes = new Map();
     const captureGroups = [
       ['This week', [
@@ -674,6 +718,49 @@ export const weeklyPage = String.raw`<!doctype html>
       showText('wholesaleSource', sourceText(wholesale, 'Dispatch'));
       showText('wholesaleNote', wholesale.note);
     }
+    function expenseMoney(value, expenses) {
+      if (!Number.isFinite(value)) return unavailable;
+      return expenses.currency === 'AUD' ? detailCurrency.format(value) : '$' + expenseAmount.format(value);
+    }
+    function renderExpenses(expenses = {}, week) {
+      const matchesWeek = expenses.weekStart === week.start;
+      const value = matchesWeek && expenses.status !== 'unavailable' ? expenses.value : null;
+      const overLimit = Number.isFinite(value) && value > 18900;
+      set('expensesPeriod', week.isCurrent ? 'Week to date' : 'Week of ' + dateLabel(week.start));
+      set('expensesValue', expenseMoney(value, expenses));
+      el('expensesValue').classList.toggle('over-limit', overLimit);
+      showText('expensesFlag', overLimit ? 'Over $18,900' : !Number.isFinite(value) ? 'Expenses unavailable' : '');
+      el('expensesFlag').classList.toggle('over-limit', overLimit);
+      set('expensesMonday', 'Monday · ' + dateLabel(week.start));
+      set('expensesCurrency', expenses.currency === 'AUD' ? 'Amounts in AUD.' : 'Amounts use $ as recorded in the sheet.');
+      const items = matchesWeek && Number.isFinite(value) && Array.isArray(expenses.items) ? expenses.items : [];
+      el('expensesItems').replaceChildren(...items.map(item => {
+        const row = document.createElement('tr');
+        const name = document.createElement('th');
+        name.scope = 'row';
+        name.textContent = item.name;
+        const amount = document.createElement('td');
+        amount.textContent = expenseMoney(item.value, expenses);
+        row.append(name, amount);
+        return row;
+      }));
+      el('expensesBreakdown').hidden = !items.length;
+      const timestamp = formatTimestamp(expenses.asOf);
+      const freshness = expenses.status === 'stale' ? 'Saved reading may be out of date'
+        : expenses.status === 'live' ? 'Sheet checked' : 'Saved reading';
+      showText('expensesFreshness', matchesWeek && Number.isFinite(value)
+        ? freshness + (timestamp ? ' · ' + timestamp + ' Sydney time' : '') : '');
+      const reading = expenses.status === 'recorded' ? 'Verified reading captured' : expenses.status === 'live' ? 'Sheet checked' : 'Saved reading';
+      const source = [expenses.sheetName, matchesWeek && expenses.sourceCell,
+        timestamp && reading + ' ' + timestamp + ' Sydney time'].filter(Boolean).join(' · ');
+      showText('expensesSource', source);
+      showText('expensesNote', expenses.note || (!Number.isFinite(value) ? 'A verified expense total is needed for this Monday.' : ''));
+      const url = sourceLink(expenses.sourceUrl);
+      el('expensesSourceLink').hidden = !url;
+      if (url) el('expensesSourceLink').href = url;
+      else el('expensesSourceLink').removeAttribute('href');
+      set('expensesCaptureWeek', 'Selected Monday · ' + dateLabel(week.start));
+    }
     function sourceLink(value) {
       try {
         const url = new URL(value);
@@ -800,6 +887,7 @@ export const weeklyPage = String.raw`<!doctype html>
       renderGreen(metrics.green, week);
       renderStock(metrics.stock, week);
       renderWholesale(metrics.wholesale, week);
+      renderExpenses(metrics.expenses, week);
       renderSources(data.sources);
       if (loadedWeek?.start !== week.start) {
         el('fridayCaptureForm').reset();
@@ -835,6 +923,7 @@ export const weeklyPage = String.raw`<!doctype html>
       el('actions').hidden = !active;
       el('login').hidden = active;
       if (active) return;
+      expensesCaptureGeneration++;
       currentRequest?.abort();
       currentRequest = null;
       el('refresh').disabled = false;
@@ -856,12 +945,19 @@ export const weeklyPage = String.raw`<!doctype html>
       el('fridayCapture').open = false;
       el('fridayCaptureForm').reset();
       showText('fridayCaptureMessage', '');
+      el('expensesCapture').open = false;
+      el('expensesCaptureForm').reset();
+      showText('expensesCaptureMessage', '');
+      el('expensesCaptureSave').disabled = false;
+      el('expensesCaptureSave').textContent = 'Save verified reading';
       clearWeekNotes();
       el('sourceList').replaceChildren();
       el('stockCategories').replaceChildren();
+      el('expensesItems').replaceChildren();
+      el('expensesSourceLink').removeAttribute('href');
       el('figures').querySelectorAll('[id]').forEach(node => {
         if (node.matches('.metric-figure, .metric-secondary, dd')) node.textContent = unavailable;
-        if (node.matches('.comparison, .source-note, .detail-note, .status-flag, .carry-forward')) node.textContent = '';
+        if (node.matches('.comparison, .source-note, .detail-note, .status-flag, .carry-forward, .expense-freshness')) node.textContent = '';
       });
       el('figures').querySelectorAll('details').forEach(card => { card.open = false; });
       el('sources').open = false;
@@ -1013,6 +1109,49 @@ export const weeklyPage = String.raw`<!doctype html>
         if (noteIsActive(weekStart, state)) {
           if (loadedWeek?.start === weekStart) renderWeekNote(weekStart);
           if (state.needsReload) loadWeekNote(weekStart);
+        }
+      }
+    });
+    el('expensesCaptureForm').addEventListener('submit', async event => {
+      event.preventDefault();
+      const button = el('expensesCaptureSave');
+      if (!signedIn || !loadedWeek || button.disabled) return;
+      const weekStart = loadedWeek.start;
+      let body;
+      try {
+        const reading = JSON.parse(el('expensesCaptureInput').value);
+        if (!reading || typeof reading !== 'object' || Array.isArray(reading)) throw new Error('Paste a valid verified sheet reading.');
+        if (reading.weekStart !== weekStart) throw new Error('The reading must match the selected Monday. Select its reporting week first.');
+        body = JSON.stringify(reading);
+        if (new TextEncoder().encode(body).length > 100000) throw new Error('The sheet reading is too large. Use the bounded expense grid.');
+      } catch (error) {
+        showText('expensesCaptureMessage', error instanceof SyntaxError ? 'Paste a valid verified sheet reading.' : error.message);
+        return;
+      }
+      const generation = ++expensesCaptureGeneration;
+      button.disabled = true;
+      button.textContent = 'Saving…';
+      showText('expensesCaptureMessage', '');
+      try {
+        const response = await fetch('/api/expenses/readings', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
+        });
+        const result = await readJson(response);
+        if (!signedIn || generation !== expensesCaptureGeneration) return;
+        if (response.status === 401) { showExpiredSession(); return; }
+        if (!response.ok || !result.ok || !result.expenses) throw new Error(result.error || 'The verified reading could not be saved.');
+        if (loadedWeek?.start === weekStart) {
+          renderExpenses(result.expenses, loadedWeek);
+          el('expensesCaptureForm').reset();
+          showText('expensesCaptureMessage', 'Verified sheet reading saved.');
+          await load(false, { fresh: true });
+        }
+      } catch (error) {
+        if (signedIn && generation === expensesCaptureGeneration) showText('expensesCaptureMessage', error.message);
+      } finally {
+        if (generation === expensesCaptureGeneration) {
+          button.disabled = false;
+          button.textContent = 'Save verified reading';
         }
       }
     });

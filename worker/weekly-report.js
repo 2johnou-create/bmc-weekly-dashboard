@@ -4,6 +4,7 @@ import { readCropsterMonday } from "./cropster-monday.js";
 import { readCropsterFriday } from "./cropster-friday.js";
 import { readWeeklyDemand } from "./demand.js";
 import { readFridayStock } from "./stock-history.js";
+import { readExpenses } from "./expenses.js";
 
 const dispatchPath = "/api/integrations/dashboard/weekly";
 
@@ -138,10 +139,11 @@ export async function collectWeeklyReport({ weekStart, stockroomCookie, env, now
   // Check Stockroom access before reading other business data.
   const inventory = await fetchSourceJson(SOURCE_ORIGINS.stockroom + "/api/inventory", stockroomHeaders, fetcher);
   const demandOptions = { fetch: fetcher, now: () => now.getTime(), fresh };
-  const [{ production, green }, mondayReading, stock, [weekDemand, previousDemand, dispatch, previousDispatch]] = await Promise.all([
+  const [{ production, green }, mondayReading, stock, expenses, [weekDemand, previousDemand, dispatch, previousDispatch]] = await Promise.all([
     historical ? readCropsterFriday(env.DB, week.start) : readCropsterReadings({ db: env.DB, weekStart: week.start, followingWeekStart: addDays(week.start, 7), now }),
     readCropsterMonday({ db: env.DB, weekStart: week.start }),
     historical ? readFridayStock({ date: week.end, inventory, stockroomCookie, now, fetcher }) : stockMetric(inventory),
+    readExpenses({ db: env.DB, env, week, fresh, now, fetcher }),
     Promise.allSettled([
       readWeeklyDemand(week.start, demandOptions),
       readWeeklyDemand(previousWeek, demandOptions),
@@ -158,7 +160,7 @@ export async function collectWeeklyReport({ weekStart, stockroomCookie, env, now
   return {
     week,
     generatedAt: now.toISOString(),
-    metrics: { demand, production, green, stock, wholesale },
+    metrics: { demand, production, green, stock, wholesale, expenses },
     sources: [
       { label: "This week’s roast tally", note: currentTally?.note || "Demand workbook is unavailable.", url: currentTally?.url, asOf: currentTally?.asOf },
       { label: "Last week’s roast tally", note: previousTally?.note || "Demand workbook is unavailable.", url: previousTally?.url, asOf: previousTally?.asOf },
@@ -167,6 +169,7 @@ export async function collectWeeklyReport({ weekStart, stockroomCookie, env, now
       { label: "Cropster green inventory · Marrickville", note: green.note, url: greenReport.href, asOf: green.asOf },
       { label: "Stock Take App", note: historical ? stock.note : "Current non-coffee value uses every active item’s saved stock count.", url: SOURCE_ORIGINS.stockroom },
       { label: "Dispatch", note: historical ? "Selected week’s schedules and completed handovers through Friday." : "This week’s schedule covers all seven days. Done counts completed primary orders.", url: SOURCE_ORIGINS.dispatch },
+      { label: "Warehouse expenses", note: expenses.note, url: expenses.sourceUrl, asOf: expenses.asOf },
     ],
   };
 }

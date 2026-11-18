@@ -137,7 +137,7 @@ test("the landing report reads protected Stockroom totals and requires a Cropste
     assert.equal(headers["x-green-password"], undefined);
     return Response.json({}, { status: 503 });
   } });
-  assert.deepEqual(Object.keys(report.metrics), ["demand", "production", "green", "stock", "wholesale"]);
+  assert.deepEqual(Object.keys(report.metrics), ["demand", "production", "green", "stock", "wholesale", "expenses"]);
   assert.equal(greenForecastRead, false);
   assert.equal(report.metrics.green.kg, null);
   assert.equal(report.metrics.green.value, null);

@@ -92,3 +92,16 @@ test("issue workflow uses the migration schema, persists notes, and rejects stal
     assert.equal(large.status,413);
   } finally {globalThis.fetch=originalFetch;db.close();}
 });
+
+test("expenses and message writes require the shared session and same origin before source or database access", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = () => assert.fail("Unauthorized writes must not read upstream sources");
+  const db = { prepare() { assert.fail("Unauthorized writes must not access private storage"); } };
+  try {
+    for (const path of ["/api/expenses/readings", "/api/roaster-messages"]) {
+      assert.equal((await worker.fetch(new Request(origin + path), {...env, DB:db})).status, 405);
+      assert.equal((await worker.fetch(new Request(origin + path, {method:"POST",headers:{Origin:origin,"Content-Type":"application/json"},body:"{}"}), {...env,DB:db})).status, 401);
+      assert.equal((await worker.fetch(new Request(origin + path, {method:"POST",headers:{Origin:"https://other.test","Content-Type":"application/json"},body:"{}"}), {...env,DB:db})).status, 403);
+    }
+  } finally {globalThis.fetch=originalFetch;}
+});

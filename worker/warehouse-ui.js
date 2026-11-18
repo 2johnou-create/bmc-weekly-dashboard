@@ -42,6 +42,32 @@ export const warehousePage = String.raw`<!doctype html>
     #sceneCanvas canvas { display:block; width:100%; height:100%; outline-offset:-5px; }
     .scene-caption { position:absolute; z-index:3; top:1rem; left:1rem; pointer-events:none; display:flex; gap:.5rem; align-items:center; padding:.45rem .65rem; border-radius:.35rem; background:rgb(255 255 255 / .91); color:var(--green); font-size:.72rem; font-weight:700; box-shadow:0 1px 7px rgb(29 50 42 / .06); }
     .scene-caption i { height:.4rem; width:.4rem; background:var(--red); border-radius:50%; }
+    .local-conditions { position:absolute; z-index:3; top:1rem; right:1rem; width:244px; max-width:calc(100% - 2rem); padding:.55rem .7rem; background:rgb(255 255 255 / .94); color:var(--green); border:1px solid rgb(170 188 181 / .55); border-radius:.4rem; box-shadow:0 2px 8px rgb(29 50 42 / .05); pointer-events:none; }
+    .local-date { color:var(--muted); font-size:.875rem; }
+    .local-now { display:flex; justify-content:space-between; gap:.8rem; align-items:baseline; font-variant-numeric:tabular-nums; margin-top:.1rem; }
+    .local-now time { font-size:1rem; font-weight:750; letter-spacing:-.015em; }
+    .local-now strong { font-size:1rem; }
+    .local-weather { margin-top:.15rem; color:var(--muted); font-size:.875rem; }
+    .weather-attribution { font-size:.75rem; }
+    .local-weather.stale { color:var(--caution); }
+    .local-conditions a { pointer-events:auto; }
+    .person-layer { position:absolute; inset:0; z-index:7; pointer-events:none; overflow:hidden; }
+    .john-label { position:absolute; top:0; left:0; transform:translate(-50%,-100%); pointer-events:auto; min-height:44px; padding:.3rem .55rem; color:var(--green); background:#fffaf0; border:1px solid #b78b65; border-radius:.4rem; box-shadow:0 2px 6px rgb(29 50 42 / .14); font-size:.875rem; font-weight:750; }
+    .john-label::after { content:''; position:absolute; bottom:-5px; left:calc(50% - 4px); width:7px; height:7px; background:#fffaf0; border-right:1px solid #b78b65; border-bottom:1px solid #b78b65; transform:rotate(45deg); }
+    .john-label[aria-expanded=true] { background:var(--green); color:white; border-color:var(--green); }
+    .john-label[aria-expanded=true]::after { background:var(--green); border-color:var(--green); }
+    .john-bubble { position:absolute; width:300px; max-width:calc(100% - 20px); padding:.75rem; color:var(--ink); background:#fffdf7; border:1px solid #b4c1b6; border-radius:.65rem; pointer-events:auto; box-shadow:0 5px 22px rgb(27 46 35 / .2); }
+    .john-bubble header { display:flex; align-items:center; justify-content:space-between; gap:.5rem; margin-bottom:.35rem; }
+    .john-bubble h3 { font-size:1.02rem; font-weight:760; letter-spacing:-.02em; }
+    .john-bubble .bubble-close { min-width:44px; min-height:44px; border:0; background:transparent; color:var(--muted); font-size:1.2rem; line-height:1; border-radius:.3rem; }
+    .john-bubble label { display:block; font-size:.875rem; font-weight:650; }
+    .john-bubble textarea { display:block; width:100%; min-height:68px; max-height:120px; resize:vertical; padding:.4rem .5rem; margin:.3rem 0 .4rem; border:1px solid #96a79a; border-radius:.3rem; font:inherit; font-size:1rem; line-height:1.4; color:var(--ink); background:white; }
+    .john-bubble .bubble-tools { display:flex; align-items:center; justify-content:space-between; gap:.45rem; }
+    .john-bubble .bubble-tools small { overflow-wrap:anywhere; font-size:.75rem; color:var(--muted); }
+    .john-bubble .button { min-height:44px; padding:.35rem .65rem; flex:none; font-size:.875rem; }
+    .john-bubble .bubble-status { margin-top:.4rem; font-size:.875rem; line-height:1.35; color:var(--green); }
+    .john-bubble .bubble-status.error { color:var(--red); }
+    .john-bubble .capability-note { margin-top:.4rem; font-size:.8125rem; line-height:1.35; color:var(--muted); }
     .scene-message { position:absolute; inset:0; z-index:2; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:.7rem; padding:2rem; text-align:center; color:var(--green); background:var(--sky); }
     .scene-message p { max-width:32ch; font-size:.88rem; }
     .scene-message strong { font-size:1.12rem; }
@@ -143,6 +169,7 @@ export const warehousePage = String.raw`<!doctype html>
     @media (max-width:900px) { .workspace { grid-template-columns:1fr; } .scene-stage { height:66vh; min-height:460px; } .detail-panel { border-left:0; border-top:1px solid var(--line); max-height:none; } .panel-body { overflow:visible; } .panel-header { padding:.9rem 1rem; } .panel-body { padding:1rem; } .scene-tools { bottom:.75rem; } .zone-nav { justify-content:center; } .pair { max-width:32rem; } }
     @media (max-width:650px) { .wrap { width:calc(100% - 1.4rem); } .bar { flex-wrap:wrap; justify-content:space-between; gap:.3rem .5rem; padding-block:.7rem; } .brand img { width:auto; height:2.35rem; } .dashboard-nav { order:3; width:100%; gap:.2rem; } .dashboard-nav a { min-height:37px; font-size:.8rem; padding:.45rem .6rem; } .page-actions { margin-left:0; } .page-actions .button { min-height:38px; font-size:.75rem; padding:.45rem .55rem; } .intro { margin:1rem 0 .75rem; } .intro p { font-size:.74rem; max-width:45ch; } .report-time { text-align:left; width:100%; font-size:.71rem; } .report-time strong { display:inline; margin-right:.4rem; } .scene-stage { height:58vh; min-height:390px; } .scene-caption { top:.65rem; left:.65rem; font-size:.65rem; } .scene-tools { left:.65rem; right:.65rem; } .scene-tools .button { min-height:37px; font-size:.72rem; padding:.4rem .55rem; } .pin { font-size:.8125rem; padding:.3rem .4rem; min-height:36px; } .zone-nav { justify-content:flex-start; gap:.15rem; padding:.55rem; } .zone-nav button { min-height:38px; font-size:.7rem; padding:.35rem .45rem; } .stat-strip { gap:0; } .stat { padding:.65rem .6rem; display:block; } .stat + .stat { border-left:1px solid var(--line); } .stat dt { font-size:.68rem; } .stat dd { font-size:1.04rem; margin-top:.15rem; } .stat p { font-size:.62rem; } .footer { font-size:.66rem; } .login { margin:2rem .7rem; } }
     @media (prefers-reduced-motion:reduce) { .spinner { animation:none !important; } }
+    @media (max-width:650px) { .local-conditions { top:.65rem; right:.65rem; padding:.45rem .55rem; } .scene-caption { display:none; } .john-label { padding:.4rem .55rem; } }
     @media (max-width:650px) { .pin { max-width:185px; } .pin-extra { display:none; } }
     @media print { .topbar,.scene-stage,.zone-nav,.page-actions,.footer { display:none; } .workspace { display:block; border:0; } .detail-panel { max-height:none; border:0; } .panel-body { overflow:visible; } body { background:white; } }
   </style>
@@ -165,8 +192,19 @@ export const warehousePage = String.raw`<!doctype html>
         <div id="sceneStage" class="scene-stage">
           <div id="sceneCanvas" role="group" aria-label="Interactive roastery illustration"></div>
           <div class="scene-caption"><i aria-hidden="true"></i>Black Market roastery</div>
+          <aside class="local-conditions" aria-label="Sydney time and Marrickville outdoor forecast"><p id="localDate" class="local-date"></p><p class="local-now"><time id="localClock"></time><strong id="localTemperature">—°C</strong></p><p id="weatherLabel" class="local-weather">Marrickville · outdoor forecast</p><p id="weatherReading" class="local-weather">Waiting for forecast data</p><p class="local-weather weather-attribution"><a href="https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=-33.91&amp;lon=151.16" target="_blank" rel="noopener noreferrer">MET Norway</a> · <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a></p></aside>
           <div id="sceneMessage" class="scene-message" role="status"><span class="spinner" aria-hidden="true"></span><strong id="sceneMessageTitle">Opening the roastery</strong><p id="sceneMessageBody">Your dashboard figures will appear alongside the scene.</p></div>
           <div id="pins" class="pins" aria-label="Roastery zones"></div>
+          <div class="person-layer">
+            <button id="johnLabel" class="john-label" type="button" aria-expanded="false" aria-controls="johnBubble" hidden>John</button>
+            <section id="johnBubble" class="john-bubble" aria-labelledby="johnGreeting" hidden>
+              <header><h3 id="johnGreeting">what’s up!!!</h3><button id="johnClose" class="bubble-close" type="button" aria-label="Close John’s message">×</button></header>
+              <form id="johnMessageForm"><label for="johnMessage">Message John</label><textarea id="johnMessage" maxlength="500" rows="2" placeholder="Write a message…" aria-describedby="messageCapability messageFeedback"></textarea>
+                <div class="bubble-tools"><small title="roaster@blackmarketroasters.com.au">To the roaster inbox</small><button id="johnSend" class="button primary" type="submit" disabled>Send</button></div>
+                <p id="messageCapability" class="capability-note"></p><p id="messageFeedback" class="bubble-status" role="status" hidden></p>
+              </form>
+            </section>
+          </div>
           <div class="scene-tools"><div><button id="pause" type="button" class="button" aria-pressed="false">Pause activity</button><button id="reset" type="button" class="button">Reset view</button></div><p class="scene-hint">Drag to look around · scroll or pinch to zoom</p></div>
         </div>
         <nav id="zoneNav" class="zone-nav" aria-label="Choose a warehouse zone"></nav>
@@ -190,6 +228,10 @@ export const warehousePage = String.raw`<!doctype html>
     ];
     let signedIn = false, data = null, selected = "overview", scene = null, scenePromise = null, sceneFailed = false;
     let sessionGeneration = 0, activeRequest = null, pinsFrame = null, pinsTime = 0, sceneVisible = true;
+    let johnOpen = false, johnRect = null, messageRequest = null, messageSending = false, messageAttempt = null;
+    let weatherMinute = -1;
+    const clockDate = new Intl.DateTimeFormat("en-AU", { timeZone: "Australia/Sydney", weekday: "short", day: "numeric", month: "short", year: "numeric" });
+    const clockTime = new Intl.DateTimeFormat("en-AU", { timeZone: "Australia/Sydney", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" });
     const motion = matchMedia("(prefers-reduced-motion: reduce)");
     let paused = motion.matches;
     let purchaseMonth = today().slice(0, 7), purchaseDay = today();
@@ -319,6 +361,143 @@ export const warehousePage = String.raw`<!doctype html>
     }
     function metricNote(metric = {}) {
       return note(metric.note);
+    }
+    function updateClock() {
+      const now = new Date();
+      el("localDate").textContent = clockDate.format(now) + " · Sydney";
+      el("localClock").textContent = clockTime.format(now);
+      el("localClock").dateTime = now.toISOString();
+      const minute = Math.floor(now.getTime() / 6e4);
+      if (weatherMinute !== minute) {
+        weatherMinute = minute;
+        renderWeather();
+      }
+    }
+    function renderWeather() {
+      const weather = data?.weather;
+      const available = Number.isFinite(weather?.temperatureC);
+      const readingAt = weather?.time || weather?.asOf;
+      const timestamp = readingAt ? new Date(readingAt).valueOf() : NaN;
+      const stale = available && (weather.status === "stale" || weather.status === "unavailable" ||
+        Number.isFinite(timestamp) && Math.abs(Date.now() - timestamp) > 45 * 6e4);
+      el("localTemperature").textContent = available ? num(weather.temperatureC) + "°C" : "—°C";
+      el("weatherLabel").textContent = "Marrickville · outdoor forecast";
+      el("weatherReading").classList.toggle("stale", stale);
+      if (!weather) {
+        el("weatherReading").textContent = signedIn ? "Waiting for forecast data" : "Outdoor forecast";
+      } else if (!available) {
+        el("weatherReading").textContent = "Temperature unavailable";
+      } else {
+        const when = date(readingAt, true);
+        el("weatherReading").textContent = (stale ? "Past forecast " : "For ") + (when || "time unavailable");
+      }
+      el("weatherReading").title = weather?.note || "";
+    }
+    function updateMessageControls() {
+      const messaging = data?.messaging;
+      const available = messaging?.available === true;
+      const unchangedQueued = messageAttempt?.status === "queued" && messageAttempt.message === el("johnMessage").value.trim();
+      el("johnSend").disabled = !signedIn || !available || messageSending || !el("johnMessage").value.trim();
+      el("johnSend").textContent = messageSending ? "Sending…" : unchangedQueued ? "Check delivery" : "Send";
+      el("messageCapability").textContent = available ? "" : messaging?.note || "Sending email needs a one-time Google connection.";
+      el("messageCapability").hidden = available;
+    }
+    function messageFeedback(text, error = false) {
+      el("messageFeedback").textContent = text;
+      el("messageFeedback").hidden = !text;
+      el("messageFeedback").classList.toggle("error", error);
+    }
+    function closeJohn({ restoreFocus = false } = {}) {
+      johnOpen = false;
+      el("johnBubble").hidden = true;
+      el("johnLabel").setAttribute("aria-expanded", "false");
+      johnRect = null;
+      if (restoreFocus && !el("johnLabel").hidden) el("johnLabel").focus({ preventScroll: true });
+    }
+    function openJohn(id) {
+      if (id !== "john" || !signedIn || sceneFailed) return;
+      johnOpen = true;
+      el("johnLabel").setAttribute("aria-expanded", "true");
+      updateMessageControls();
+      positionJohn();
+      if (!el("johnBubble").hidden) el("johnMessage").focus({ preventScroll: true });
+    }
+    function positionJohn() {
+      const label = el("johnLabel"), bubble = el("johnBubble");
+      if (!signedIn || !scene || sceneFailed || !sceneVisible || document.hidden) {
+        label.hidden = bubble.hidden = true;
+        johnRect = null;
+        return;
+      }
+      const person = scene.projectPerson?.("john");
+      const visible = person?.visible && Number.isFinite(person.x) && Number.isFinite(person.y);
+      label.hidden = !visible;
+      bubble.hidden = !visible || !johnOpen;
+      if (!visible) {
+        johnRect = null;
+        return;
+      }
+      const width = el("sceneStage").clientWidth, height = el("sceneStage").clientHeight;
+      const x = Math.max(label.offsetWidth / 2 + 8, Math.min(width - label.offsetWidth / 2 - 8, person.x));
+      const y = Math.max(label.offsetHeight + 10, Math.min(height - 64, person.y));
+      label.style.left = x + "px";
+      label.style.top = y + "px";
+      johnRect = { left: x - label.offsetWidth / 2 - 5, right: x + label.offsetWidth / 2 + 5, top: y - label.offsetHeight - 5, bottom: y + 8 };
+      if (johnOpen) {
+        const left = Math.max(10, Math.min(width - bubble.offsetWidth - 10, person.x + 18));
+        const preferredTop = person.y - bubble.offsetHeight - 24;
+        const top = Math.max(10, Math.min(height - bubble.offsetHeight - 58, preferredTop < 12 ? person.y + 15 : preferredTop));
+        bubble.style.left = left + "px";
+        bubble.style.top = top + "px";
+        johnRect = { left: Math.min(johnRect.left, left - 5), right: Math.max(johnRect.right, left + bubble.offsetWidth + 5),
+          top: Math.min(johnRect.top, top - 5), bottom: Math.max(johnRect.bottom, top + bubble.offsetHeight + 5) };
+      }
+    }
+    async function sendJohnMessage(event) {
+      event.preventDefault();
+      const message = el("johnMessage").value.trim();
+      if (!signedIn || messageSending || data?.messaging?.available !== true || !message) return;
+      if (!messageAttempt || messageAttempt.message !== message) messageAttempt = { id: crypto.randomUUID(), message };
+      const attempt = messageAttempt;
+      const generation = sessionGeneration;
+      const controller = new AbortController();
+      messageRequest = controller;
+      messageSending = true;
+      messageFeedback("");
+      updateMessageControls();
+      const timeout = setTimeout(() => controller.abort(), 25000);
+      try {
+        const response = await fetch("/api/roaster-messages", {
+          method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: attempt.id, message: attempt.message }), signal: controller.signal,
+        });
+        const reply = await readJson(response);
+        if (!signedIn || generation !== sessionGeneration) return;
+        if (response.status === 401) {
+          showSession(false, { preserveMessage: true });
+          setMessage("loginMessage", "Your session ended. Sign in again to message John.");
+          return;
+        }
+        if (response.ok && reply.status === "sent") {
+          if (el("johnMessage").value.trim() === attempt.message) el("johnMessage").value = "";
+          messageAttempt = null;
+          messageFeedback("Message sent to John.");
+        } else if (reply.status === "queued") {
+          attempt.status = "queued";
+          messageFeedback(reply.note || "Delivery has not been confirmed. Your draft remains in this form.");
+        } else {
+          messageFeedback(reply.note || reply.error || "The message could not be sent. Your text is still here.", true);
+        }
+      } catch {
+        if (signedIn && generation === sessionGeneration) messageFeedback("Delivery could not be confirmed. Your text is still here; try again.", true);
+      } finally {
+        clearTimeout(timeout);
+        if (messageRequest === controller) {
+          messageRequest = null;
+          messageSending = false;
+          updateMessageControls();
+        }
+      }
     }
     function flag(text) {
       return text ? node("p", text, "flag") : null;
@@ -673,13 +852,14 @@ export const warehousePage = String.raw`<!doctype html>
     }
     function positionPins() {
       if (!scene || sceneFailed || !signedIn || !sceneVisible || document.hidden) return;
+      positionJohn();
       let positions;
       try {
         positions = scene.projectPins();
       } catch {
         return;
       }
-      const occupied = [];
+      const occupied = johnRect ? [johnRect] : [];
       const width = el("pins").clientWidth, height = el("pins").clientHeight;
       const ordered = [...(positions || [])].sort((left, right) => Number(right.id === selected) - Number(left.id === selected));
       for (const position of ordered) {
@@ -709,6 +889,7 @@ export const warehousePage = String.raw`<!doctype html>
     function pinsLoop(now) {
       pinsFrame = null;
       if (!signedIn || !scene || sceneFailed || !sceneVisible || document.hidden) return;
+      positionJohn();
       if (now - pinsTime > 80) {
         positionPins();
         pinsTime = now;
@@ -734,6 +915,7 @@ export const warehousePage = String.raw`<!doctype html>
       el("pause").disabled = true;
       el("reset").disabled = true;
       el("pins").querySelectorAll("button").forEach((button) => button.hidden = true);
+      positionJohn();
       renderPinMetrics();
       pauseState();
     }
@@ -757,6 +939,7 @@ export const warehousePage = String.raw`<!doctype html>
           onSelect: (id) => {
             if (signedIn) selectZone(id, { focus: true, moveCamera: false });
           },
+          onPersonSelect: openJohn,
           onReady: () => {
             if (signedIn && generation === sessionGeneration && !sceneFailed) {
               el("sceneMessage").hidden = true;
@@ -792,8 +975,22 @@ export const warehousePage = String.raw`<!doctype html>
       item.textContent = text;
       item.hidden = !text;
     }
-    function clearReport() {
+    function clearReport({ preserveMessage = false } = {}) {
       data = null;
+      messageRequest?.abort();
+      messageRequest = null;
+      messageSending = false;
+      if (!preserveMessage) {
+        messageAttempt = null;
+        el("johnMessage").value = "";
+        messageFeedback("");
+      } else if (el("johnMessage").value.trim()) {
+        messageFeedback("Your unsent message is still here after you sign in again.");
+      }
+      closeJohn();
+      el("johnLabel").hidden = true;
+      renderWeather();
+      updateMessageControls();
       for (const id of ["statDemand", "statRoasted", "statDispatch"]) el(id).textContent = "—";
       el("reportTime").replaceChildren();
       el("statRoastSource").textContent = "Cropster";
@@ -810,7 +1007,7 @@ export const warehousePage = String.raw`<!doctype html>
       el("pins").querySelectorAll("button").forEach((button) => button.hidden = true);
       renderPinMetrics();
     }
-    function showSession(authenticated) {
+    function showSession(authenticated, { preserveMessage = false } = {}) {
       if (signedIn !== authenticated) sessionGeneration++;
       signedIn = authenticated;
       el("opening").hidden = true;
@@ -822,7 +1019,7 @@ export const warehousePage = String.raw`<!doctype html>
         activeRequest = null;
         el("refresh").disabled = false;
         el("refresh").textContent = "Refresh";
-        clearReport();
+        clearReport({ preserveMessage });
       } else {
         startScene();
         pauseState();
@@ -839,6 +1036,8 @@ export const warehousePage = String.raw`<!doctype html>
       const timestamp = date(data.generatedAt, true);
       el("reportTime").replaceChildren(node("strong", weekLabel()), document.createTextNode(timestamp ? "Dashboard read " + timestamp + " Sydney time" : ""));
       renderPanel(true);
+      renderWeather();
+      updateMessageControls();
       renderPinMetrics();
       try {
         scene?.setData(data);
@@ -865,7 +1064,7 @@ export const warehousePage = String.raw`<!doctype html>
         const next = await readJson(response);
         if (activeRequest !== controller || generation !== sessionGeneration || !signedIn) return;
         if (response.status === 401) {
-          showSession(false);
+          showSession(false, { preserveMessage: true });
           setMessage("loginMessage", "Your session ended. Sign in again to read the dashboard.");
           return;
         }
@@ -923,6 +1122,20 @@ export const warehousePage = String.raw`<!doctype html>
     });
     el("reset").addEventListener("click", () => selectZone("overview"));
     el("refresh").addEventListener("click", () => load(true));
+    el("johnLabel").addEventListener("click", () => openJohn("john"));
+    el("johnClose").addEventListener("click", () => closeJohn({ restoreFocus: true }));
+    el("johnMessageForm").addEventListener("submit", sendJohnMessage);
+    el("johnMessage").addEventListener("input", () => {
+      if (messageAttempt && messageAttempt.message !== el("johnMessage").value.trim()) messageAttempt = null;
+      if (!messageSending) messageFeedback("");
+      updateMessageControls();
+    });
+    el("johnBubble").addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeJohn({ restoreFocus: true });
+      }
+    });
     el("signInForm").addEventListener("submit", async (event) => {
       event.preventDefault();
       el("signIn").disabled = true;
@@ -975,19 +1188,24 @@ export const warehousePage = String.raw`<!doctype html>
     const refreshTimer = setInterval(() => {
       if (signedIn && !document.hidden && !activeRequest) load();
     }, 6e4);
+    const clockTimer = setInterval(updateClock, 1000);
     window.addEventListener("pagehide", () => {
       activeRequest?.abort();
+      messageRequest?.abort();
       scene?.dispose();
       scene = null;
       if (pinsFrame !== null) cancelAnimationFrame(pinsFrame);
       pinsFrame = null;
       observer.disconnect();
       clearInterval(refreshTimer);
+      clearInterval(clockTimer);
     });
     window.addEventListener("pageshow", (event) => {
       if (event.persisted) window.location.reload();
     });
     makeZoneControls();
+    updateClock();
+    updateMessageControls();
     pauseState();
     fetch("/api/auth", { cache: "no-store", credentials: "same-origin" }).then(readJson).then((reply) => {
       showSession(reply.authenticated === true);
