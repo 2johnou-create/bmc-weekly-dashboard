@@ -146,12 +146,45 @@ function workbookArchive(bytes) {
     if (++entries > 200 || names.has(file.name) || file.name.split("/").includes("..") || file.name.startsWith("/")) throw new Error("Workbook archive is not supported.");
     names.add(file.name);
     if (!Number.isSafeInteger(file.originalSize) || file.originalSize > MAX_BYTES || (totalSize += file.originalSize) > 8_000_000) throw new Error("Workbook is too large.");
-    return /^xl\/(?:workbook\.xml|_rels\/workbook\.xml\.rels|sharedStrings\.xml|worksheets\/sheet\d+\.xml)$/.test(file.name);
+    return /^xl\/(?:workbook\.xml|_rels\/workbook\.xml\.rels|sharedStrings\.xml|styles\.xml|worksheets\/sheet\d+\.xml)$/.test(file.name);
   } });
   return archive;
 }
 
-export function parseWorkbookSheet(bytes, sheetIndex, expectedName) {
+function sheetFormats(styleBytes, sheetXml) {
+  const xml = safeXml(styleBytes);
+  const custom = new Map();
+  for (const match of xml.matchAll(/<numFmt\b([^>]+)\/?\s*>/g)) {
+    const id = attribute(match[1], "numFmtId"), format = attribute(match[1], "formatCode");
+    if (custom.size >= 1_000 || !/^\d+$/.test(id || "") || typeof format !== "string" || format.length > 256) throw new Error("Workbook number formats are unsupported.");
+    custom.set(Number(id), format);
+  }
+  const fillsXml = xml.match(/<fills\b[^>]*>([\s\S]*?)<\/fills>/)?.[1] || "";
+  const fills = [...fillsXml.matchAll(/<fill\b[^>]*?(?:\/>|>([\s\S]*?)<\/fill>)/g)].map(match => {
+    if (attribute(match[1]?.match(/<patternFill\b([^>]*)>/)?.[1] || "", "patternType") !== "solid") return null;
+    const foreground = match[1]?.match(/<fgColor\b([^>]*)\/?\s*>/)?.[1] || "";
+    const rgb = attribute(foreground, "rgb"), tint = attribute(foreground, "tint");
+    if (tint !== null && Number(tint) !== 0) return null;
+    return typeof rgb === "string" && /^FF[\da-f]{6}$/i.test(rgb) ? rgb.slice(2).toUpperCase() : null;
+  });
+  const xfsXml = xml.match(/<cellXfs\b[^>]*>([\s\S]*?)<\/cellXfs>/)?.[1] || "";
+  const builtin = { 14: "m/d/yy", 15: "d-mmm-yy", 16: "d-mmm", 17: "mmm-yy" };
+  const styles = [...xfsXml.matchAll(/<xf\b([^>]*?)(?:\/>|>[\s\S]*?<\/xf>)/g)].map(match => {
+    const fillId = Number(attribute(match[1], "fillId") || 0), numFmtId = Number(attribute(match[1], "numFmtId") || 0);
+    return { fillColor: fills[fillId] ?? null, numberFormat: custom.get(numFmtId) ?? builtin[numFmtId] ?? null };
+  });
+  if (!styles.length || styles.length > 10_000 || fills.length > 10_000) throw new Error("Workbook styles are unsupported.");
+  const formats = new Map();
+  for (const match of sheetXml.matchAll(/<c\b([^>]*?)(?:\/>|>[\s\S]*?<\/c>)/g)) {
+    if (formats.size >= 100_000) throw new Error("Worksheet styles are too large.");
+    const ref = attribute(match[1], "r"), rawStyle = attribute(match[1], "s") || "0";
+    if (!ref || !/^[A-Z]{1,3}[1-9]\d{0,5}$/.test(ref) || !/^\d+$/.test(rawStyle) || !styles[Number(rawStyle)]) throw new Error("Worksheet style is unsupported.");
+    formats.set(ref, { ...styles[Number(rawStyle)] });
+  }
+  return formats;
+}
+
+export function parseWorkbookSheet(bytes, sheetIndex, expectedName, { styles = false } = {}) {
   const archive = workbookArchive(bytes);
   const workbook = safeXml(archive["xl/workbook.xml"]);
   const rels = safeXml(archive["xl/_rels/workbook.xml.rels"]);
@@ -165,9 +198,11 @@ export function parseWorkbookSheet(bytes, sheetIndex, expectedName) {
   const sharedXml = archive["xl/sharedStrings.xml"] ? safeXml(archive["xl/sharedStrings.xml"]) : "";
   const shared = [...sharedXml.matchAll(/<(?:\w+:)?si\b[^>]*>([\s\S]*?)<\/(?:\w+:)?si>/g)].map(match => texts(match[1]));
   if (shared.length > 20_000) throw new Error("Workbook text is too large.");
+  const selectedXml = safeXml(archive[target.startsWith("/") ? target.slice(1) : `xl/${target}`]);
   return {
-    cells: cells(safeXml(archive[target.startsWith("/") ? target.slice(1) : `xl/${target}`]), shared),
+    cells: cells(selectedXml, shared),
     date1904: /<workbookPr\b[^>]*date1904=["'](?:1|true)["']/i.test(workbook),
+    ...(styles ? { formats: sheetFormats(archive["xl/styles.xml"], selectedXml) } : {}),
   };
 }
 

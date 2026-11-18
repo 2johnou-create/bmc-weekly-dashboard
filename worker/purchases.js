@@ -1,5 +1,6 @@
 import { parseWorkbookSheet, readBytes } from "./demand.js";
 import { sydneyDate, validDate } from "./metrics.js";
+import { parseContractsWorkbook, unavailableContracts } from "./contracts.js";
 
 export const PURCHASE_WORKBOOK_ID = "1q-R7UP0ilUTbWoXY87rpaMYIrxZGZ6cqoBQIUHBvrF8";
 export const PURCHASE_SHEET = "ORDER PLAN";
@@ -177,7 +178,7 @@ export async function readPurchases({ now = new Date(), fetcher = fetch, fresh =
   const timestamp = current.getTime();
   const today = Number.isFinite(timestamp) ? sydneyDate(current) : null;
   const month = today?.slice(0, 7);
-  const base = { sourceUrl: PURCHASE_SOURCE_URL, sheetName: PURCHASE_SHEET, asOf: null, events: [], greenForecast: unavailableForecast(today) };
+  const base = { sourceUrl: PURCHASE_SOURCE_URL, sheetName: PURCHASE_SHEET, asOf: null, events: [], greenForecast: unavailableForecast(today), contracts: unavailableContracts() };
   if (!today) return { ...base, status: "unavailable", note: "Choose a valid date for the purchase plan." };
   let state = cache.get(fetcher);
   if (!state) { state = { sequence: 0, entry: null }; cache.set(fetcher, state); }
@@ -196,9 +197,11 @@ export async function readPurchases({ now = new Date(), fetcher = fetch, fresh =
     try { report = parsePurchaseWorkbook(bytes, today); }
     catch { report = { events: [], status: "unavailable", note: "The ORDER PLAN purchase calendar could not be parsed. Open the source workbook." }; }
     const greenForecast = parseGreenForecastWorkbook(bytes, today);
+    const contracts = parseContractsWorkbook(bytes);
     const asOf = current.toISOString();
     if (greenForecast.value !== null) greenForecast.asOf = asOf;
-    const value = { ...base, ...report, greenForecast, asOf };
+    if (contracts.status !== "unavailable") contracts.asOf = asOf;
+    const value = { ...base, ...report, greenForecast, contracts, asOf };
     if (state.sequence === sequence) state.entry = { time: timestamp, month, value };
     return structuredClone(value);
   } catch {

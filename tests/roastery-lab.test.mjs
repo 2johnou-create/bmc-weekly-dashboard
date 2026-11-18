@@ -141,7 +141,10 @@ test("The Lab protects source data and edits with a current Stock Take session a
     const read = () => worker.fetch(new Request(base + "/api/roastery-lab", { headers: { Cookie: cookie } }), env);
     const saved = await read();
     assert.equal(saved.headers.get("cache-control"), "no-store, private");
-    assert.equal((await saved.json()).settings.qa, "Checked");
+    const savedReport = await saved.json();
+    assert.equal(savedReport.settings.qa, "Checked");
+    assert.equal(savedReport.consumption.coverage.status, "unavailable");
+    assert.deepEqual(savedReport.consumption.coverage.groups.map(group => group.name), ["Liberty", "Rhythm", "OH", "Decaf"]);
     authorised = false;
     assert.equal((await read()).status, 401);
   } finally { globalThis.fetch = fetcher; db.close(); }

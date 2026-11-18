@@ -227,6 +227,149 @@ function forecastMonth(asOf, kg, perMonth) {
   return Number.isFinite(finish.getTime()) && finish.getUTCFullYear() < 10_000 ? finish.toISOString().slice(0, 7) : null;
 }
 
+const coverageGroups = [
+  { name: "Liberty", columns: ["B", "C", "D"] },
+  { name: "Rhythm", columns: ["D", "F", "G"] },
+  { name: "OH", columns: ["H"] },
+  { name: "Decaf", columns: ["I"] },
+];
+const coverageProfiles = {
+  Liberty: { B: "Liberty Ethiopia", C: "Liberty Honduras", D: "Liberty Brazil" },
+  Rhythm: { D: "Rhythm Brazil", F: "Rhythm China", G: "Rhythm Indonesia" },
+  OH: { H: "OH Peru" },
+};
+const coverageText = (value, maximum = 600) => typeof value === "string"
+  ? value.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim().slice(0, maximum) : "";
+const monthKey = value => typeof value === "string" && validDate(value + "-01");
+const knownQuantity = value => Number.isFinite(value) && value >= 0 ? value : null;
+
+/** Contract cells describe the purchase plan; observed kilograms stay at origin level. */
+export function mergeGreenCoverage(consumption = {}, prices = {}, contracts = {}, today = sydneyDate()) {
+  const currentMonth = validDate(today) ? today.slice(0, 7) : null;
+  const currentYear = currentMonth ? Number(currentMonth.slice(0, 4)) : null;
+  const observed = new Map();
+  const duplicateOrigins = new Set();
+  for (const origin of Array.isArray(consumption.origins) ? consumption.origins : []) {
+    if (!object(origin) || typeof origin.name !== "string" || !origin.name.trim()) continue;
+    if (observed.has(key(origin.name))) duplicateOrigins.add(key(origin.name));
+    observed.set(key(origin.name), origin);
+  }
+  const sourceColumns = new Map();
+  const duplicateColumns = new Set();
+  for (const column of Array.isArray(contracts.columns) ? contracts.columns : []) {
+    if (!object(column) || !coverageGroups.some(group => group.columns.includes(column.id))) continue;
+    if (sourceColumns.has(column.id)) duplicateColumns.add(column.id);
+    sourceColumns.set(column.id, column);
+  }
+  const laneOrigins = new Map();
+  for (const group of coverageGroups) for (const sourceColumn of group.columns) {
+    let origin = null;
+    if (group.name === "Decaf") {
+      const source = duplicateColumns.has(sourceColumn) ? null : sourceColumns.get(sourceColumn);
+      if (/\bcolombia\b/i.test(source?.origin ?? "")) {
+        const candidates = [...observed.values()].filter(item => /decaf/i.test(item.name) && /\bcolombia\b/i.test(item.name));
+        if (candidates.length === 1 && !duplicateOrigins.has(key(candidates[0].name))) origin = candidates[0];
+      }
+    } else {
+      const matchingRecipes = (prices.highlights ?? []).filter(item => key(item.name) === key(group.name));
+      const components = matchingRecipes.length === 1 ? matchingRecipes[0].components ?? [] : [];
+      const profile = coverageProfiles[group.name]?.[sourceColumn];
+      let matches = components.filter(component => typeof component.name === "string" && key(component.name) === key(profile));
+      if (group.name === "OH" && matches.length === 0 && components.length === 1 && components[0].percent === 100) matches = components;
+      if (matches.length === 1 && typeof matches[0].coffee === "string") {
+        const id = key(matches[0].coffee);
+        if (!duplicateOrigins.has(id)) origin = observed.get(id) ?? null;
+      }
+    }
+    laneOrigins.set(`${group.name.toLowerCase()}-${sourceColumn}`, origin);
+  }
+  const forecastYears = [...laneOrigins.values()].filter(origin => monthKey(origin?.depletionMonth)).map(origin => Number(origin.depletionMonth.slice(0, 4)));
+  const years = [...new Set([...(contracts.years ?? []), currentYear, ...forecastYears].filter(year => Number.isInteger(year) && year >= 1900 && year <= 9999))].sort((a, b) => a - b);
+  const allMonths = years.flatMap(year => Array.from({ length: 12 }, (_, index) => `${year}-${String(index + 1).padStart(2, "0")}`));
+  const groups = coverageGroups.map(group => ({
+    name: group.name,
+    columns: group.columns.map(sourceColumn => {
+      const source = duplicateColumns.has(sourceColumn) ? null : sourceColumns.get(sourceColumn);
+      const byMonth = new Map();
+      const duplicates = new Set();
+      for (const cell of Array.isArray(source?.cells) ? source.cells : []) {
+        if (!object(cell) || !monthKey(cell.month)) continue;
+        if (byMonth.has(cell.month)) duplicates.add(cell.month);
+        byMonth.set(cell.month, cell);
+      }
+      const cells = allMonths.map(month => {
+        const cell = duplicates.has(month) ? null : byMonth.get(month);
+        const state = ["contracted", "gap", "unknown"].includes(cell?.state) ? cell.state : "unknown";
+        return { month, state, text: coverageText(cell?.text, 1_000), sourceCell: coverageText(cell?.sourceCell, 20) || null };
+      });
+      const future = currentMonth ? cells.filter(cell => cell.month >= currentMonth) : [];
+      let coverageThrough = null;
+      // A missing/unknown month breaks continuity just as a known gap does.
+      for (const cell of future) {
+        if ((coverageThrough === null && cell.month !== currentMonth) || cell.state !== "contracted") break;
+        const expected = coverageThrough === null ? currentMonth :
+          new Date(Date.UTC(Number(coverageThrough.slice(0, 4)), Number(coverageThrough.slice(5, 7)), 1)).toISOString().slice(0, 7);
+        if (cell.month !== expected) break;
+        coverageThrough = cell.month;
+      }
+      const id = `${group.name.toLowerCase()}-${sourceColumn}`;
+      const origin = laneOrigins.get(id);
+      return {
+        id, sourceColumn,
+        label: coverageText(source?.origin, 160) || "Origin unavailable",
+        rateLabel: coverageText(source?.rateLabel, 256),
+        coffee: origin?.name ?? null,
+        stockDepletionMonth: monthKey(origin?.depletionMonth) ? origin.depletionMonth : null,
+        coverageThrough,
+        firstGapMonth: future.find(cell => cell.state === "gap")?.month ?? null,
+        cells,
+      };
+    }),
+  }));
+
+  const uses = new Map();
+  const originNames = new Map();
+  const addUse = (coffee, label, percent) => {
+    const id = key(coffee);
+    const entries = uses.get(id) ?? new Map();
+    const previous = entries.get(label);
+    entries.set(label, previous == null || percent == null ? percent : round(previous + percent));
+    uses.set(id, entries);
+    originNames.set(id, coffee);
+  };
+  for (const label of signatureNames) {
+    const recipe = (prices.highlights ?? []).find(item => key(item.name) === key(label));
+    for (const component of recipe?.components ?? []) {
+      const coffee = component.coffee ?? component.name;
+      if (typeof coffee !== "string" || !coffee.trim() || !Number.isFinite(component.percent) || component.percent <= 0 || component.percent > 100) continue;
+      addUse(coffee, label, component.percent);
+    }
+  }
+  const decaf = [...observed.values()].filter(origin => /decaf/i.test(origin.name));
+  for (const origin of decaf) addUse(origin.name, "Decaf", null);
+  const origins = [...uses].map(([id, blendUses]) => {
+    const origin = observed.get(id);
+    return {
+      name: origin?.name ?? originNames.get(id),
+      kg: knownQuantity(origin?.kg), avgMonthlyKg: knownQuantity(origin?.avgMonthlyKg),
+      lastMonthKg: knownQuantity(origin?.lastMonthKg),
+      depletionMonth: monthKey(origin?.depletionMonth) ? origin.depletionMonth : null,
+      locations: (Array.isArray(origin?.locations) ? origin.locations : []).filter(location =>
+        object(location) && typeof location.name === "string" && knownQuantity(location.kg) !== null)
+        .map(location => ({ name: location.name, kg: location.kg })),
+      usedFor: [...blendUses].map(([name, percent]) => ({ name, percent })),
+    };
+  }).sort((left, right) => left.name.localeCompare(right.name, "en-AU"));
+  const status = ["live", "partial"].includes(contracts.status) ? contracts.status : "unavailable";
+  return {
+    status, asOf: contracts.asOf ?? null, sourceUrl: contracts.sourceUrl ?? null,
+    sourceUpdatedLabel: coverageText(contracts.sourceUpdatedLabel, 160),
+    note: coverageText(contracts.note) || "The CONTRACTS planning calendar is unavailable. Unknown months are left unconfirmed.",
+    years, currentYear, currentMonth, groups, origins,
+    originNote: "Observed green use is reported once per actual Cropster coffee across all recorded locations, not allocated to blends. Recipe percentages describe use; shared Brazil also serves other coffees. Stock-only finish estimates exclude future contracts. All recorded coffees explicitly named Decaf or Decaffeinated are shown separately; their recipe shares are not recorded and the contract plan does not allocate their use.",
+  };
+}
+
 export function labReport(data = {}, today = sydneyDate()) {
   const stock = groupStock(data.inventory);
   const prices = priceReport(stock, data.recipes, data.loss);
@@ -248,6 +391,26 @@ export function labReport(data = {}, today = sydneyDate()) {
     coffees: new Map((month?.rows ?? []).map(coffee => [key(coffee.name), coffee.kg])),
   }));
   const stockAsOf = data.inventory?.asOf ?? null;
+  const originNames = new Map([...stock].map(([id, coffee]) => [id, coffee.name]));
+  for (const month of months) for (const coffee of month?.rows ?? []) {
+    if (!originNames.has(key(coffee.name))) originNames.set(key(coffee.name), coffee.name);
+  }
+  const recordedStock = new Set((data.inventory?.rows ?? []).map(coffee => key(coffee.name)));
+  const lastMonthUse = monthlyUse.at(-1);
+  const origins = [...originNames].map(([id, name]) => {
+    const coffee = stock.get(id);
+    const total = totalIfKnown(monthlyUse.map(month => month.coffees.get(id) ?? (month.complete ? 0 : null)));
+    const monthlyKg = total === null ? null : total / 3;
+    const avgMonthlyKg = monthlyKg === null ? null : round(monthlyKg);
+    const kg = recordedStock.has(id) ? round(coffee.kg) : null;
+    return {
+      name, kg, avgMonthlyKg,
+      lastMonthKg: lastMonthUse.coffees.get(id) ?? (lastMonthUse.complete ? 0 : null),
+      depletionMonth: stockAsOf && kg !== null && monthlyKg !== null ? forecastMonth(stockAsOf, coffee.kg, monthlyKg) : null,
+      locations: [...(coffee?.locations ?? [])].filter(([, kg]) => kg > 0).sort(([left], [right]) => left.localeCompare(right, "en-AU"))
+        .map(([name, kg]) => ({ name, kg: round(kg) })),
+    };
+  }).sort((left, right) => left.name.localeCompare(right.name, "en-AU"));
   const forecasts = [...stock.values()].filter(coffee => coffee.kg > 0).map(coffee => {
     const total = totalIfKnown(monthlyUse.map(month => month.coffees.get(key(coffee.name)) ?? (month.complete ? 0 : null)));
     const monthlyKg = total === null ? null : total / 3;
@@ -271,6 +434,7 @@ export function labReport(data = {}, today = sydneyDate()) {
       stockAsOf,
       stockTotalKg: data.inventory?.totalKg ?? (stockAsOf && stock.size > 0 ? round(sum([...stock.values()].map(coffee => coffee.kg))) : null),
       forecasts,
+      origins,
       note: sumKg === null ? "Three completed Cropster months are needed for the average." :
         sumBags === null ? "Bag counts need recorded bag sizes or counts from Cropster." : "",
       forecastNote: "Estimated from the last three completed months and all recorded locations. Assumes the same use and no incoming deliveries. New coffees with no recorded use have no projected finish month.",

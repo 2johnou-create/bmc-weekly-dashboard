@@ -24,7 +24,7 @@ export const roasteryLabPage = String.raw`<!doctype html>
     * { box-sizing: border-box; }
     [hidden] { display: none !important; }
     body, h1, h2, h3, p { margin: 0; }
-    button, input, textarea { font: inherit; }
+    button, input, textarea, select { font: inherit; }
     button { cursor: pointer; }
     button:disabled { opacity: .56; cursor: default; }
     a { color: inherit; text-underline-offset: .2em; }
@@ -50,6 +50,7 @@ export const roasteryLabPage = String.raw`<!doctype html>
     .card { min-width: 0; background: var(--paper); border: 1px solid var(--line); border-radius: .55rem; }
     .prices { border-top: 4px solid var(--accent); }
     .consumption { border: 1px solid var(--green); border-top-width: 4px; background: var(--green); color: white; }
+    .consumption[open] { grid-column: 1 / -1; }
     .card summary { cursor: pointer; }
     .card > summary { display: block; padding: clamp(.9rem, 1.75vw, 1.5rem); border-radius: inherit; }
     .card > summary::marker { content: ""; }
@@ -99,6 +100,46 @@ export const roasteryLabPage = String.raw`<!doctype html>
     .by-coffee summary { width: fit-content; font-weight: 700; }
     .location-list { font-size: .76rem; font-weight: 400; list-style: none; padding: 0; margin: .35rem 0 0; }
     .location-list li + li { margin-top: .25rem; }
+    .coverage-controls { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:.5rem 1rem; margin-bottom:.7rem; }
+    .coverage-controls h2 { margin:0; }
+    .coverage-controls label { display:flex; align-items:center; gap:.5rem; font-size:.875rem; font-weight:700; }
+    .coverage-controls select { min-height:2.7rem; padding:.35rem .6rem; border:1px solid var(--line); border-radius:.3rem; background:var(--paper); color:var(--ink); }
+    .coverage-legend { display:flex; flex-wrap:wrap; gap:.35rem 1rem; font-size:.875rem; margin-bottom:.6rem; color:var(--muted); }
+    .coverage-legend span { display:inline-flex; align-items:center; gap:.35rem; }
+    .coverage-key { width:.85rem; height:.85rem; display:inline-block; border:1px solid rgb(0 0 0 / .15); }
+    .contracted { background:#d6e9d1; color:#254d31; }
+    .gap { background:#f5d1cc; color:#832c28; }
+    .unknown { background:#e7eae6; color:#526059; }
+    .coverage-key.stock-runout-key { background:#f7e2ac; border:2px solid #8b6018; }
+    .coverage-scroll { overflow:auto; max-height:44rem; border:1px solid var(--line); border-radius:.3rem; scrollbar-width:thin; }
+    .coverage-scroll:focus-visible { outline-offset:2px; }
+    .coverage-matrix { width:100%; min-width:1080px; table-layout:fixed; border-collapse:separate; border-spacing:0; font-size:.875rem; line-height:1.3; }
+    .coverage-matrix th,.coverage-matrix td { padding:.4rem .5rem; border-inline-end:1px solid #b8c4b5; border-bottom:1px solid #b8c4b5; vertical-align:top; text-align:left; }
+    .coverage-matrix thead th { position:sticky; z-index:3; background:#f1f4ed; color:var(--green); }
+    .coverage-matrix .coverage-group th { top:0; height:2.6rem; vertical-align:middle; font-size:1rem; font-weight:750; border-bottom:2px solid #8c9d89; }
+    .coverage-matrix .coverage-origins th { top:2.6rem; font-weight:700; overflow-wrap:anywhere; }
+    .coverage-matrix .month-corner { left:0; z-index:5; width:6.7rem; }
+    .coverage-matrix tbody th { position:sticky; left:0; z-index:2; background:#fafbf7; font-weight:700; }
+    .coverage-matrix .group-end { border-inline-end:3px solid #8c9d89; }
+    .coverage-rate { display:block; font-size:.875rem; font-weight:450; color:var(--muted); margin-top:.15rem; }
+    .coverage-current > th { background:#fff0c8; box-shadow:inset 3px 0 #a5282c; }
+    .coverage-current > th small { display:block; font-size:.75rem; font-weight:650; }
+    .coverage-matrix td { padding:.1rem; }
+    .coverage-cell summary { min-height:2rem; padding:.2rem .25rem; cursor:pointer; display:block; overflow-wrap:anywhere; }
+    .coverage-matrix td.stock-runout { box-shadow:inset 0 0 0 2px #8b6018; }
+    .stock-runout .coverage-cell summary { position:relative; padding-inline-end:4.1rem; }
+    .coverage-cell summary .stock-runout-badge { position:absolute; inset-inline-end:.2rem; top:50%; transform:translateY(-50%); display:block; padding:.08rem .2rem; border:1px solid #8b6018; border-radius:.2rem; background:#f7e2ac; color:#603f09; font-size:.875rem; line-height:1.2; font-weight:700; white-space:nowrap; }
+    .coverage-cell summary::-webkit-details-marker { display:none; }
+    .coverage-cell summary::marker { content:""; }
+    .coverage-cell summary span { display:-webkit-box; -webkit-line-clamp:1; -webkit-box-orient:vertical; overflow:hidden; }
+    .coverage-cell p { padding:.2rem .25rem; font-size:.8rem; white-space:pre-wrap; overflow-wrap:anywhere; }
+    .origin-scroll { overflow:auto; margin-top:.55rem; }
+    .origin-table { min-width:840px; font-size:.875rem; }
+    .origin-table td { white-space:normal; }
+    .origin-table th:first-child { width:22%; }
+    .origin-table td:nth-child(4) { text-align:left; width:23%; }
+    .origin-table thead th:nth-child(4) { text-align:left; }
+    .sr-only { position:absolute; width:1px; height:1px; margin:-1px; padding:0; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
     .release-fields { display: grid; gap: .7rem; }
     .release-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(7.8rem, .6fr) auto; align-items: end; gap: .35rem .5rem; }
     .release-row label, .form-label { display: grid; gap: .25rem; font-size: .83rem; font-weight: 700; }
@@ -271,15 +312,33 @@ export const roasteryLabPage = String.raw`<!doctype html>
                 </table>
               </details>
             </section>
-            <section>
-              <h2>Stock runout forecast</h2>
+            <section aria-labelledby="coverageTitle">
+              <div class="coverage-controls"><h2 id="coverageTitle">Green coffee contract calendar</h2><label for="coverageYear">Year <select id="coverageYear" disabled></select></label></div>
+              <div class="coverage-legend"><span><i class="coverage-key contracted" aria-hidden="true"></i>✓ Contracted</span><span><i class="coverage-key gap" aria-hidden="true"></i>Gap · uncontracted</span><span><i class="coverage-key unknown" aria-hidden="true"></i>? Unknown</span><span><i class="coverage-key stock-runout-key" aria-hidden="true"></i>Stock-only runout</span></div>
+              <p id="coverageStatus" class="note" hidden></p>
+              <p id="coverageEmpty" class="note" hidden>Contract coverage is unavailable.</p>
+              <div id="coverageScroll" class="coverage-scroll" role="region" aria-label="Yearly contract calendar. Scroll to view all coffee lanes." tabindex="0" hidden>
+                <table id="coverageMatrix" class="coverage-matrix" aria-labelledby="coverageTitle">
+                  <thead id="coverageHeaders"></thead><tbody id="coverageMonths"></tbody>
+                </table>
+              </div>
+              <p class="note">Shared plan lanes repeat across blends. Actual coffee figures below list each origin once.</p>
+              <p id="coverageSource" class="note" hidden></p>
+              <p id="coverageNote" class="note" hidden></p>
+              <a id="coverageLink" class="cropster-link" target="_blank" rel="noopener noreferrer" hidden>Open contract plan</a>
+            </section>
+            <section aria-labelledby="originsTitle">
+              <h2 id="originsTitle">Actual use and stock by coffee</h2>
               <p id="stockAsOf" class="note"></p>
-              <p id="forecastNote" class="note" hidden></p>
-              <p id="forecastEmpty" class="note" hidden>No green coffee stock is recorded for the forecast.</p>
-              <table id="forecastTable" class="table" aria-label="Stock runout forecast by coffee">
-                <thead><tr><th scope="col">Coffee</th><th scope="col">Stock kg</th><th scope="col">Avg kg / mo</th><th scope="col">Runout</th></tr></thead>
-                <tbody id="forecastRows"></tbody>
-              </table>
+              <p class="note">Stock-only runout uses current holding and each coffee’s average monthly use.</p>
+              <p id="originNote" class="note" hidden></p>
+              <p id="originsEmpty" class="note" hidden>Actual coffee consumption and stock figures are unavailable.</p>
+              <div id="originsScroll" class="origin-scroll" role="region" aria-label="Actual coffee use, recipe shares and stock-only runout. Scroll horizontally for all columns." tabindex="0" hidden>
+                <table class="table origin-table" aria-labelledby="originsTitle">
+                  <thead><tr><th scope="col">Coffee · all locations</th><th id="originAverageLabel" scope="col">3-month avg kg</th><th id="originLastMonthLabel" scope="col">Last month kg</th><th scope="col">Used for · recipe share</th><th scope="col">Stock kg</th><th scope="col">Stock-only runout</th></tr></thead>
+                  <tbody id="originRows"></tbody>
+                </table>
+              </div>
             </section>
           </div>
         </details>
@@ -429,6 +488,7 @@ export const roasteryLabPage = String.raw`<!doctype html>
     let releaseSequence = 0;
     let priceVersion;
     let consumptionVersion;
+    let coverageData = null, coverageYear = null;
     let purchases;
     let purchaseRenderDay;
     let purchaseMonth = todaySydney().slice(0, 7);
@@ -701,10 +761,127 @@ export const roasteryLabPage = String.raw`<!doctype html>
       locations.append(node('summary', row.name), list);
       return locations;
     }
+    function renderCoverageCalendar() {
+      const groups = (coverageData?.groups || []).filter(group => Array.isArray(group.columns) && group.columns.length);
+      const columns = groups.flatMap(group => group.columns.map(column => ({ ...column, group: group.name })));
+      const available = Number.isInteger(coverageYear) && columns.length > 0;
+      el('coverageScroll').hidden = !available;
+      el('coverageEmpty').hidden = available;
+      if (!available) {
+        el('coverageHeaders').replaceChildren();
+        el('coverageMonths').replaceChildren();
+        return;
+      }
+      const left = el('coverageScroll').scrollLeft, top = el('coverageScroll').scrollTop;
+      const open = new Set([...el('coverageMonths').querySelectorAll('details[open]')].map(item => item.dataset.coverageKey));
+      const focused = document.activeElement?.closest('.coverage-cell')?.dataset.coverageKey;
+      const groupRow = node('tr', undefined, 'coverage-group');
+      const monthHeader = node('th', 'Month', 'month-corner');
+      monthHeader.scope = 'col'; monthHeader.rowSpan = 2;
+      groupRow.append(monthHeader);
+      const originRow = node('tr', undefined, 'coverage-origins');
+      for (const group of groups) {
+        const header = node('th', group.name, 'group-end');
+        header.scope = 'colgroup'; header.colSpan = group.columns.length;
+        groupRow.append(header);
+        group.columns.forEach((column, index) => {
+          const last = index === group.columns.length - 1;
+          const fullLabel = column.label || 'Origin unavailable';
+          const shortLabel = fullLabel.replace(/\s*\([^)]*\)/g, '').trim() || fullLabel;
+          const origin = node('th', shortLabel, last ? 'group-end' : '');
+          origin.scope = 'col';
+          origin.title = [fullLabel, column.rateLabel, column.stockDepletionMonth && 'Stock-only runout ' + (monthText(column.stockDepletionMonth) || column.stockDepletionMonth), column.sourceColumn && 'Source column ' + column.sourceColumn].filter(Boolean).join(' · ');
+          if (column.coverageThrough) origin.append(node('span', 'Through ' + (monthText(column.coverageThrough) || column.coverageThrough), 'coverage-rate'));
+          if (column.firstGapMonth) origin.append(node('span', 'Gap ' + (monthText(column.firstGapMonth) || column.firstGapMonth), 'coverage-rate'));
+          originRow.append(origin);
+        });
+      }
+      const rows = [];
+      for (let index = 1; index <= 12; index++) {
+        const month = coverageYear + '-' + String(index).padStart(2, '0');
+        const current = month === coverageData.currentMonth;
+        const row = node('tr', undefined, current ? 'coverage-current' : '');
+        const label = new Intl.DateTimeFormat('en-AU', { timeZone: 'UTC', month: 'short' }).format(new Date(month + '-01T12:00:00Z'));
+        const header = node('th', label);
+        header.scope = 'row';
+        if (current) { header.append(node('small', 'Current')); header.setAttribute('aria-current', 'date'); }
+        row.append(header);
+        for (const group of groups) group.columns.forEach((column, columnIndex) => {
+          const cell = column.cells?.find(cell => cell.month === month);
+          const state = ['contracted', 'gap'].includes(cell?.state) ? cell.state : 'unknown';
+          const stateLabel = state === 'contracted' ? 'Contracted' : state === 'gap' ? 'Uncontracted gap' : 'Unknown coverage';
+          const stockRunout = month === column.stockDepletionMonth;
+          const prefix = state === 'contracted' ? '✓ ' : state === 'gap' ? 'Gap · ' : '? ';
+          const display = cell?.text?.trim() || (state === 'contracted' ? 'Contracted' : state === 'gap' ? 'No contract' : 'Unknown');
+          const td = node('td', undefined, state + (stockRunout ? ' stock-runout' : '') + (columnIndex === group.columns.length - 1 ? ' group-end' : ''));
+          const details = node('details', undefined, 'coverage-cell');
+          details.dataset.coverageKey = column.id + '-' + month;
+          details.open = open.has(details.dataset.coverageKey);
+          const summary = node('summary');
+          summary.append(node('span', prefix + display));
+          if (stockRunout) {
+            const badge = node('span', 'Runout', 'stock-runout-badge');
+            badge.setAttribute('aria-hidden', 'true');
+            summary.append(badge);
+          }
+          summary.setAttribute('aria-label', label + ' ' + coverageYear + ', ' + group.name + ', ' + (column.label || 'Origin unavailable') + '. ' + stateLabel + '. ' + (stockRunout ? 'Stock-only runout. ' : '') + display);
+          summary.title = stateLabel + ' · ' + display + (stockRunout ? ' · Stock-only runout' : '');
+          details.append(summary, node('p', stateLabel), node('p', cell?.text || 'No further plan details are recorded.'));
+          details.append(node('p', 'Plan origin · ' + (column.label || 'Origin unavailable')));
+          if (column.rateLabel) details.append(node('p', 'Plan rate · ' + column.rateLabel));
+          if (column.coffee) details.append(node('p', 'Current recipe coffee · ' + column.coffee));
+          if (column.stockDepletionMonth) details.append(node('p', 'Stock-only runout · ' + (monthText(column.stockDepletionMonth) || column.stockDepletionMonth) + '. Current stock uses the three-month average consumption. Future contracts are excluded from this estimate.'));
+          if (cell?.sourceCell) details.append(node('p', 'Source cell ' + cell.sourceCell));
+          td.append(details); row.append(td);
+        });
+        rows.push(row);
+      }
+      el('coverageHeaders').replaceChildren(groupRow, originRow);
+      el('coverageMonths').replaceChildren(...rows);
+      el('coverageScroll').scrollLeft = left;
+      el('coverageScroll').scrollTop = top;
+      if (focused) [...el('coverageMonths').querySelectorAll('.coverage-cell')].find(item => item.dataset.coverageKey === focused)?.querySelector('summary')?.focus({ preventScroll: true });
+    }
+    function renderCoverage(coverage, consumption) {
+      coverageData = coverage || {};
+      const years = [...new Set((coverageData.years || []).filter(Number.isInteger))].sort((a, b) => a - b);
+      if (!years.includes(coverageYear)) coverageYear = years.includes(coverageData.currentYear) ? coverageData.currentYear : years.at(0) ?? null;
+      const year = el('coverageYear');
+      const options = [...year.options].map(option => Number(option.value));
+      if (options.join(',') !== years.join(',')) {
+        year.replaceChildren(...years.map(value => {
+          const option = node('option', String(value)); option.value = String(value); return option;
+        }));
+      }
+      year.disabled = !years.length;
+      year.value = coverageYear === null ? '' : String(coverageYear);
+      renderCoverageCalendar();
+      el('coverageStatus').textContent = coverageData.status === 'unavailable' ? 'Contract plan unavailable. Missing coverage appears in grey.'
+        : coverageData.status === 'partial' ? 'Partial coverage · check the source notes.' : '';
+      el('coverageStatus').hidden = !el('coverageStatus').textContent;
+      const timestamp = dateText(coverageData.asOf, timeFormat);
+      el('coverageSource').textContent = [coverageData.sourceUpdatedLabel, timestamp && 'Plan read ' + timestamp + ' Sydney time'].filter(Boolean).join(' · ');
+      el('coverageSource').hidden = !el('coverageSource').textContent;
+      el('coverageNote').textContent = coverageData.note || '';
+      el('coverageNote').hidden = !coverageData.note;
+      safeSourceLink('coverageLink', coverageData.sourceUrl);
+      const open = openItems(el('originRows'));
+      const origins = Array.isArray(coverageData.origins) ? coverageData.origins : [];
+      el('originRows').replaceChildren(...origins.map(origin => {
+        const uses = (origin.usedFor || []).map(use => use.name + (Number.isFinite(use.percent) ? ' ' + percent(use.percent) : '')).join(' · ') || 'Recipe link unavailable';
+        return makeTableRow(forecastName(origin, open), format(origin.avgMonthlyKg), format(origin.lastMonthKg), uses, format(origin.kg), monthText(origin.depletionMonth) || missing);
+      }));
+      el('originsScroll').hidden = !origins.length;
+      el('originsEmpty').hidden = Boolean(origins.length);
+      el('originNote').textContent = coverageData.originNote || '';
+      el('originNote').hidden = !coverageData.originNote;
+      const months = consumption.months || [];
+      const last = monthText(months.at(-1)?.month);
+      el('originLastMonthLabel').textContent = last ? last + ' kg' : 'Last month kg';
+      el('originAverageLabel').textContent = '3-month avg kg';
+    }
     function renderConsumption(consumption = {}) {
       const months = consumption.months || [];
-      const forecast = consumption.forecasts || [];
-      const open = openItems(el('forecastRows'));
       numberWithUnit('avgKg', consumption.averageKg, 'kg');
       numberWithUnit('avgBags', consumption.averageBags, 'bags');
       const first = monthText(months.at(0)?.month);
@@ -727,14 +904,8 @@ export const roasteryLabPage = String.raw`<!doctype html>
       const inventoryDate = dateText(consumption.stockAsOf);
       const total = Number.isFinite(consumption.stockTotalKg) ? withUnit(consumption.stockTotalKg, 'kg') + ' across all locations. ' : '';
       el('stockAsOf').textContent = total + (inventoryDate
-        ? 'Inventory as of ' + inventoryDate + '. Estimates use the three-month average for each coffee.'
-        : 'Estimates use stock from all green coffee locations and each coffee’s three-month average.');
-      el('forecastNote').textContent = consumption.forecastNote || '';
-      el('forecastNote').hidden = !consumption.forecastNote;
-      el('forecastRows').replaceChildren(...forecast.map(row =>
-        makeTableRow(forecastName(row, open), format(row.kg), format(row.avgMonthlyKg), monthText(row.depletionMonth) || missing)));
-      el('forecastTable').hidden = !forecast.length;
-      el('forecastEmpty').hidden = Boolean(forecast.length);
+        ? 'Inventory as of ' + inventoryDate + '.' : 'Stock readings cover all green coffee locations.');
+      renderCoverage(consumption.coverage, consumption);
     }
 
     function releaseLabel(release) {
@@ -899,6 +1070,8 @@ export const roasteryLabPage = String.raw`<!doctype html>
       conflictPending = false;
       priceVersion = undefined;
       consumptionVersion = undefined;
+      coverageData = null;
+      coverageYear = null;
       purchases = undefined;
       purchaseRenderDay = undefined;
       purchaseMonth = todaySydney().slice(0, 7);
@@ -906,10 +1079,13 @@ export const roasteryLabPage = String.raw`<!doctype html>
       dirty.clear();
       setBusy(false);
       el('board').hidden = true;
-      for (const id of ['blendHighlights', 'blendDetails', 'otherPriceRows', 'monthRows', 'lastMonthRows', 'forecastRows', 'releaseRows', 'latestReleases', 'purchaseDays', 'selectedPurchases', 'upcomingPurchases', 'purchaseTotalRows']) el(id).replaceChildren();
-      for (const id of ['releasePreview', 'qaPreview', 'latestQa', 'stockAsOf', 'forecastNote', 'sourceNote', 'status', 'consumptionNote', 'lastMonthTitle', 'consumptionWindow', 'priceDates', 'lossNote', 'coffeeCChange', 'coffeeCContract', 'coffeeCTiming', 'coffeeCAsOf', 'coffeeCNote', 'purchasePreview', 'purchaseNote', 'purchaseAsOf', 'purchaseMonth', 'selectedPurchaseDate', 'selectedPurchaseEmpty', 'upcomingPurchaseEmpty']) el(id).textContent = '';
+      for (const id of ['blendHighlights', 'blendDetails', 'otherPriceRows', 'monthRows', 'lastMonthRows', 'originRows', 'coverageHeaders', 'coverageMonths', 'coverageYear', 'releaseRows', 'latestReleases', 'purchaseDays', 'selectedPurchases', 'upcomingPurchases', 'purchaseTotalRows']) el(id).replaceChildren();
+      for (const id of ['releasePreview', 'qaPreview', 'latestQa', 'stockAsOf', 'coverageStatus', 'coverageSource', 'coverageNote', 'originNote', 'originAverageLabel', 'originLastMonthLabel', 'sourceNote', 'status', 'consumptionNote', 'lastMonthTitle', 'consumptionWindow', 'priceDates', 'lossNote', 'coffeeCChange', 'coffeeCContract', 'coffeeCTiming', 'coffeeCAsOf', 'coffeeCNote', 'purchasePreview', 'purchaseNote', 'purchaseAsOf', 'purchaseMonth', 'selectedPurchaseDate', 'selectedPurchaseEmpty', 'upcomingPurchaseEmpty']) el(id).textContent = '';
       for (const id of ['avgKg', 'avgBags', 'coffeeCPrice']) el(id).textContent = missing;
-      for (const id of ['coffeeCSource', 'purchaseSource']) safeSourceLink(id, undefined);
+      for (const id of ['coffeeCSource', 'purchaseSource', 'coverageLink']) safeSourceLink(id, undefined);
+      el('coverageYear').disabled = true;
+      el('coverageScroll').hidden = true;
+      el('originsScroll').hidden = true;
       for (const id of ['qa', 'cropsterInput', 'password']) el(id).value = '';
       settingsMessage('');
       message('cropsterMessage', '');
@@ -958,6 +1134,12 @@ export const roasteryLabPage = String.raw`<!doctype html>
       if (el('releaseRows').childElementCount >= maximumReleases) return;
       addRelease().focus();
       editSettings('releases');
+    });
+    el('coverageYear').addEventListener('change', event => {
+      const year = Number(event.target.value);
+      if (!coverageData?.years?.includes(year)) return;
+      coverageYear = year;
+      renderCoverageCalendar();
     });
     el('purchasePrevious').addEventListener('click', () => changePurchaseMonth(-1));
     el('purchaseNext').addEventListener('click', () => changePurchaseMonth(1));

@@ -4,7 +4,7 @@ import { roasteryLabPage } from "./roastery-lab-ui.js";
 import { warehousePage } from "./warehouse-ui.js";
 import { collectWarehouse } from "./warehouse-report.js";
 import { collectWeeklyReport, readDispatchStatus } from "./weekly-report.js";
-import { collectDashboard, dashboardWeek, fetchSourceJson, SOURCE_ORIGINS } from "./metrics.js";
+import { collectDashboard, dashboardWeek, fetchSourceJson, SOURCE_ORIGINS, sydneyDate } from "./metrics.js";
 import { saveCropsterGreenStock, saveCropsterReading } from "./cropster.js";
 import { saveCropsterFriday } from "./cropster-friday.js";
 import { brandLogo } from "./brand-logo.js";
@@ -13,7 +13,7 @@ import { readWeeklyDemand } from "./demand.js";
 import { HttpError, readSession, signIn, signOut, clearCookie, requireOrigin } from "./auth.js";
 import { listIssues, createIssue, updateIssue, issuesMetric } from "./issues.js";
 import { readWeeklyNote, saveWeeklyNote } from "./weekly-note.js";
-import { readRoasteryLab, saveLabCropster } from "./roastery-lab.js";
+import { readRoasteryLab, saveLabCropster, mergeGreenCoverage } from "./roastery-lab.js";
 import { saveLabSettings } from "./roastery-lab-settings.js";
 import { readCoffeeC } from "./coffee-c.js";
 import { readPurchases } from "./purchases.js";
@@ -63,10 +63,15 @@ async function activeSession(request, env) {
   return session;
 }
 async function roasteryReport(env, { fresh = false } = {}) {
+  const now = new Date();
   const [data, coffeeC, purchases] = await Promise.all([
-    readRoasteryLab(env.DB), readCoffeeC({ fresh }), readPurchases({ fresh }),
+    readRoasteryLab(env.DB, now), readCoffeeC({ now, fresh }), readPurchases({ now, fresh }),
   ]);
-  return { ...data, coffeeC, purchases, generatedAt: new Date().toISOString() };
+  return {
+    ...data,
+    consumption: { ...data.consumption, coverage: mergeGreenCoverage(data.consumption, data.prices, purchases.contracts, sydneyDate(now)) },
+    coffeeC, purchases, generatedAt: now.toISOString(),
+  };
 }
 function notesUnavailable() { return { status: "unavailable", source: "Entered issue notes", asOf: null, note: "Customer issue notes could not be loaded. Please try again.", count: null, items: [] }; }
 function onlineUnavailable() { return { status: "unavailable", source: "Online orders folder", asOf: null, note: "The online orders folder could not be read. Please try again.", orders: null, value: null, currency: "AUD", url: ONLINE_ORDERS_FOLDER_URL }; }

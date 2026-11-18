@@ -1,6 +1,6 @@
 import { collectWeeklyReport } from "./weekly-report.js";
 import { fetchSourceJson, mapPacking, SOURCE_ORIGINS, sydneyDate } from "./metrics.js";
-import { labReport, readRoasteryLab } from "./roastery-lab.js";
+import { labReport, readRoasteryLab, mergeGreenCoverage } from "./roastery-lab.js";
 import { readCoffeeC } from "./coffee-c.js";
 import { PURCHASE_SOURCE_URL, PURCHASE_SHEET, readPurchases } from "./purchases.js";
 import { readWeeklyNote } from "./weekly-note.js";
@@ -39,21 +39,24 @@ export async function collectWarehouse({ env = {}, stockroomCookie, now = new Da
     readWeeklyNote(env.DB, weekStart),
     readWarehouseWeather({ now, fetcher, fresh }),
   ]);
+  const labData = settled(lab, labUnavailable(now));
+  const purchaseData = settled(purchases, {
+    status: "unavailable", events: [], asOf: null, sheetName: PURCHASE_SHEET, sourceUrl: PURCHASE_SOURCE_URL,
+    note: "The ORDER PLAN purchase calendar could not be loaded. Try refreshing.",
+  });
 
   return {
     weekly,
     john: deriveJohnStatus(weekly),
     lab: {
-      ...settled(lab, labUnavailable(now)),
+      ...labData,
+      consumption: { ...labData.consumption, coverage: mergeGreenCoverage(labData.consumption, labData.prices, purchaseData.contracts, sydneyDate(now)) },
       coffeeC: settled(coffeeC, {
         status: "unavailable", price: null, currency: "USD", unit: "US¢/lb", asOf: null,
         contract: null, delayMinutes: 15, marketStatus: "unknown", change: null, changePercent: null,
         sourceUrl: "https://www.ice.com/products/15/Coffee-C-Futures/data", note: "The delayed ICE Coffee C quote could not be loaded. Try refreshing.",
       }),
-      purchases: settled(purchases, {
-        status: "unavailable", events: [], asOf: null, sheetName: PURCHASE_SHEET, sourceUrl: PURCHASE_SOURCE_URL,
-        note: "The ORDER PLAN purchase calendar could not be loaded. Try refreshing.",
-      }),
+      purchases: purchaseData,
     },
     packing: settled(packing, {
       status: "unavailable", source: "stockroom", asOf: null, kgPerHour: null, kgPerDay: null,
