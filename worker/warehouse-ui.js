@@ -97,6 +97,12 @@ export const warehousePage = String.raw`<!doctype html>
     .pin-label { display:block; font:inherit; }
     .pin-value,.pin-extra { display:block; margin-top:1px; font-size:.75rem; font-weight:550; line-height:1.22; font-variant-numeric:tabular-nums; }
     .pin-extra { color:#5d6e62; font-size:.75rem; }
+    .pin > span { min-width:0; overflow:hidden; }
+    .pin-value,.pin-extra { overflow:hidden; text-overflow:ellipsis; }
+    .client-completions { list-style:none; padding:0; margin:.55rem 0; font-size:.875rem; }
+    .client-completions li { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:.4rem; border-bottom:1px solid var(--line); padding-block:.45rem; }
+    .client-completions strong { overflow-wrap:anywhere; font-weight:650; }
+    .client-completions time { font-size:.75rem; color:var(--muted); text-align:right; }
     .pin::before { content:''; width:5px; height:5px; border-radius:50%; background:var(--red); flex:none; }
     .pin[aria-pressed=true] { border-color:var(--green); color:white; background:var(--green); }
     .pin[aria-pressed=true]::before { background:#f2d5ac; }
@@ -251,7 +257,7 @@ export const warehousePage = String.raw`<!doctype html>
       </div>
       <aside class="detail-panel" aria-labelledby="zoneTitle"><header class="panel-header"><h2 id="zoneTitle" tabindex="-1">Week at a glance</h2><p id="zoneSubtitle">The same figures as Steam Room and Roastery Lab.</p></header><div id="zoneDetails" class="panel-body"><p class="empty">Loading dashboard figures…</p></div></aside>
     </div>
-    <dl class="stat-strip"><div class="stat"><dt>Weekly demand</dt><dd id="statDemand">—</dd><p>Weekly roast tally</p></div><div class="stat"><dt>Roasted this week</dt><dd id="statRoasted">—</dd><p id="statRoastSource">Cropster</p></div><div class="stat"><dt>Delivery orders done</dt><dd id="statDispatch">—</dd><p id="statDispatchSource">Dispatch</p></div></dl>
+    <dl class="stat-strip"><div class="stat"><dt>Weekly demand</dt><dd id="statDemand">—</dd><p>Weekly roast tally</p></div><div class="stat"><dt>Roasted this week</dt><dd id="statRoasted">—</dd><p id="statRoastSource">Cropster</p></div><div class="stat"><dt>Clients with completed deliveries</dt><dd id="statDispatch">—</dd><p id="statDispatchSource">Dispatch</p></div></dl>
     <footer class="footer"><p>Sydney reporting week · AUD values · scene activity is illustrative</p><a href="/details">Operations details and issue notes</a></footer>
   </main>
   <noscript><p class="wrap loading">Enable JavaScript to sign in and read the warehouse dashboard.</p></noscript>
@@ -268,6 +274,7 @@ export const warehousePage = String.raw`<!doctype html>
     ];
     let signedIn = false, data = null, selected = "overview", scene = null, scenePromise = null, sceneFailed = false;
     let sessionGeneration = 0, activeRequest = null, pinsFrame = null, pinsTime = 0, sceneVisible = true;
+    let dispatchRequest = null, dispatchGeneration = 0, dispatchPollFailed = false;
     let weatherMinute = -1;
     let johnOpen = false, johnRect = null, johnCombo = 0, johnLastTap = 0, johnComboTimer = null, johnAnnounceTimer = null, johnRenderedWeek = null;
     let cheerPopIndex = 0, johnCoinReward = null;
@@ -501,12 +508,15 @@ export const warehousePage = String.raw`<!doctype html>
             ["Marrickville green stock", kg(green.kg)],
             ["Green stock value", money(green.value)],
             ["Non-coffee stock", money(stock.value)],
-            ["Wholesale orders done", num(wholesale.done)],
-            ["Pending " + (wholesale.provisional ? "(provisional)" : ""), num(wholesale.provisional ? wholesale.scheduledPendingOrders : wholesale.pending)]
+            ["Clients with completed deliveries", num(completedClientCount(wholesale))],
+            ["Scheduled orders done", num(wholesale.done)],
+            ["Pending orders " + (wholesale.provisional ? "(provisional)" : ""), num(wholesale.provisional ? wholesale.scheduledPendingOrders : wholesale.pending)]
           ]),
           source(production, "Cropster saved reading"),
           source(demand, "Weekly roast tally"),
           source(wholesale, "Dispatch"),
+          wholesale.completedClientsStatus === "partial" ? flag("Partial completed-client coverage") : null,
+          dispatchPollFailed ? flag("Dispatch check failed · showing the last read") : null,
           note("Choose a zone in the roastery or below the scene for its full figures and source notes.")
         ),
         weeklyNotes(),
@@ -606,13 +616,45 @@ export const warehousePage = String.raw`<!doctype html>
         )
       ];
     }
+    function completedClientCount(wholesale) {
+      return wholesale.completedClientsStatus !== "unavailable" && Number.isSafeInteger(wholesale.completedClientCount) && wholesale.completedClientCount >= 0 ? wholesale.completedClientCount : null;
+    }
+    function completedClients(wholesale) {
+      if (completedClientCount(wholesale) === null) return [];
+      return (Array.isArray(wholesale.completedClients) ? [...wholesale.completedClients] : [])
+        .sort((a, b) => (Date.parse(b.completedAt) || 0) - (Date.parse(a.completedAt) || 0));
+    }
+    function completedClientsSection(wholesale) {
+      const count = completedClientCount(wholesale), clients = completedClients(wholesale);
+      const list = node("ul", void 0, "client-completions");
+      for (const client of clients) {
+        const item = node("li");
+        const time = node("time", date(client.completedAt, true) || "—");
+        if (client.completedAt) time.dateTime = client.completedAt;
+        item.append(node("strong", client.name || "Client name unavailable"), time);
+        list.append(item);
+      }
+      const missing = count === null ? "Completed-client data is unavailable."
+        : count === 0 ? "No clients have completed deliveries in this period." : "Completed-client names are unavailable.";
+      return section("Clients with completed deliveries",
+        pair([["Completed clients", num(count)]]),
+        note("Actual full delivery handovers in " + weekLabel() + ", including orders carried over from earlier weeks. A client may still have other pending orders."),
+        clients.length ? list : empty(missing),
+        wholesale.completedClientsStatus === "partial" ? flag("Partial completed-client coverage") : null,
+        wholesale.completedClientsTruncated ? note("Showing the most recent completed clients.") : null,
+        source({ asOf: wholesale.asOf, status: wholesale.completedClientsStatus }, "Dispatch completed clients"),
+        note(wholesale.completedClientsNote),
+        note(dispatchPollFailed ? "Dispatch check failed. Showing the last loaded clients." : "Dispatch is checked every 15 seconds while this page is visible. Completion times are Sydney time.")
+      );
+    }
     function dispatchPanel() {
       const w = weeklyMetrics().wholesale || {};
       return [
+        completedClientsSection(w),
         section(
           "Wholesale delivery orders",
-          pair([["Done", num(w.done)], ["Pending", num(w.provisional ? w.scheduledPendingOrders : w.pending)]]),
-          metrics([["Scheduled total", num(w.provisional ? w.scheduledOrders : w.orders)], ["Completed deliveries", num(w.completed)]]),
+          pair([["Done orders", num(w.done)], ["Pending orders", num(w.provisional ? w.scheduledPendingOrders : w.pending)]]),
+          metrics([["Scheduled total", num(w.provisional ? w.scheduledOrders : w.orders)], ["Recorded handovers", num(w.completed)]]),
           w.provisional ? flag("Provisional · weekly import unconfirmed") : null,
           source(w, "Dispatch weekly schedule"),
           metricNote(w)
@@ -805,7 +847,9 @@ export const warehousePage = String.raw`<!doctype html>
         roasting: [kg(production.roastedKg) + " roasted", Number.isFinite(production.scheduledKg) ? "+ " + kg(production.scheduledKg) + " scheduled" : "Scheduled unavailable"],
         green: [green.location === "Marrickville" ? kg(green.kg) : "Reading unavailable"],
         packing: [Number.isFinite(packing.kgPerHour) ? num(packing.kgPerHour) + " kg/h" : Number.isFinite(packing.packedKg) ? kg(packing.packedKg) + " packed" : "Reading unavailable"],
-        dispatch: [num(wholesale.done) + " done · " + num(pending) + " pending" + (wholesale.provisional ? "*" : "")],
+        dispatch: [completedClientCount(wholesale) === null ? "Completed clients unavailable" : num(completedClientCount(wholesale)) + " clients completed" + (wholesale.completedClientsStatus === "partial" ? "*" : ""),
+          num(pending) + " pending orders" + (wholesale.provisional ? "*" : ""),
+          dispatchPollFailed ? "Last loaded Dispatch read" : wholesale.completedClientsStatus === "partial" ? "Partial client coverage" : completedClients(wholesale)[0]?.name || ""].filter(Boolean),
         lab: [signature ? signature.name + " " + money(signature.pricePerKg, true) + "/kg" : "Prices unavailable"],
         purchases: [next ? "Next " + nextDate : data?.lab?.purchases?.status === "unavailable" ? "Data unavailable" : "No planned orders"]
       };
@@ -815,7 +859,7 @@ export const warehousePage = String.raw`<!doctype html>
         const text = pin.firstElementChild;
         text.replaceChildren(node("span", zone.name, "pin-label"));
         const lines = data ? values[zone.id] : [];
-        lines.forEach((line, index) => text.append(node("span", line, index ? "pin-extra" : "pin-value")));
+        lines.forEach((line, index) => text.append(node("span", line, index === 0 || zone.id === "dispatch" && index === 1 ? "pin-value" : "pin-extra")));
         pin.setAttribute("aria-label", "View " + zone.name + " figures" + (lines.length ? ", " + lines.join(", ") : ""));
         pin.title = zone.name + (lines.length ? " · " + lines.join(" · ") : "");
       }
@@ -1250,6 +1294,8 @@ export const warehousePage = String.raw`<!doctype html>
     }
     function clearReport() {
       data = null;
+      stopDispatchPoll();
+      dispatchPollFailed = false;
       stopCheerSave();
       clearTimeout(johnComboTimer);
       clearTimeout(johnAnnounceTimer);
@@ -1303,10 +1349,10 @@ export const warehousePage = String.raw`<!doctype html>
       const { demand = {}, production = {}, wholesale = {} } = weeklyMetrics();
       el("statDemand").textContent = kg(demand.kg);
       el("statRoasted").textContent = kg(production.roastedKg);
-      el("statDispatch").textContent = num(wholesale.done);
+      dispatchPollFailed = false;
+      renderDispatchSummary();
       const cropsterDate = date(production.asOf, true);
       el("statRoastSource").textContent = cropsterDate ? "Cropster saved " + cropsterDate : "Cropster reading unavailable";
-      el("statDispatchSource").textContent = wholesale.provisional ? "Provisional weekly schedule" : "Dispatch";
       const timestamp = date(data.generatedAt, true);
       el("reportTime").replaceChildren(node("strong", weekLabel()), document.createTextNode(timestamp ? "Dashboard read " + timestamp + " Sydney time" : ""));
       renderPanel(true);
@@ -1320,11 +1366,59 @@ export const warehousePage = String.raw`<!doctype html>
       }
       positionPins();
     }
+    function renderDispatchSummary() {
+      const wholesale = weeklyMetrics().wholesale || {};
+      el("statDispatch").textContent = num(completedClientCount(wholesale));
+      const timestamp = date(wholesale.asOf, true);
+      el("statDispatchSource").textContent = dispatchPollFailed ? "Dispatch check failed · last loaded figures"
+        : "Dispatch" + (wholesale.completedClientsStatus === "partial" ? " · partial coverage" : "") + (timestamp ? " · " + timestamp + " Sydney time" : " · source time unavailable");
+    }
+    function stopDispatchPoll() {
+      dispatchGeneration++;
+      dispatchRequest?.abort();
+      dispatchRequest = null;
+    }
+    async function pollDispatch() {
+      const weekStart = data?.weekly?.week?.start;
+      if (!signedIn || document.hidden || activeRequest || dispatchRequest || !weekStart) return;
+      const report = data, generation = dispatchGeneration, session = sessionGeneration;
+      const controller = new AbortController();
+      dispatchRequest = controller;
+      const timeout = setTimeout(() => controller.abort(), 12000);
+      try {
+        const response = await fetch("/api/dispatch-status?week=" + encodeURIComponent(weekStart), { cache: "no-store", credentials: "same-origin", signal: controller.signal });
+        const result = await readJson(response);
+        if (dispatchRequest !== controller || generation !== dispatchGeneration || session !== sessionGeneration || !signedIn || activeRequest || data !== report) return;
+        if (response.status === 401) {
+          showSession(false);
+          setMessage("loginMessage", "Your session ended. Sign in again to read Dispatch.");
+          return;
+        }
+        if (!response.ok || result.weekStart !== weekStart || !result.wholesale) throw new Error("Dispatch could not be checked.");
+        data.weekly.metrics.wholesale = { ...data.weekly.metrics.wholesale, ...result.wholesale };
+        dispatchPollFailed = false;
+        renderDispatchSummary();
+        renderPinMetrics();
+        if (selected === "overview" || selected === "dispatch") renderPanel(true);
+        positionPins();
+      } catch {
+        if (dispatchRequest === controller && generation === dispatchGeneration && session === sessionGeneration && signedIn && data === report) {
+          dispatchPollFailed = true;
+          renderDispatchSummary();
+          renderPinMetrics();
+          if (selected === "overview" || selected === "dispatch") renderPanel(true);
+        }
+      } finally {
+        clearTimeout(timeout);
+        if (dispatchRequest === controller) dispatchRequest = null;
+      }
+    }
     async function readJson(response) {
       return response.json().catch(() => ({}));
     }
     async function load(manual = false, { fresh = manual } = {}) {
       if (!signedIn || activeRequest && !fresh) return;
+      stopDispatchPoll();
       activeRequest?.abort();
       const generation = sessionGeneration;
       const controller = new AbortController();
@@ -1442,6 +1536,7 @@ export const warehousePage = String.raw`<!doctype html>
     observer.observe(el("sceneStage"));
     document.addEventListener("visibilitychange", () => {
       pauseState();
+      if (document.hidden) stopDispatchPoll();
       if (!document.hidden && signedIn) resumeCheerSave();
       if (!document.hidden && signedIn && !activeRequest) load();
     });
@@ -1470,9 +1565,11 @@ export const warehousePage = String.raw`<!doctype html>
     const refreshTimer = setInterval(() => {
       if (signedIn && !document.hidden && !activeRequest) load();
     }, 6e4);
+    const dispatchTimer = setInterval(pollDispatch, 15000);
     const clockTimer = setInterval(updateClock, 1000);
     window.addEventListener("pagehide", () => {
       activeRequest?.abort();
+      stopDispatchPoll();
       clearTimeout(cheerSaveTimer);
       cheerSaveTimer = null;
       flushCheers({ keepalive: true });
@@ -1485,6 +1582,7 @@ export const warehousePage = String.raw`<!doctype html>
       pinsFrame = null;
       observer.disconnect();
       clearInterval(refreshTimer);
+      clearInterval(dispatchTimer);
       clearInterval(clockTimer);
     });
     window.addEventListener("pageshow", (event) => {

@@ -3,7 +3,7 @@ import { weeklyPage } from "./weekly-ui.js";
 import { roasteryLabPage } from "./roastery-lab-ui.js";
 import { warehousePage } from "./warehouse-ui.js";
 import { collectWarehouse } from "./warehouse-report.js";
-import { collectWeeklyReport } from "./weekly-report.js";
+import { collectWeeklyReport, readDispatchStatus } from "./weekly-report.js";
 import { collectDashboard, dashboardWeek, fetchSourceJson, SOURCE_ORIGINS } from "./metrics.js";
 import { saveCropsterGreenStock, saveCropsterReading } from "./cropster.js";
 import { saveCropsterFriday } from "./cropster-friday.js";
@@ -170,6 +170,14 @@ export default {
           if ([401, 403].includes(error?.status)) throw new HttpError("Your Stockroom session has ended. Sign in again.", 401);
           throw new HttpError("Stockroom could not verify your access. Try Refresh.", 503);
         }
+      }
+      if (url.pathname === "/api/dispatch-status") {
+        if (request.method !== "GET") return json({ error: "Method not allowed." }, 405, { Allow: "GET" });
+        await activeSession(request, env);
+        let week;
+        try { week = dashboardWeek(url.searchParams.get("week") || undefined); }
+        catch { throw new HttpError("Choose this week or an earlier Monday."); }
+        return json(await readDispatchStatus({ weekStart: week.start, env }));
       }
       if (url.pathname === "/api/warehouse") {
         if (request.method !== "GET") return json({ error: "Method not allowed." }, 405, { Allow: "GET" });

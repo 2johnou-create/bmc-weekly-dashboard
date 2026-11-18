@@ -345,13 +345,24 @@ export const weeklyPage = String.raw`<!doctype html>
           <span id="wholesaleTotal" class="metric-figure headline">—</span>
           <span class="metric-label" id="wholesaleTotalLabel">Scheduled orders</span>
           <span class="card-pair wholesale-results">
-            <span><span class="metric-label">Done</span><span id="wholesaleDone" class="metric-figure">—</span></span>
-            <span><span class="metric-label">Pending</span><span id="wholesalePending" class="metric-figure">—</span></span>
+            <span><span class="metric-label">Done orders</span><span id="wholesaleDone" class="metric-figure">—</span></span>
+            <span><span class="metric-label">Pending orders</span><span id="wholesalePending" class="metric-figure">—</span></span>
           </span>
+          <span id="wholesaleClients" class="metric-secondary">— clients completed</span>
+          <span id="wholesaleClientsFlag" class="status-flag" hidden></span>
           <span id="wholesaleFlag" class="status-flag" hidden></span>
         </summary>
         <div class="card-body">
           <p id="wholesaleScheduleLabel" class="detail-note wholesale-window">Scheduled orders</p>
+          <h2>Clients with completed deliveries</h2>
+          <p id="completedClientsScope" class="detail-note"></p>
+          <table id="completedClientsTable" class="detail-table" hidden>
+            <thead><tr><th scope="col">Client</th><th scope="col">Latest completion</th></tr></thead>
+            <tbody id="completedClientsRows"></tbody>
+          </table>
+          <p id="completedClientsEmpty" class="detail-note"></p>
+          <p id="completedClientsSource" class="source-note" hidden></p>
+          <p id="completedClientsNote" class="detail-note" hidden></p>
           <h2 id="wholesalePreviousLabel">Previous week</h2>
           <dl class="breakdown">
             <div><dt>Scheduled orders</dt><dd id="previousWholesaleTotal">—</dd></div>
@@ -499,6 +510,7 @@ export const weeklyPage = String.raw`<!doctype html>
     let loadedWeek;
     let requestedWeek = new URL(location.href).searchParams.get('week') || '';
     let currentRequest;
+    let loadedWholesale = null, dispatchRequest = null, dispatchGeneration = 0, dispatchPollFailed = false;
     let signedIn = false;
     let expensesCaptureGeneration = 0;
     const weekNotes = new Map();
@@ -728,6 +740,57 @@ export const weeklyPage = String.raw`<!doctype html>
       set('previousWholesalePending', format(wholesale.previousPending, amount));
       showText('wholesaleSource', sourceText(wholesale, 'Dispatch'));
       showText('wholesaleNote', wholesale.note);
+      const clientCount = wholesale.completedClientsStatus !== 'unavailable' && Number.isSafeInteger(wholesale.completedClientCount) && wholesale.completedClientCount >= 0
+        ? wholesale.completedClientCount : null;
+      set('wholesaleClients', format(clientCount, amount) + ' clients completed');
+      showText('wholesaleClientsFlag', dispatchPollFailed ? 'Dispatch check failed · showing last read'
+        : clientCount === null ? 'Completed clients unavailable' : wholesale.completedClientsStatus === 'partial' ? 'Partial completed-client coverage' : '');
+      set('completedClientsScope', 'Full delivery handovers completed ' + weekRange(week.start, week.end) + '. A client may still have other pending orders.');
+      const clients = clientCount === null ? [] : (Array.isArray(wholesale.completedClients) ? [...wholesale.completedClients] : []).sort((a, b) => (Date.parse(b.completedAt) || 0) - (Date.parse(a.completedAt) || 0));
+      el('completedClientsRows').replaceChildren(...clients.map(client => {
+        const row = document.createElement('tr');
+        const name = document.createElement('th');
+        name.scope = 'row'; name.textContent = client.name || 'Client name unavailable';
+        const time = document.createElement('td');
+        time.textContent = formatTimestamp(client.completedAt) || unavailable;
+        row.append(name, time); return row;
+      }));
+      el('completedClientsTable').hidden = !clients.length;
+      set('completedClientsEmpty', clientCount === null ? 'Completed-client data is unavailable.'
+        : clientCount === 0 ? 'No clients have completed deliveries in this period.' : !clients.length ? 'Completed-client names are unavailable.' : '');
+      showText('completedClientsSource', sourceText(wholesale, 'Dispatch') + ' Checked every 15 seconds while this page is visible. Times are Sydney time.');
+      const clientNotes = [wholesale.completedClientsNote, wholesale.completedClientsTruncated && 'Showing the most recent completed clients.'].filter(Boolean);
+      showText('completedClientsNote', clientNotes.join(' '));
+    }
+    function stopDispatchPoll() {
+      dispatchGeneration++;
+      dispatchRequest?.abort();
+      dispatchRequest = null;
+    }
+    async function pollDispatch() {
+      if (!signedIn || document.hidden || currentRequest || dispatchRequest || !loadedWeek || !loadedWholesale) return;
+      const weekStart = loadedWeek.start, generation = dispatchGeneration;
+      const controller = new AbortController();
+      dispatchRequest = controller;
+      const timeout = setTimeout(() => controller.abort(), 12000);
+      try {
+        const response = await fetch('/api/dispatch-status?week=' + encodeURIComponent(weekStart), { cache: 'no-store', signal: controller.signal });
+        const result = await readJson(response);
+        if (dispatchRequest !== controller || generation !== dispatchGeneration || !signedIn || currentRequest || loadedWeek?.start !== weekStart) return;
+        if (response.status === 401) { showExpiredSession(); return; }
+        if (!response.ok || result.weekStart !== weekStart || !result.wholesale) throw new Error('Dispatch could not be checked.');
+        loadedWholesale = { ...loadedWholesale, ...result.wholesale };
+        dispatchPollFailed = false;
+        renderWholesale(loadedWholesale, loadedWeek);
+      } catch {
+        if (dispatchRequest === controller && generation === dispatchGeneration && signedIn && loadedWeek?.start === weekStart) {
+          dispatchPollFailed = true;
+          renderWholesale(loadedWholesale, loadedWeek);
+        }
+      } finally {
+        clearTimeout(timeout);
+        if (dispatchRequest === controller) dispatchRequest = null;
+      }
     }
     function expenseMoney(value, expenses) {
       if (!Number.isFinite(value)) return unavailable;
@@ -918,6 +981,8 @@ export const weeklyPage = String.raw`<!doctype html>
       renderProduction(metrics.production, week, previousRange);
       renderGreen(metrics.green, week);
       renderStock(metrics.stock, week);
+      loadedWholesale = metrics.wholesale;
+      dispatchPollFailed = false;
       renderWholesale(metrics.wholesale, week);
       renderExpenses(metrics.expenses, week);
       renderSources(data.sources);
@@ -955,6 +1020,9 @@ export const weeklyPage = String.raw`<!doctype html>
       el('actions').hidden = !active;
       el('login').hidden = active;
       if (active) return;
+      stopDispatchPoll();
+      loadedWholesale = null;
+      dispatchPollFailed = false;
       expensesCaptureGeneration++;
       currentRequest?.abort();
       currentRequest = null;
@@ -985,6 +1053,7 @@ export const weeklyPage = String.raw`<!doctype html>
       clearWeekNotes();
       el('sourceList').replaceChildren();
       el('stockCategories').replaceChildren();
+      el('completedClientsRows').replaceChildren();
       el('expensesItems').replaceChildren();
       el('expensesSourceLink').removeAttribute('href');
       el('greenForecastLink').removeAttribute('href');
@@ -1002,6 +1071,7 @@ export const weeklyPage = String.raw`<!doctype html>
     async function load(announce = true, { fresh = false } = {}) {
       if (!signedIn) return;
       if (currentRequest?.fresh && !fresh) return;
+      stopDispatchPoll();
       currentRequest?.abort();
       const controller = new AbortController();
       controller.fresh = fresh;
@@ -1385,6 +1455,9 @@ export const weeklyPage = String.raw`<!doctype html>
     }).catch(() => showSession(false));
     document.addEventListener('visibilitychange', () => { if (signedIn && !document.hidden && !currentRequest) load(false); });
     setInterval(() => { if (signedIn && !document.hidden && !currentRequest) load(false); }, 60000);
+    const dispatchTimer = setInterval(pollDispatch, 15000);
+    document.addEventListener('visibilitychange', () => { if (document.hidden) stopDispatchPoll(); });
+    window.addEventListener('pagehide', () => { stopDispatchPoll(); clearInterval(dispatchTimer); });
   </script>
 </body>
 </html>`;

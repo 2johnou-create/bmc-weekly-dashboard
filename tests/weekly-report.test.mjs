@@ -91,6 +91,98 @@ test("an inherited Dispatch plan shows a reconciled full-week schedule as provis
   assert.equal(empty.scheduledPendingOrders, 0);
 });
 
+const clientCompletionSource = (clientCompletions, extra = {}) => ({
+  weekStart: week,
+  planStatus: "confirmed-weekly-import",
+  wholesale: { orders: 3, completedOrders: 1, pendingOrders: 2, clients: 3 },
+  clientCompletions: {
+    count: 1,
+    items: [{ clientId: "stable-client-1", name: "Test Coffee", completedAt: "2026-11-11T23:00:00.000Z" }],
+    latestCompletedAt: "2026-11-11T23:00:00.000Z", itemLimit: 50, truncated: false, status: "live", note: "",
+    ...clientCompletions,
+  },
+  ...extra,
+});
+
+test("completed clients use the dedicated completion feed without exposing source identifiers or contacts", () => {
+  const source = clientCompletionSource({ items: [{
+    clientId: "stable-client-1", name: "Test Coffee", completedAt: "2026-11-11T23:00:00.000Z",
+    address: "private address", email: "private@example.test", completedOrders: 500,
+  }] });
+  const metric = wholesaleDeliveryComparison(source, null);
+  assert.equal(metric.orders, 3);
+  assert.equal(metric.done, 1);
+  assert.equal(metric.completedClientCount, 1);
+  assert.equal(metric.completedClientsStatus, "live");
+  assert.deepEqual(metric.completedClients, [{ name: "Test Coffee", completedAt: "2026-11-11T23:00:00.000Z" }]);
+  assert.equal(metric.completedClientsTruncated, false);
+  assert.ok(!JSON.stringify(metric).includes("stable-client-1"));
+  assert.ok(!JSON.stringify(metric).includes("private"));
+
+  const withoutFeed = wholesaleDeliveryComparison({ ...source, clientCompletions: undefined }, null);
+  assert.equal(withoutFeed.orders, 3);
+  assert.equal(withoutFeed.done, 1);
+  assert.equal(withoutFeed.completedClientCount, null);
+  assert.equal(withoutFeed.completedClientsStatus, "unavailable");
+  assert.deepEqual(withoutFeed.completedClients, []);
+});
+
+test("client counts retain known partial totals and distinguish a verified zero from unavailable", () => {
+  const partial = wholesaleDeliveryComparison(clientCompletionSource({
+    status: "partial", note: "Known completed clients only; an old handover date is missing.",
+  }), null);
+  assert.equal(partial.completedClientCount, 1);
+  assert.equal(partial.completedClientsStatus, "partial");
+  assert.match(partial.completedClientsNote, /Known completed clients/);
+  const zero = wholesaleDeliveryComparison(clientCompletionSource({ count: 0, items: [], latestCompletedAt: null }), null);
+  assert.equal(zero.completedClientCount, 0);
+  assert.equal(zero.completedClientsStatus, "live");
+  const unavailable = wholesaleDeliveryComparison(clientCompletionSource({ status: "unavailable", count: null }), null);
+  assert.equal(unavailable.completedClientCount, null);
+  assert.deepEqual(unavailable.completedClients, []);
+});
+
+test("the completed-client total can exceed the bounded detail list", () => {
+  const items = Array.from({ length: 50 }, (_, index) => ({
+    clientId: `client-${index}`, name: `Coffee ${index}`, completedAt: "2026-11-12T01:00:00.000Z",
+  }));
+  const metric = wholesaleDeliveryComparison(clientCompletionSource({ count: 77, items, truncated: true }), null);
+  assert.equal(metric.completedClientCount, 77);
+  assert.equal(metric.completedClients.length, 50);
+  assert.equal(metric.completedClientsTruncated, true);
+  assert.equal(metric.completedClientsStatus, "live");
+});
+
+test("duplicate identities, unsafe names and out-of-period completions cannot become a trusted client count", () => {
+  const valid = { clientId: "same-client", name: "Safe Cafe", completedAt: "2026-11-11T23:00:00.000Z" };
+  for (const invalidItem of [
+    { ...valid },
+    { ...valid, clientId: "", name: "Other Cafe" },
+    { ...valid, clientId: "next-client", name: "x".repeat(161) },
+    { ...valid, clientId: "next-client", name: "Cafe\nprivate phone" },
+    { ...valid, clientId: "next-client", completedAt: "2026-11-08T12:59:59.999Z" },
+    { ...valid, clientId: "next-client", completedAt: "2026-11-15T13:00:00.000Z" },
+    { ...valid, clientId: "next-client", completedAt: "2026-11-11" },
+  ]) {
+    const metric = wholesaleDeliveryComparison(clientCompletionSource({ count: 2, items: [valid, invalidItem] }), null);
+    assert.equal(metric.completedClientCount, null);
+    assert.equal(metric.completedClientsStatus, "partial");
+    assert.deepEqual(metric.completedClients, [{ name: "Safe Cafe", completedAt: valid.completedAt }]);
+    assert.match(metric.completedClientsNote, /total is unknown/);
+  }
+});
+
+test("Sydney completion boundaries include Sunday for live weeks and stop on Friday for historical weeks", () => {
+  const sunday = { clientId: "sun", name: "Sunday Cafe", completedAt: "2026-11-15T12:59:59.999Z" };
+  const live = wholesaleDeliveryComparison(clientCompletionSource({ items: [sunday] }), null);
+  assert.equal(live.completedClientCount, 1);
+  const friday = wholesaleDeliveryComparison(clientCompletionSource({ items: [sunday] }, { periodEnd: "2026-11-13" }), null);
+  assert.equal(friday.completedClientCount, null);
+  assert.deepEqual(friday.completedClients, []);
+  const start = { ...sunday, completedAt: "2026-11-08T13:00:00.000Z" };
+  assert.equal(wholesaleDeliveryComparison(clientCompletionSource({ items: [start] }), null).completedClientCount, 1);
+});
+
 test("demand uses the previous verified tally as its baseline", () => {
   const tally = kg => ({ status: "live", kg });
   assert.equal(weeklyDemandComparison(tally(110), tally(100)).changePercent, 10);
@@ -186,6 +278,10 @@ test("past reports use a closed Friday span and require matching Dispatch cutoff
           periodEnd: selected === week ? "2026-11-13" : "2026-11-08",
           planStatus: "confirmed-weekly-import",
           wholesale: { orders: 10, completedOrders: 7, pendingOrders: 3 },
+          clientCompletions: {
+            count: 1, items: [{ clientId: "carryover-client", name: "Friday Coffee", completedAt: "2026-11-13T03:00:00.000Z" }],
+            latestCompletedAt: "2026-11-13T03:00:00.000Z", itemLimit: 50, truncated: false, status: "live", note: "",
+          },
         });
       }
       return new Response(null, { status: 503 });
@@ -195,6 +291,8 @@ test("past reports use a closed Friday span and require matching Dispatch cutoff
   assert.equal(report.week.label, "9 Nov – 13 Nov 2026");
   assert.deepEqual(dispatch.sort(), [["2026-11-02", "friday"], [week, "friday"]]);
   assert.equal(report.metrics.wholesale.done, 7);
+  assert.equal(report.metrics.wholesale.completedClientCount, 1);
+  assert.deepEqual(report.metrics.wholesale.completedClients, [{ name: "Friday Coffee", completedAt: "2026-11-13T03:00:00.000Z" }]);
   assert.equal(report.metrics.wholesale.previousOrders, null);
   assert.equal(report.metrics.green.snapshotDate, "2026-11-13");
   assert.equal(report.metrics.stock.value, null);

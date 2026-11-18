@@ -1,4 +1,4 @@
-import { addDays, dashboardWeek, fetchSourceJson, isoTimestamp, mapNonCoffee, SOURCE_ORIGINS } from "./metrics.js";
+import { addDays, dashboardWeek, fetchSourceJson, isoTimestamp, mapNonCoffee, mondayOf, SOURCE_ORIGINS, sydneyDate, validDate } from "./metrics.js";
 import { CROPSTER_WEBSITE, readCropsterReadings } from "./cropster.js";
 import { readCropsterMonday } from "./cropster-monday.js";
 import { readCropsterFriday } from "./cropster-friday.js";
@@ -23,11 +23,67 @@ async function readDispatch(weekStart, env, fetcher, throughFriday = false) {
   const result = await fetchSourceJson(url.href, { Authorization: `Bearer ${env.DISPATCH_READ_TOKEN}` }, fetcher);
   if (result.sourceSystem !== "bmc-dispatch" || result.schemaVersion !== "1.0" || result.weekStart !== weekStart) return null;
   if (throughFriday && result.periodEnd !== addDays(weekStart, 4)) return null;
+  if (!throughFriday && result.periodEnd !== undefined && result.periodEnd !== addDays(weekStart, 6)) return null;
   return result;
 }
 
 const orderCount = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
 const demandKg = value => Number.isFinite(value) && value >= 0 ? value : null;
+const CLIENT_LIMIT = 50;
+const boundedText = (value, maximum) => typeof value === "string" && value.trim().length > 0 &&
+  value.trim().length <= maximum && !/[\u0000-\u001f\u007f-\u009f]/u.test(value) ? value.trim() : null;
+
+function completionTime(value, start, end) {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(value) ||
+    !validDate(value.slice(0, 10)) || Number(value.slice(11, 13)) > 23) return null;
+  const time = isoTimestamp(value);
+  if (!time) return null;
+  const day = sydneyDate(new Date(time));
+  return day >= start && day <= end ? time : null;
+}
+
+function completedClients(source) {
+  const unknown = note => ({
+    completedClientCount: null, completedClients: [], completedClientsStatus: "unavailable",
+    completedClientsTruncated: false, completedClientsNote: note,
+  });
+  const completions = source?.clientCompletions;
+  const sourceNote = boundedText(completions?.note, 600);
+  if (!completions || completions.status === "unavailable") return unknown(sourceNote || "Completed client details are unavailable from Dispatch.");
+  const start = source?.weekStart;
+  if (!validDate(start) || mondayOf(start) !== start) return unknown("Dispatch returned no valid completion reporting week.");
+  const end = source.periodEnd ?? addDays(start, 6);
+  if (end !== addDays(start, 4) && end !== addDays(start, 6)) return unknown("Dispatch returned an unexpected completion reporting period.");
+  if (!["live", "partial"].includes(completions.status) || !Array.isArray(completions.items) || completions.items.length > CLIENT_LIMIT) {
+    return unknown("Dispatch returned incomplete client completion details.");
+  }
+  const count = orderCount(completions.count);
+  let invalid = count === null || completions.itemLimit !== CLIENT_LIMIT ||
+    typeof completions.truncated !== "boolean" ||
+    (count !== null && (completions.items.length !== Math.min(count, CLIENT_LIMIT) || completions.truncated !== (count > CLIENT_LIMIT)));
+  const clients = [];
+  const seen = new Set();
+  for (const item of completions.items) {
+    const id = boundedText(item?.clientId, 160);
+    const name = boundedText(item?.name, 160);
+    const completedAt = completionTime(item?.completedAt, start, end);
+    if (!id || !name || !completedAt || seen.has(id)) { invalid = true; continue; }
+    seen.add(id);
+    // Only the business name and completion time leave this adapter.
+    clients.push({ name, completedAt });
+  }
+  clients.sort((a, b) => b.completedAt.localeCompare(a.completedAt) || a.name.localeCompare(b.name));
+  const note = sourceNote || (completions.status === "partial"
+    ? "Known completed clients only. Some Dispatch completion records need review."
+    : "Clients with a full handover completed during the selected Sydney reporting period, including carried-over orders.");
+  return {
+    completedClientCount: invalid ? null : count,
+    completedClients: clients,
+    completedClientsStatus: invalid || completions.status === "partial" ? "partial" : "live",
+    completedClientsTruncated: completions.truncated === true || (count !== null && count > CLIENT_LIMIT),
+    completedClientsNote: invalid ? `${note} Some client details did not pass validation; the total is unknown.` : note,
+  };
+}
 
 function dispatchCounts(source) {
   const confirmed = source?.planStatus === "confirmed-weekly-import";
@@ -50,9 +106,8 @@ function dispatchCounts(source) {
   };
 }
 
-export function wholesaleDeliveryComparison(current, previous) {
+function currentWholesale(current) {
   const { orders, done, pending, scheduledOrders, scheduledPendingOrders, provisional } = dispatchCounts(current);
-  const { orders: previousOrders, done: previousDone, pending: previousPending } = dispatchCounts(previous);
   const notes = [];
   if (orders === null) {
     if (provisional) notes.push(current.periodEnd
@@ -62,9 +117,7 @@ export function wholesaleDeliveryComparison(current, previous) {
   } else if (pending === null) {
     notes.push("The confirmed Dispatch plan does not have a matching done and pending count.");
   }
-  if (orders !== null && previousOrders === null) notes.push("The previous week has no confirmed Dispatch order total.");
-  const status = pending !== null && previousOrders !== null ? "live" :
-    [orders, done, previousOrders, previousDone].some(value => value !== null) ? "partial" : "unavailable";
+  const status = pending !== null ? "live" : [orders, done].some(value => value !== null) ? "partial" : "unavailable";
   return {
     orders,
     done,
@@ -72,15 +125,38 @@ export function wholesaleDeliveryComparison(current, previous) {
     scheduledOrders,
     scheduledPendingOrders,
     provisional,
-    previousOrders,
-    previousDone,
-    previousPending,
     completed: orderCount(current?.delivery?.deliveredOrders ?? current?.delivery?.orders),
-    previousCompleted: orderCount(previous?.delivery?.deliveredOrders ?? previous?.delivery?.orders),
     status,
     note: notes.join(" "),
     asOf: isoTimestamp(current?.sourceUpdatedAt),
+    ...completedClients(current),
   };
+}
+
+export function wholesaleDeliveryComparison(current, previous) {
+  const wholesale = currentWholesale(current);
+  const { orders: previousOrders, done: previousDone, pending: previousPending } = dispatchCounts(previous);
+  const status = wholesale.pending !== null && previousOrders !== null ? "live" :
+    [wholesale.orders, wholesale.done, previousOrders, previousDone].some(value => value !== null) ? "partial" : "unavailable";
+  const previousNote = wholesale.orders !== null && previousOrders === null ? "The previous week has no confirmed Dispatch order total." : "";
+  return {
+    ...wholesale,
+    previousOrders,
+    previousDone,
+    previousPending,
+    previousCompleted: orderCount(previous?.delivery?.deliveredOrders ?? previous?.delivery?.orders),
+    status,
+    note: [wholesale.note, previousNote].filter(Boolean).join(" "),
+  };
+}
+
+// A single Dispatch read for frequent refreshes. Authentication is enforced by the route.
+// Previous-week keys are deliberately absent so callers can merge into a full report.
+export async function readDispatchStatus({ weekStart, env, fetcher = fetch, now = new Date() }) {
+  const week = dashboardWeek(weekStart, now);
+  let source = null;
+  try { source = await readDispatch(week.start, env, fetcher, !week.isCurrent); } catch { /* Keep unavailable distinct from zero. */ }
+  return { weekStart: week.start, wholesale: currentWholesale(source), generatedAt: now.toISOString() };
 }
 
 export function weeklyDemandComparison(current, previous, mondayReading = null) {

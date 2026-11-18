@@ -34,6 +34,8 @@ The current week runs Monday–Sunday in Australia/Sydney and shows the latest s
 
 The top **Refresh** buttons recheck every source and bypass the dashboard's short-lived feed caches. Purchases re-download the live ORDER PLAN worksheet. Cropster cards reload the latest saved Cropster readings and retain their original capture times. The checked time reports when the refresh completed.
 
+Dispatch status also refreshes independently every 15 seconds while the page is visible. It reads the protected Dispatch App feed for unique clients with fully completed deliveries in the selected Sydney period. The latest client names and completion times appear in the Dispatch detail. Resolved carry-over follow-ups count in the period when their final handover completed. Scheduled-order Done and Pending figures remain separate. Partial source coverage is labelled, and an unavailable feed clears its client total and list.
+
 The **Note** card stores one editable list of points per reporting week. Each line becomes a separate point. Notes use Stock Take App access and stay with the selected week.
 
 ## Roastery Lab
