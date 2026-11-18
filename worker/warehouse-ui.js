@@ -495,12 +495,13 @@ export const warehousePage = String.raw`<!doctype html>
           leaders.children.length ? leaders : empty("Verified prices are unavailable."),
           note("Green coffee ingredient cost. Roast weight loss is shown separately."),
           source({ asOf: prices.priceAsOf, status: lab.source?.status }, "Cropster green prices"),
-          note(prices.lossFrom || prices.lossAsOf ? "Roast loss " + (date(prices.lossFrom) || "") + (prices.lossFrom ? " to " : "through ") + (date(prices.lossAsOf) || "—") + "." : prices.lossNote),
+          note(prices.lossFrom || prices.lossAsOf ? "Roast loss " + (date(prices.lossFrom) || "") + (prices.lossFrom ? " to " : "through ") + (date(prices.lossAsOf) || "—") + "." : ""),
+          note(prices.lossNote),
           disclosure("Signature blend recipes", recipes),
           disclosure("All other coffees", other)
         ),
         section("Releases", releases.children.length ? releases : empty(settings.revision === null ? "Release information is unavailable." : "No releases saved."), source({ asOf: settings.updatedAt }, "Saved Roastery Lab settings", "/roastery-lab")),
-        section("Quality notes", note(settings.qa) || empty(settings.revision === null ? "QA notes are unavailable." : "No QA notes saved."), source(lab.source, "Cropster saved readings"), metricNote(lab.source))
+        section("Quality notes", note(settings.qa) || empty(settings.revision === null ? "QA notes are unavailable." : "No QA notes saved."), source({ asOf: settings.updatedAt, status: settings.status }, "Saved Roastery Lab settings", "/roastery-lab"), metricNote(lab.source))
       ];
     }
     function quoteSection() {
