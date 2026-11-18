@@ -4,6 +4,7 @@ import dns from "node:dns";
 import { mkdir } from "node:fs/promises";
 import { localDatabase } from "./local-db.mjs";
 import worker from "../worker/index.js";
+import { buildWarehouseAsset } from "./warehouse-asset.mjs";
 dns.setDefaultResultOrder("ipv4first");
 
 // Local-only session key changes when this preview restarts.
@@ -13,6 +14,12 @@ const host = "127.0.0.1";
 const port = Number(process.env.PORT || 4182);
 createServer(async (incoming, outgoing) => {
   try {
+    if (incoming.url === "/warehouse-scene.js" && ["GET", "HEAD"].includes(incoming.method)) {
+      const script = await buildWarehouseAsset();
+      outgoing.writeHead(200, { "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "no-store" });
+      outgoing.end(incoming.method === "HEAD" ? undefined : script);
+      return;
+    }
     const headers = new Headers();
     for (const [name, value] of Object.entries(incoming.headers)) if (value !== undefined) headers.set(name, Array.isArray(value) ? value.join(", ") : value);
     const options = { method: incoming.method, headers };

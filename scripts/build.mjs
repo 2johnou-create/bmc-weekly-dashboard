@@ -1,9 +1,11 @@
 import { mkdir, copyFile, rm, cp } from "node:fs/promises";
 import { build } from "esbuild";
+import { buildWarehouseAsset } from "./warehouse-asset.mjs";
 await rm("dist", { recursive: true, force: true });
 await mkdir("dist/server", { recursive: true });
 await mkdir("dist/.openai", { recursive: true });
-await build({ entryPoints: ["worker/index.js"], outfile: "dist/server/index.js", bundle: true, format: "esm", platform: "browser", target: "es2022", minify: false, legalComments: "eof" });
+const warehouseAsset = await buildWarehouseAsset();
+await build({ entryPoints: ["worker/index.js"], outfile: "dist/server/index.js", bundle: true, format: "esm", platform: "browser", target: "es2022", minify: false, legalComments: "eof", define: { __WAREHOUSE_SCENE__: JSON.stringify(warehouseAsset) } });
 await copyFile(".openai/hosting.json", "dist/.openai/hosting.json");
 await cp("drizzle", "dist/.openai/drizzle", { recursive: true });
 console.log("Built the BMC Weekly Dashboard Worker.");

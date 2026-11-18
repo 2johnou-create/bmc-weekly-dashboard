@@ -1,6 +1,8 @@
 import { page } from "./ui.js";
 import { weeklyPage } from "./weekly-ui.js";
 import { roasteryLabPage } from "./roastery-lab-ui.js";
+import { warehousePage } from "./warehouse-ui.js";
+import { collectWarehouse } from "./warehouse-report.js";
 import { collectWeeklyReport } from "./weekly-report.js";
 import { collectDashboard, dashboardWeek, fetchSourceJson, SOURCE_ORIGINS } from "./metrics.js";
 import { saveCropsterGreenStock, saveCropsterReading } from "./cropster.js";
@@ -44,7 +46,8 @@ const cropsterBody = { maximum: 2_048, missing: "Enter the Cropster reading.", i
 const cropsterSmallBody = { ...cropsterBody, maximum: 512 };
 const labSettingsBody = { maximum: 32_768, missing: "Enter release or QA details.", invalid: "Enter valid release and QA details.", tooLarge: "The release and QA notes are too large." };
 const labCropsterBody = { ...cropsterBody, maximum: 350_000, tooLarge: "The Cropster report is too large." };
-const documents = new Map([["/", weeklyPage], ["/details", page], ["/roastery-lab", roasteryLabPage]]);
+const documents = new Map([["/", weeklyPage], ["/details", page], ["/roastery-lab", roasteryLabPage], ["/warehouse", warehousePage]]);
+const warehouseAsset = typeof __WAREHOUSE_SCENE__ === "string" ? __WAREHOUSE_SCENE__ : null;
 async function activeSession(request, env) {
   const session = await readSession(request, env);
   if (!session) throw new HttpError("Sign in with your Stock Take App password.", 401);
@@ -71,7 +74,8 @@ async function htmlHeaders(document) {
       const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(script)));
       return `'sha256-${btoa(String.fromCharCode(...bytes))}'`;
     }));
-    pageHeaders.set(document, { ...commonHeaders, "Content-Type": "text/html; charset=utf-8", "Content-Security-Policy": `default-src 'self'; script-src ${hashes.join(" ")}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'self' https://chatgpt.com https://*.chatgpt.com` });
+    const modules = document === warehousePage ? "'self' " : "";
+    pageHeaders.set(document, { ...commonHeaders, "Content-Type": "text/html; charset=utf-8", "Content-Security-Policy": `default-src 'self'; script-src ${modules}${hashes.join(" ")}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'self' https://chatgpt.com https://*.chatgpt.com` });
   }
   return pageHeaders.get(document);
 }
@@ -83,6 +87,12 @@ export default {
       if (documents.has(url.pathname) && ["GET", "HEAD"].includes(request.method)) {
         const document = documents.get(url.pathname);
         return new Response(request.method === "HEAD" ? null : document, { headers: await htmlHeaders(document) });
+      }
+      if (url.pathname === "/warehouse-scene.js" && ["GET", "HEAD"].includes(request.method)) {
+        if (!warehouseAsset) return json({ error: "Build the warehouse scene before opening this preview." }, 503);
+        return new Response(request.method === "HEAD" ? null : warehouseAsset, { headers: {
+          ...commonHeaders, "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "public, max-age=0, must-revalidate",
+        } });
       }
       if (url.pathname === "/bmc-logo.png" && ["GET", "HEAD"].includes(request.method)) {
         return new Response(request.method === "HEAD" ? null : brandLogo, { headers: {
@@ -155,6 +165,12 @@ export default {
           if ([401, 403].includes(error?.status)) throw new HttpError("Your Stockroom session has ended. Sign in again.", 401);
           throw new HttpError("Stockroom could not verify your access. Try Refresh.", 503);
         }
+      }
+      if (url.pathname === "/api/warehouse") {
+        if (request.method !== "GET") return json({ error: "Method not allowed." }, 405, { Allow: "GET" });
+        const session = await readSession(request, env);
+        if (!session) throw new HttpError("Sign in with your Stock Take App password.", 401);
+        return json(await collectWarehouse({ env, stockroomCookie: session.stockroomCookie }));
       }
       if (url.pathname === "/api/weekly-note") {
         if (!["GET", "PUT"].includes(request.method)) return json({ error: "Method not allowed." }, 405, { Allow: "GET, PUT" });

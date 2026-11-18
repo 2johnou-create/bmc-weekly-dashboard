@@ -7,6 +7,10 @@ settings:
 importers:
 
   .:
+    dependencies:
+      three:
+        specifier: 0.187.0
+        version: 0.187.0
     devDependencies:
       drizzle-kit:
         specifier: 0.31.10
@@ -607,6 +611,9 @@ packages:
     resolution: {integrity: sha512-UjgapumWlbMhkBgzT7Ykc5YXUT46F0iKu8SGXq0bcwP5dz/h0Plj6enJqjz1Zbq2l5WaqYnrVbwWOWMyF3F47g==}
     engines: {node: '>=0.10.0'}
 
+  three@0.187.0:
+    resolution: {integrity: sha512-Qiu7R+Cmh8CstZsY1uJOSWnVlfo7ZtNLV7mF8Jltk3LB3AtDu9cRZlcnRKkAk8Y4z6KKw35z7Y7Urd7jWY8etA==}
+
   tsx@4.23.15:
     resolution: {integrity: sha512-Yiex1Ovn8z2xPpOWckIiysV1SSyRMY9BkLF++q0yKiDxCqRhosKfMg3janKkiLBwZ5c/YryloKwGZcrEmtwxKw==}
     engines: {node: '>=18.0.0'}
@@ -957,6 +964,8 @@ snapshots:
       source-map: 0.6.1
 
   source-map@0.6.1: {}
+
+  three@0.187.0: {}
 
   tsx@4.23.15:
     dependencies:

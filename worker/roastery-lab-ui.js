@@ -199,6 +199,7 @@ export const roasteryLabPage = String.raw`<!doctype html>
     <nav class="dashboard-nav" aria-label="Dashboards">
       <a href="/">Steam Room</a>
       <a href="/roastery-lab" aria-current="page">Roastery Lab</a>
+      <a href="/warehouse">Warehouse</a>
     </nav>
     <div id="actions" class="actions" hidden>
       <button id="refresh" class="button quiet" type="button">Refresh</button>

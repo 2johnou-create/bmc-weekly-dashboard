@@ -37,6 +37,8 @@ The **Note** card stores one editable list of points per reporting week. Each li
 
 Switch between **Steam Room** and **Roastery Lab** in the header. Both pages use the Stock Take App sign-in.
 
+The **Warehouse** page adds an interactive 3D cutaway of the roastery. Select the roaster, packing benches, green pallets, dispatch, lab or purchasing area to see figures from the same dashboard sources. The view uses the current Sydney week and refreshes every minute while visible. Staff, vehicles, sacks and machine motion illustrate activity. Their movement does not represent tracked people or vehicle positions. Scene controls support orbit, zoom, area focus, pause and reduced motion. The source readings retain their dates, scope and missing-data labels.
+
 - Signature blend green cost uses the saved Cropster recipe shares multiplied by the matching current lot's raw AUD price per kilogram. Roast loss is shown separately, using the recorded green and roasted weights over the stated period. Missing ingredient prices leave the blend price blank.
 - Green consumption averages the last three completed Sydney calendar months. It uses green input in the Production Report, excluding transfers. The latest completed month has its own actuals. Bag figures require recorded bags or verified conversion data and remain blank where only kilograms are available.
 - The projected finish month uses the current Cropster balance across all recorded locations and each coffee's observed average monthly consumption. Supplier-held balances are included. The estimate assumes steady usage and no incoming stock. Coffees with no observed consumption or missing coverage have no estimated finish month.

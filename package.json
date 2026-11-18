@@ -10,6 +10,15 @@
     "dev": "node scripts/dev.mjs",
     "db:generate": "drizzle-kit generate"
   },
-  "devDependencies": { "esbuild": "0.28.1", "drizzle-kit": "0.31.10", "drizzle-orm": "0.45.2" },
-  "engines": { "node": ">=22.13.0" }
+  "devDependencies": {
+    "drizzle-kit": "0.31.10",
+    "drizzle-orm": "0.45.2",
+    "esbuild": "0.28.1"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "dependencies": {
+    "three": "0.187.0"
+  }
 }

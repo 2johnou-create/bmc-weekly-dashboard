@@ -202,6 +202,7 @@ export const weeklyPage = String.raw`<!doctype html>
     <nav class="dashboard-nav" aria-label="Dashboards">
       <a href="/" aria-current="page">Steam Room</a>
       <a href="/roastery-lab">Roastery Lab</a>
+      <a href="/warehouse">Warehouse</a>
     </nav>
     <div id="actions" class="actions" hidden>
       <button id="refresh" class="button quiet" type="button">Refresh</button>
