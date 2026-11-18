@@ -5,6 +5,7 @@ import { readCoffeeC } from "./coffee-c.js";
 import { PURCHASE_SOURCE_URL, PURCHASE_SHEET, readPurchases } from "./purchases.js";
 import { readWeeklyNote } from "./weekly-note.js";
 import { readWarehouseWeather } from "./weather.js";
+import { deriveJohnStatus } from "./john-status.js";
 
 function settled(result, fallback) {
   return result.status === "fulfilled" ? result.value : fallback;
@@ -41,6 +42,7 @@ export async function collectWarehouse({ env = {}, stockroomCookie, now = new Da
 
   return {
     weekly,
+    john: deriveJohnStatus(weekly),
     lab: {
       ...settled(lab, labUnavailable(now)),
       coffeeC: settled(coffeeC, {

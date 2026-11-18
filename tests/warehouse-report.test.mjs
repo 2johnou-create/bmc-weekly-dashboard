@@ -68,7 +68,7 @@ test("warehouse uses the current weekly report and measured packing alongside th
     await saveLabCropster(db, { inventory: { asOf: "2026-11-18", totalKg: 20, rows: [{ name: "Example coffee", location: "Roastery", kg: 20, pricePerKg: 10 }] } }, now);
     await saveWeeklyNote(db, weekStart, { lines: ["Synthetic weekly note"], expectedRevision: 0 });
     const result = await collectWarehouse({ env: { DB: db }, stockroomCookie: cookie, now, fetcher });
-    assert.deepEqual(Object.keys(result), ["weekly", "lab", "packing", "notes", "weather", "generatedAt"]);
+    assert.deepEqual(Object.keys(result), ["weekly", "john", "lab", "packing", "notes", "weather", "generatedAt"]);
     assert.equal(result.weekly.week.start, weekStart);
     assert.equal(result.weekly.week.isCurrent, true);
     assert.equal(result.weekly.metrics.stock.value, 8);
@@ -85,6 +85,8 @@ test("warehouse uses the current weekly report and measured packing alongside th
     assert.deepEqual(result.notes.lines, ["Synthetic weekly note"]);
     assert.equal(result.generatedAt, now.toISOString());
     assert.equal(result.weather.status, "unavailable");
+    assert.equal(result.john.weekStart, weekStart);
+    assert.equal(result.john.workload.score, null);
     assert.doesNotMatch(JSON.stringify(result), /synthetic_warehouse_source_session|PRIVATE_OPERATOR_NAME|activeTimer/);
   } finally { db.close(); }
 });

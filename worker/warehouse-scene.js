@@ -6,7 +6,7 @@ const overviewDirection = new THREE.Vector3(1, 1.05, 1.3).normalize();
 const overviewTarget = new THREE.Vector3(0, 1.3, 2);
 const floorBounds = new THREE.Box3(new THREE.Vector3(-19, -.6, -11.5), new THREE.Vector3(19, 9, 17.5));
 
-export function createWarehouseScene({ container, onSelect, onReady, onError, reducedMotion = false }) {
+export function createWarehouseScene({ container, onSelect, onPersonSelect, onReady, onError, reducedMotion = false }) {
   if (!container?.appendChild) throw new Error('A container is needed for the warehouse view.');
 
   let renderer;
@@ -14,7 +14,11 @@ export function createWarehouseScene({ container, onSelect, onReady, onError, re
     renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
   } catch (error) {
     queueMicrotask(() => onError?.(error));
-    return { setData() {}, focus() {}, setPaused() {}, setReducedMotion() {}, resize() {}, dispose() {}, projectPins: () => [] };
+    return {
+      setData() {}, focus() {}, setPaused() {}, setReducedMotion() {}, resize() {}, dispose() {},
+      projectPins: () => [], projectPerson: () => ({ visible: false }),
+      cheerJohn: () => ({ accepted: false, spawned: 0 }),
+    };
   }
 
   const scene = new THREE.Scene();
@@ -50,6 +54,7 @@ export function createWarehouseScene({ container, onSelect, onReady, onError, re
 
   const geometries = new Set();
   const materials = new Set();
+  const textures = new Set();
   const workers = [];
   const zones = new Map();
   const pins = new Map();
@@ -70,6 +75,9 @@ export function createWarehouseScene({ container, onSelect, onReady, onError, re
   let pointerStart;
   let hoverAt = 0;
   let dataReceived = false;
+  let cheerRemaining = 0;
+  let cheerElapsed = 0;
+  let cheerStrength = 1;
 
   function geometry(value) { geometries.add(value); return value; }
   function material(color, options = {}) {
@@ -464,16 +472,17 @@ export function createWarehouseScene({ container, onSelect, onReady, onError, re
 
   const headGeometry = sphereGeometry;
   const capGeometry = geometry(new THREE.SphereGeometry(1, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2));
-  function createWorker({ path, zone, shirt = palette.cream, skin = palette.skin, offset = 0, apron = true }) {
+  function createWorker({ path, zone, person, shirt = palette.cream, skin = palette.skin, offset = 0, apron = true }) {
     const root = group(scene);
     root.userData.zone = zone;
+    if (person) root.userData.person = person;
     const body = group(root);
     const torsoGeometry = geometry(new THREE.CylinderGeometry(.22, .27, .59, 10));
     mesh(torsoGeometry, shirt, body, [0, 1.03, 0]);
     cylinder(body, skin, .09, .12, [0, 1.39, 0]);
     mesh(headGeometry, skin, body, [0, 1.62, .01], [.22, .245, .22]);
     mesh(capGeometry, palette.hair, body, [0, 1.67, 0], [.23, .21, .23]);
-    box(body, zone === 'dispatch' ? palette.red : palette.green, [.28, .045, .23], [0, 1.82, .15]);
+    box(body, person === 'john' || zone === 'dispatch' ? palette.red : palette.green, [.28, .045, .23], [0, 1.82, .15]);
     for (const x of [-.073, .073]) sphere(body, palette.ink, .019, [x, 1.65, .215]);
     if (apron) {
       box(body, palette.apron, [.38, .48, .035], [0, .98, .235]);
@@ -494,26 +503,30 @@ export function createWarehouseScene({ container, onSelect, onReady, onError, re
       arms.push(arm);
     }
     const curve = new THREE.CatmullRomCurve3(path.map(([x, z]) => new THREE.Vector3(x, 0, z)), true, 'centripetal');
-    const worker = { root, body, legs, arms, curve, zone, progress: offset, length: curve.getLength(), phase: offset * Math.PI * 10 };
+    const worker = { root, body, legs, arms, curve, zone, person, progress: offset, length: curve.getLength(), phase: offset * Math.PI * 10 };
     workers.push(worker);
     moveWorker(worker, 0);
     return worker;
   }
   function moveWorker(worker, delta) {
     const intensity = activities[worker.zone] || 0;
-    worker.progress = (worker.progress + delta * intensity * 1.15 / worker.length) % 1;
+    const cheering = worker.person === 'john' && cheerRemaining > 0;
+    worker.progress = (worker.progress + (cheering ? 0 : delta) * intensity * 1.15 / worker.length) % 1;
     const point = worker.curve.getPointAt(worker.progress);
     const direction = worker.curve.getTangentAt(worker.progress);
     worker.root.position.copy(point);
     worker.root.rotation.y = Math.atan2(direction.x, direction.z);
-    const stride = Math.sin(elapsed * 6 * intensity + worker.phase) * Math.min(1, intensity * 2);
+    const stride = cheering ? 0 : Math.sin(elapsed * 6 * intensity + worker.phase) * Math.min(1, intensity * 2);
     worker.legs[0].rotation.x = stride * .57;
     worker.legs[1].rotation.x = -stride * .57;
     worker.arms[0].rotation.x = -stride * .45;
     worker.arms[1].rotation.x = stride * .45;
+    worker.arms[0].rotation.z = -.12;
+    worker.arms[1].rotation.z = .12;
+    worker.body.rotation.z = 0;
     worker.body.position.y = Math.abs(stride) * .035;
   }
-  createWorker({ zone: 'roasting', offset: .18, shirt: palette.cream,
+  const john = createWorker({ zone: 'roasting', person: 'john', offset: .18, shirt: palette.cream,
     path: [[2.8, 2.5], [3.8, .8], [3.3, -2.5], [2.3, -4.7], [3.2, -1.3]] });
   createWorker({ zone: 'green', offset: .54, shirt: palette.navy, skin: palette.skinDark,
     path: [[-5.8, -5.8], [-5.2, -2.4], [-8, -1.7], [-7.1, -3.5]] });
@@ -526,10 +539,172 @@ export function createWarehouseScene({ container, onSelect, onReady, onError, re
   createWorker({ zone: 'dispatch', offset: .47, shirt: palette.navy, skin: palette.skinLight,
     path: [[9.6, 7], [12.5, 7], [13, 9.5], [11.8, 11.5], [10.7, 9.8]] });
 
+  // The coin pool is a local game effect. Three instanced draw calls render
+  // its edge and two faces, regardless of the number of rapid cheers.
+  const maxCoins = 160;
+  const coinGeometry = geometry(new THREE.CylinderGeometry(.44, .44, .09, 20));
+  const coinFades = new THREE.InstancedBufferAttribute(new Float32Array(maxCoins), 1);
+  coinGeometry.setAttribute('instanceFade', coinFades);
+  const coinCanvas = document.createElement('canvas');
+  coinCanvas.width = coinCanvas.height = 256;
+  const coinContext = coinCanvas.getContext('2d');
+  let coinTexture;
+  if (coinContext) {
+    coinContext.fillStyle = '#ffdb64';
+    coinContext.fillRect(0, 0, 256, 256);
+    coinContext.strokeStyle = '#b77b14';
+    coinContext.lineWidth = 9;
+    coinContext.beginPath();
+    coinContext.arc(128, 128, 112, 0, Math.PI * 2);
+    coinContext.stroke();
+    coinContext.fillStyle = '#71400a';
+    coinContext.font = 'bold 196px system-ui, sans-serif';
+    coinContext.textAlign = 'center';
+    coinContext.textBaseline = 'middle';
+    coinContext.fillText('$', 128, 139);
+    coinTexture = new THREE.CanvasTexture(coinCanvas);
+    coinTexture.colorSpace = THREE.SRGBColorSpace;
+    textures.add(coinTexture);
+  }
+  function coinMaterial(color, map) {
+    const surface = map
+      ? new THREE.MeshBasicMaterial({ color, map, transparent: true, depthWrite: false })
+      : material(color, {
+        metalness: .45, roughness: .35, transparent: true, depthWrite: false,
+        emissive: 0x714411, emissiveIntensity: .08,
+      });
+    materials.add(surface);
+    surface.onBeforeCompile = shader => {
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', '#include <common>\nattribute float instanceFade;\nvarying float vCoinFade;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvCoinFade = instanceFade;');
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', '#include <common>\nvarying float vCoinFade;')
+        .replace('#include <opaque_fragment>', 'diffuseColor.a *= vCoinFade;\n#include <opaque_fragment>');
+    };
+    surface.customProgramCacheKey = () => 'warehouse-coin-fade';
+    return surface;
+  }
+  const coinEdge = coinMaterial(0xe8a82d);
+  const coinFace = coinMaterial(0xffffff, coinTexture);
+  const coinMesh = new THREE.InstancedMesh(coinGeometry, [coinEdge, coinFace, coinFace], maxCoins);
+  coinMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  coinMesh.frustumCulled = false;
+  coinMesh.raycast = () => {};
+  scene.add(coinMesh);
+  const coinPose = new THREE.Object3D();
+  const coinPool = Array.from({ length: maxCoins }, () => ({
+    active: false, position: new THREE.Vector3(), velocity: new THREE.Vector3(),
+    rotation: new THREE.Vector3(), spin: new THREE.Vector3(),
+    age: 0, life: 0, bounces: 0, settled: false, size: 1,
+  }));
+  let coinCursor = 0;
+  function writeCoin(index) {
+    const coin = coinPool[index];
+    coinPose.position.copy(coin.position);
+    coinPose.rotation.set(coin.rotation.x, coin.rotation.y, coin.rotation.z);
+    coinPose.scale.setScalar(coin.active ? coin.size : 0);
+    coinPose.updateMatrix();
+    coinMesh.setMatrixAt(index, coinPose.matrix);
+    coinFades.setX(index, coin.active ? Math.min(1, (coin.life - coin.age) / 2.5) : 0);
+  }
+  for (let index = 0; index < maxCoins; index++) writeCoin(index);
+  coinMesh.instanceMatrix.needsUpdate = true;
+  coinFades.needsUpdate = true;
+  function settleCoin(coin) {
+    coin.settled = true;
+    coin.position.y = .11;
+    coin.velocity.set(0, 0, 0);
+    coin.rotation.x = coin.rotation.z = 0;
+  }
+  function updateCoins(delta) {
+    let changed = false;
+    for (let index = 0; index < maxCoins; index++) {
+      const coin = coinPool[index];
+      if (!coin.active) continue;
+      changed = true;
+      coin.age += delta;
+      if (coin.age >= coin.life) {
+        coin.active = false;
+      } else if (!coin.settled) {
+        coin.velocity.y -= 11.5 * delta;
+        coin.position.addScaledVector(coin.velocity, delta);
+        coin.rotation.addScaledVector(coin.spin, delta);
+        if (coin.position.y < .16 && coin.velocity.y < 0) {
+          coin.bounces++;
+          coin.position.y = .16;
+          coin.velocity.y *= -.32;
+          coin.velocity.x *= .55;
+          coin.velocity.z *= .55;
+          coin.spin.multiplyScalar(.5);
+          if (coin.bounces >= 2 || coin.velocity.y < .65) settleCoin(coin);
+        }
+      }
+      writeCoin(index);
+    }
+    if (changed) {
+      coinMesh.instanceMatrix.needsUpdate = true;
+      coinFades.needsUpdate = true;
+    }
+  }
+  function applyJohnCheer(still = false) {
+    if (cheerRemaining <= 0) return;
+    const envelope = Math.min(1, cheerRemaining / .2);
+    const wave = still ? 0 : Math.sin(cheerElapsed * 13);
+    const hop = still ? 0 : Math.max(0, Math.sin(cheerElapsed * 10)) * (.24 + cheerStrength * .025);
+    john.root.rotation.y = Math.atan2(camera.position.x - john.root.position.x, camera.position.z - john.root.position.z);
+    john.body.position.y = hop * envelope;
+    john.body.rotation.z = still ? 0 : Math.sin(cheerElapsed * 8) * .055 * envelope;
+    john.arms[1].rotation.x = (-2.6 + wave * .18) * envelope;
+    john.arms[1].rotation.z = (.25 + wave * .25) * envelope;
+    john.arms[0].rotation.x = -.7 * envelope;
+    john.arms[0].rotation.z = -.55 * envelope;
+  }
+  function cheerJohn({ strength = 1 } = {}) {
+    if (disposed || contextLost) return { accepted: false, spawned: 0 };
+    const level = Number.isFinite(strength) ? THREE.MathUtils.clamp(Math.round(strength), 1, 5) : 1;
+    const still = paused || reducedMotion;
+    const count = still ? Math.min(5, level + 1) : 5 + level * 3;
+    cheerStrength = level;
+    cheerElapsed = 0;
+    cheerRemaining = Math.min(2.4, cheerRemaining + .85);
+    moveWorker(john, 0);
+    applyJohnCheer(still);
+    const forward = new THREE.Vector3(camera.position.x - john.root.position.x, 0, camera.position.z - john.root.position.z).normalize();
+    const sideways = new THREE.Vector3(forward.z, 0, -forward.x);
+    for (let index = 0; index < count; index++) {
+      const coin = coinPool[coinCursor];
+      const distance = 2 + Math.random() * 2;
+      const spread = (Math.random() - .5) * 4;
+      coin.active = true;
+      coin.age = 0;
+      coin.life = 14 + Math.random() * 4;
+      coin.size = .9 + Math.random() * .2;
+      coin.bounces = 0;
+      coin.settled = false;
+      // Start above the head badge, in the open foreground rather than
+      // underneath the following card or the roaster's body.
+      coin.position.copy(john.root.position).addScaledVector(forward, distance).addScaledVector(sideways, spread);
+      coin.position.y = 5.3 + Math.random() * 1.3;
+      coin.velocity.copy(forward).multiplyScalar(.65 + Math.random() * .65)
+        .addScaledVector(sideways, (Math.random() - .5) * 1.5);
+      coin.velocity.y = 3.2 + Math.random() * 1.6;
+      coin.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI * 2, Math.random() * Math.PI);
+      coin.spin.set(3 + Math.random() * 4, Math.random() * 6, 2 + Math.random() * 5);
+      if (still) settleCoin(coin);
+      writeCoin(coinCursor);
+      coinCursor = (coinCursor + 1) % maxCoins;
+    }
+    coinMesh.instanceMatrix.needsUpdate = true;
+    coinFades.needsUpdate = true;
+    requestFrame();
+    return { accepted: true, spawned: count };
+  }
+
   const raycaster = new THREE.Raycaster();
   const pointer = new THREE.Vector2();
   const projected = new THREE.Vector3();
-  function hitZone(event) {
+  function hitTarget(event) {
     const bounds = canvas.getBoundingClientRect();
     if (!bounds.width || !bounds.height) return null;
     pointer.set((event.clientX - bounds.left) / bounds.width * 2 - 1, -(event.clientY - bounds.top) / bounds.height * 2 + 1);
@@ -537,8 +712,13 @@ export function createWarehouseScene({ container, onSelect, onReady, onError, re
     const intersections = raycaster.intersectObjects(scene.children, true);
     for (const hit of intersections) {
       let object = hit.object;
-      while (object && !object.userData.zone) object = object.parent;
-      if (object?.userData.zone) return object.userData.zone;
+      let zone;
+      while (object) {
+        if (object.userData.person) return { person: object.userData.person };
+        if (!zone && object.userData.zone) zone = object.userData.zone;
+        object = object.parent;
+      }
+      if (zone) return { zone };
       // A wall or foreground object blocks picking objects behind it.
       if (!hit.object.isLine && !hit.object.material?.transparent) return null;
     }
@@ -562,13 +742,14 @@ export function createWarehouseScene({ container, onSelect, onReady, onError, re
     const moved = Math.hypot(event.clientX - pointerStart.x, event.clientY - pointerStart.y);
     pointerStart = undefined;
     if (moved > 7) return;
-    const id = hitZone(event);
-    if (id) { highlight(id); onSelect?.(id); }
+    const target = hitTarget(event);
+    if (target?.person) onPersonSelect?.(target.person);
+    else if (target?.zone) { highlight(target.zone); onSelect?.(target.zone); }
   }
   function onPointerMove(event) {
     if (pointerStart || performance.now() - hoverAt < 65) return;
     hoverAt = performance.now();
-    canvas.style.cursor = hitZone(event) ? 'pointer' : 'grab';
+    canvas.style.cursor = hitTarget(event) ? 'pointer' : 'grab';
   }
   function onPointerCancel() { pointerStart = undefined; canvas.style.cursor = 'grab'; }
   canvas.addEventListener('pointerdown', onPointerDown);
@@ -639,6 +820,15 @@ export function createWarehouseScene({ container, onSelect, onReady, onError, re
       return { id, x, y, visible: projected.z > -1 && projected.z < 1 && x >= 0 && x <= width && y >= 0 && y <= height };
     });
   }
+  function projectPerson(id) {
+    if (id !== 'john' || disposed || contextLost) return { visible: false };
+    camera.updateMatrixWorld();
+    john.root.updateWorldMatrix(true, false);
+    projected.set(0, 2.05 + john.body.position.y, 0).applyMatrix4(john.root.matrixWorld).project(camera);
+    const x = (projected.x + 1) / 2 * width;
+    const y = (1 - projected.y) / 2 * height;
+    return { id, x, y, visible: projected.z > -1 && projected.z < 1 && x >= 0 && x <= width && y >= 0 && y <= height };
+  }
 
   function knownIntensity(value, scale) {
     return Number.isFinite(value) && value >= 0 ? Math.min(.95, Math.sqrt(value / scale) * .65) : 0;
@@ -654,6 +844,7 @@ export function createWarehouseScene({ container, onSelect, onReady, onError, re
     activities.lab = knownIntensity(data.lab?.consumption?.averageKg, 4000);
     activities.purchases = 0;
     for (const worker of workers) moveWorker(worker, 0);
+    applyJohnCheer(paused || reducedMotion);
     requestFrame();
   }
   function setPaused(value) {
@@ -669,6 +860,17 @@ export function createWarehouseScene({ container, onSelect, onReady, onError, re
       controls.target.copy(cameraTween.targetTo);
       cameraTween = undefined;
       controls.update();
+    }
+    if (reducedMotion) {
+      for (let index = 0; index < maxCoins; index++) {
+        if (!coinPool[index].active) continue;
+        settleCoin(coinPool[index]);
+        writeCoin(index);
+      }
+      coinMesh.instanceMatrix.needsUpdate = true;
+      coinFades.needsUpdate = true;
+      moveWorker(john, 0);
+      applyJohnCheer(true);
     }
     lastTime = 0;
     requestFrame();
@@ -688,9 +890,15 @@ export function createWarehouseScene({ container, onSelect, onReady, onError, re
     const delta = lastTime ? Math.min((time - lastTime) / 1000, .05) : 0;
     lastTime = time;
     const animate = !paused && !reducedMotion;
+    const wasCheering = cheerRemaining > 0;
+    if (!paused && wasCheering) {
+      cheerElapsed += delta;
+      cheerRemaining = Math.max(0, cheerRemaining - delta);
+    }
     if (animate) {
       elapsed += delta;
       for (const worker of workers) moveWorker(worker, delta);
+      applyJohnCheer();
       coolingArms.rotation.y += delta * activities.roasting * .8;
       const driving = activities.dispatch;
       vanTravel = (vanTravel + delta * driving / 34) % 1;
@@ -704,7 +912,11 @@ export function createWarehouseScene({ container, onSelect, onReady, onError, re
       if (vanTravel < .55 || vanTravel > .76) {
         for (const wheel of wheels) wheel.rotateY(-delta * driving * 3.3);
       }
+    } else if (!paused && wasCheering) {
+      moveWorker(john, 0);
+      applyJohnCheer(true);
     }
+    if (!paused) updateCoins(delta);
     if (cameraTween) {
       const progress = Math.min((time - cameraTween.start) / 800, 1);
       const eased = 1 - Math.pow(1 - progress, 3);
@@ -722,7 +934,8 @@ export function createWarehouseScene({ container, onSelect, onReady, onError, re
       return;
     }
     if (!ready) { ready = true; queueMicrotask(() => { if (!disposed) onReady?.(); }); }
-    if (cameraTween || animate && (!dataReceived || Object.values(activities).some(value => value > 0))) requestFrame();
+    const effectActive = !paused && (cheerRemaining > 0 || coinPool.some(coin => coin.active));
+    if (cameraTween || effectActive || animate && (!dataReceived || Object.values(activities).some(value => value > 0))) requestFrame();
   }
   function onVisibilityChange() { if (isVisible()) requestFrame(); else stopFrame(); }
   function onContextLost(event) {
@@ -769,8 +982,10 @@ export function createWarehouseScene({ container, onSelect, onReady, onError, re
     controls.removeEventListener('change', requestFrame);
     controls.removeEventListener('start', onControlStart);
     controls.dispose();
+    coinMesh.dispose();
     for (const shape of geometries) shape.dispose();
     for (const surface of materials) surface.dispose();
+    for (const texture of textures) texture.dispose();
     sunlight.shadow.dispose();
     renderer.dispose();
     renderer.forceContextLoss();
@@ -781,5 +996,5 @@ export function createWarehouseScene({ container, onSelect, onReady, onError, re
   resize();
   camera.lookAt(controls.target);
   requestFrame();
-  return { setData, focus, setPaused, setReducedMotion, resize, dispose, projectPins };
+  return { setData, focus, setPaused, setReducedMotion, resize, dispose, projectPins, projectPerson, cheerJohn };
 }

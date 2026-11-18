@@ -55,6 +55,33 @@ export const warehousePage = String.raw`<!doctype html>
     .weather-attribution { font-size:.75rem; }
     .local-weather.stale { color:var(--caution); }
     .local-conditions a { pointer-events:auto; }
+    .john-layer { position:absolute; inset:0; z-index:7; pointer-events:none; overflow:hidden; }
+    .john-badge { position:absolute; left:0; top:0; transform:translate(-50%,-100%); display:flex; align-items:center; gap:.35rem; min-height:44px; padding:.35rem .6rem; border:1px solid #b68d58; border-radius:.6rem; background:#fff7df; color:#4c4529; box-shadow:0 3px 8px rgb(48 54 34 / .12); pointer-events:auto; font-size:.85rem; font-weight:750; white-space:nowrap; }
+    .john-badge[aria-expanded=true] { background:var(--green); color:white; border-color:var(--green); }
+    .john-badge small { font-weight:550; font-size:.75rem; }
+    .john-card { position:absolute; width:294px; max-width:calc(100% - 20px); max-height:calc(100% - 76px); overflow:auto; padding:.75rem; border:1px solid #b6c3ae; border-radius:.75rem; background:#fffdf5; color:var(--ink); box-shadow:0 7px 24px rgb(26 47 34 / .2); pointer-events:auto; }
+    .john-card header { display:flex; align-items:center; justify-content:space-between; gap:.5rem; }
+    .john-card h3 { font-size:1.12rem; letter-spacing:-.025em; }
+    .john-card .john-close { min-height:44px; min-width:44px; padding:0; font-size:1.2rem; border:0; border-radius:.35rem; background:transparent; color:var(--muted); }
+    .john-caption { color:var(--muted); font-size:.74rem; line-height:1.4; }
+    .john-ratings { display:grid; gap:.6rem; margin-block:.75rem; }
+    .john-rating { display:grid; grid-template-columns:64px minmax(0,1fr) auto; align-items:center; gap:.15rem .4rem; }
+    .john-rating-label { font-size:.875rem; font-weight:700; }
+    .john-rating-score { grid-column:3; grid-row:1; font-size:.875rem; font-weight:750; font-variant-numeric:tabular-nums; }
+    .john-slots { display:flex; align-items:center; gap:.2rem; grid-column:2; grid-row:1; }
+    .john-slot { display:grid; place-items:center; width:24px; height:26px; flex:none; font-size:1rem; border:1px solid #c8d1c1; border-radius:.35rem; background:#f1f3eb; filter:grayscale(1); opacity:.4; }
+    .john-slot.filled { opacity:1; filter:none; background:#fff0ba; border-color:#d6b96b; }
+    .john-card .high-five { min-height:46px; width:100%; border:1px solid #b17c30; border-radius:.5rem; background:#e5b33f; color:#3e341c; font-size:.94rem; font-weight:800; box-shadow:0 3px 0 #b48a3d; touch-action:manipulation; }
+    .high-five:active { box-shadow:0 1px 0 #b48a3d; transform:translateY(2px); }
+    .john-cheers { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:.3rem; margin-block:.55rem; font-size:.875rem; color:var(--muted); font-variant-numeric:tabular-nums; }
+    .john-combo { color:#83520d; font-weight:800; }
+    .john-coin-feedback { margin-top:.5rem; font-size:.875rem; line-height:1.35; font-weight:700; color:#83520d; }
+    .john-coin-feedback.error { color:var(--red); }
+    .john-reasons { border-top:1px solid var(--line); padding-top:.35rem; font-size:.75rem; }
+    .john-reasons summary { min-height:32px; cursor:pointer; font-weight:650; color:var(--green); }
+    .john-reasons p { margin-top:.35rem; overflow-wrap:anywhere; }
+    .cheer-pop { position:absolute; pointer-events:none; font-size:1.4rem; font-weight:900; color:#81530a; text-shadow:0 1px 0 white; }
+    .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; border:0; }
     .scene-message { position:absolute; inset:0; z-index:2; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:.7rem; padding:2rem; text-align:center; color:var(--green); background:var(--sky); }
     .scene-message p { max-width:32ch; font-size:.88rem; }
     .scene-message strong { font-size:1.12rem; }
@@ -155,7 +182,7 @@ export const warehousePage = String.raw`<!doctype html>
     @media (max-width:1150px) { .workspace { grid-template-columns:minmax(0,1fr) 335px; } .scene-hint { display:none; } .panel-body,.panel-header { padding-inline:.9rem; } }
     @media (max-width:900px) { .workspace { grid-template-columns:1fr; } .scene-stage { height:66vh; min-height:460px; } .detail-panel { border-left:0; border-top:1px solid var(--line); max-height:none; } .panel-body { overflow:visible; } .panel-header { padding:.9rem 1rem; } .panel-body { padding:1rem; } .scene-tools { bottom:.75rem; } .zone-nav { justify-content:center; } .pair { max-width:32rem; } }
     @media (max-width:650px) { .wrap { width:calc(100% - 1.4rem); } .bar { flex-wrap:wrap; justify-content:space-between; gap:.3rem .5rem; padding-block:.7rem; } .brand img { width:auto; height:2.35rem; } .dashboard-nav { order:3; width:100%; gap:.2rem; } .dashboard-nav a { min-height:37px; font-size:.8rem; padding:.45rem .6rem; } .page-actions { margin-left:0; } .page-actions .button { min-height:38px; font-size:.75rem; padding:.45rem .55rem; } .intro { margin:1rem 0 .75rem; } .intro p { font-size:.74rem; max-width:45ch; } .report-time { text-align:left; width:100%; font-size:.71rem; } .report-time strong { display:inline; margin-right:.4rem; } .scene-stage { height:58vh; min-height:390px; } .scene-caption { top:.65rem; left:.65rem; font-size:.65rem; } .scene-tools { left:.65rem; right:.65rem; } .scene-tools .button { min-height:37px; font-size:.72rem; padding:.4rem .55rem; } .pin { font-size:.8125rem; padding:.3rem .4rem; min-height:36px; } .zone-nav { justify-content:flex-start; gap:.15rem; padding:.55rem; } .zone-nav button { min-height:38px; font-size:.7rem; padding:.35rem .45rem; } .stat-strip { gap:0; } .stat { padding:.65rem .6rem; display:block; } .stat + .stat { border-left:1px solid var(--line); } .stat dt { font-size:.68rem; } .stat dd { font-size:1.04rem; margin-top:.15rem; } .stat p { font-size:.62rem; } .footer { font-size:.66rem; } .login { margin:2rem .7rem; } }
-    @media (prefers-reduced-motion:reduce) { .spinner { animation:none !important; } }
+    @media (prefers-reduced-motion:reduce) { .spinner { animation:none !important; } .high-five:active { transform:none; } }
     @media (max-width:650px) { .local-conditions { top:.65rem; right:.65rem; padding:.45rem .55rem; } .scene-caption { display:none; } }
     @media (max-width:650px) { .pin { max-width:185px; } .pin-extra { display:none; } }
     @media print { .topbar,.scene-stage,.zone-nav,.page-actions,.footer { display:none; } .workspace { display:block; border:0; } .detail-panel { max-height:none; border:0; } .panel-body { overflow:visible; } body { background:white; } }
@@ -178,8 +205,22 @@ export const warehousePage = String.raw`<!doctype html>
       <div class="stage-column">
         <div id="sceneStage" class="scene-stage">
           <div id="sceneCanvas" role="group" aria-label="Interactive roastery illustration"></div>
+          <div id="johnLayer" class="john-layer">
+            <button id="johnBadge" class="john-badge" type="button" aria-expanded="false" aria-controls="johnCard" hidden><span aria-hidden="true">🧢</span>John <small>Hi five</small></button>
+            <section id="johnCard" class="john-card" aria-labelledby="johnTitle" hidden>
+              <header><h3 id="johnTitle">John’s game status</h3><button id="johnClose" class="john-close" type="button" aria-label="Close John’s status">×</button></header>
+              <p class="john-caption">Playful weekly estimates</p>
+              <div id="johnRatings" class="john-ratings"></div>
+              <button id="johnHighFive" class="high-five" type="button"><span aria-hidden="true">🙌</span> Hi five, John! <span aria-hidden="true">+1</span></button>
+              <p id="johnCoinFeedback" class="john-coin-feedback" hidden></p>
+              <div class="john-cheers"><span id="johnCheerCount">0 cheers · this visit</span><span id="johnCombo" class="john-combo" hidden aria-hidden="true"></span></div>
+              <p class="john-caption">Local cheers boost Energy and Emotion up to 5.</p>
+              <details class="john-reasons"><summary>Why these estimates?</summary><div id="johnReasons"></div></details>
+            </section>
+            <div id="johnCheerAnnouncement" class="sr-only" role="status" aria-live="polite"></div>
+          </div>
           <div class="scene-caption"><i aria-hidden="true"></i>Black Market roastery</div>
-          <aside class="local-conditions" aria-label="Sydney time and Marrickville outdoor forecast">
+          <aside id="localConditions" class="local-conditions" aria-label="Sydney time and Marrickville outdoor forecast">
             <div class="conditions-top">
               <div class="clock-wrap">
                 <svg id="analogueClock" class="clock-face" viewBox="0 0 120 120" role="img" aria-labelledby="clockTitle clockDescription">
@@ -227,6 +268,11 @@ export const warehousePage = String.raw`<!doctype html>
     let signedIn = false, data = null, selected = "overview", scene = null, scenePromise = null, sceneFailed = false;
     let sessionGeneration = 0, activeRequest = null, pinsFrame = null, pinsTime = 0, sceneVisible = true;
     let weatherMinute = -1;
+    let johnOpen = false, johnRect = null, johnCombo = 0, johnLastTap = 0, johnComboTimer = null, johnAnnounceTimer = null, johnRenderedWeek = null;
+    let cheerPopIndex = 0, johnCoinReward = null;
+    const johnCheers = new Map();
+    const johnCoins = new Map();
+    const cheerPops = [];
     const clockDate = new Intl.DateTimeFormat("en-AU", { timeZone: "Australia/Sydney", weekday: "short", day: "numeric", month: "short", year: "numeric" });
     const clockTime = new Intl.DateTimeFormat("en-AU", { timeZone: "Australia/Sydney", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" });
     const motion = matchMedia("(prefers-reduced-motion: reduce)");
@@ -767,15 +813,171 @@ export const warehousePage = String.raw`<!doctype html>
         pin.title = zone.name + (lines.length ? " · " + lines.join(" · ") : "");
       }
     }
+    function johnWeek() { return data?.john?.weekStart || data?.weekly?.week?.start || null; }
+    function clearCheerEffects() {
+      for (const pop of cheerPops) {
+        pop.animation?.cancel();
+        pop.animation = null;
+        pop.element.hidden = true;
+      }
+    }
+    function renderJohn() {
+      const week = johnWeek();
+      if (week !== johnRenderedWeek) {
+        johnRenderedWeek = week;
+        johnCombo = 0;
+        johnLastTap = 0;
+        johnCoinReward = null;
+        clearTimeout(johnComboTimer);
+      }
+      const cheers = johnCheers.get(week) || 0;
+      const status = data?.john || {};
+      const ratings = [];
+      const reasons = [];
+      for (const [key, title, icon] of [["energy", "Energy", "⚡"], ["workload", "Workload", "📦"], ["emotion", "Emotion", "😊"]]) {
+        const stat = status[key] || {};
+        const base = Number.isInteger(stat.score) && stat.score >= 0 && stat.score <= 5 ? stat.score : null;
+        const score = base === null ? null : key === "workload" ? base : Math.min(5, base + cheers);
+        const row = node("div", void 0, "john-rating");
+        row.append(node("span", title, "john-rating-label"), node("span", score === null ? "—/5" : score + "/5", "john-rating-score"));
+        const slots = node("span", void 0, "john-slots");
+        slots.setAttribute("aria-hidden", "true");
+        for (let index = 1; index <= 5; index++) slots.append(node("span", icon, "john-slot" + (score !== null && index <= score ? " filled" : "")));
+        row.append(slots);
+        ratings.push(row);
+        const reason = node("p");
+        reason.append(node("strong", title + (base === null ? " · source unavailable" : " · source " + base + "/5") + (stat.label ? " (" + stat.label + ")" : "")), " ", stat.reason || "The weekly source does not yet support an estimate.");
+        if (score !== null && score > base) reason.append(" Local cheer boost +" + (score - base) + ".");
+        reasons.push(reason);
+      }
+      el("johnRatings").replaceChildren(...ratings);
+      if (status.summary) reasons.push(node("p", status.summary));
+      if (status.sourceNote) reasons.push(node("p", status.sourceNote));
+      el("johnReasons").replaceChildren(...reasons);
+      el("johnCheerCount").textContent = cheers + (cheers === 1 ? " cheer" : " cheers") + " · this visit";
+      el("johnCombo").textContent = "Combo ×" + johnCombo;
+      el("johnCombo").hidden = johnCombo < 2;
+      const coins = johnCoins.get(week) || 0;
+      const feedback = johnCoinReward?.accepted
+        ? (johnCoinReward.spawned >= 14 ? "Coin rain +" : "Coins +") + johnCoinReward.spawned + " · " + coins + " game coins this visit"
+        : johnCoinReward ? "3D coins unavailable. Your +1 cheer still counts." : "";
+      el("johnCoinFeedback").textContent = feedback;
+      el("johnCoinFeedback").hidden = !feedback;
+      el("johnCoinFeedback").classList.toggle("error", Boolean(johnCoinReward && !johnCoinReward.accepted));
+      el("johnHighFive").disabled = !signedIn || !week;
+    }
+    function closeJohn(restoreFocus = false) {
+      johnOpen = false;
+      el("johnCard").hidden = true;
+      el("johnBadge").setAttribute("aria-expanded", "false");
+      johnRect = null;
+      clearCheerEffects();
+      if (restoreFocus && !el("johnBadge").hidden) el("johnBadge").focus({ preventScroll: true });
+    }
+    function openJohn(id = "john") {
+      if (id !== "john" || !signedIn || sceneFailed) return;
+      selectZone("roasting");
+      johnOpen = true;
+      el("johnBadge").setAttribute("aria-expanded", "true");
+      renderJohn();
+      positionJohn();
+      if (!el("johnCard").hidden) el("johnHighFive").focus({ preventScroll: true });
+    }
+    function positionJohn() {
+      const badge = el("johnBadge"), card = el("johnCard");
+      if (!scene || sceneFailed || !signedIn || !sceneVisible || document.hidden) {
+        badge.hidden = card.hidden = true;
+        johnRect = null;
+        return;
+      }
+      const person = scene.projectPerson?.("john");
+      const visible = person?.visible && Number.isFinite(person.x) && Number.isFinite(person.y);
+      badge.hidden = !visible;
+      card.hidden = !visible || !johnOpen;
+      if (!visible) { johnRect = null; return; }
+      const width = el("sceneStage").clientWidth, height = el("sceneStage").clientHeight;
+      const x = Math.max(badge.offsetWidth / 2 + 8, Math.min(width - badge.offsetWidth / 2 - 8, person.x));
+      const y = Math.max(badge.offsetHeight + 8, Math.min(height - 60, person.y));
+      badge.style.left = x + "px";
+      badge.style.top = y + "px";
+      johnRect = { left: x - badge.offsetWidth / 2 - 5, right: x + badge.offsetWidth / 2 + 5, top: y - badge.offsetHeight - 5, bottom: y + 5 };
+      if (johnOpen) {
+        let left = person.x - card.offsetWidth - 18;
+        if (left < 10) left = person.x + 18;
+        left = Math.max(10, Math.min(width - card.offsetWidth - 10, left));
+        let top = width <= 650 ? 10 : Math.max(10, Math.min(height - card.offsetHeight - 60, person.y - card.offsetHeight - 24));
+        const stageBounds = el("sceneStage").getBoundingClientRect();
+        const clockBounds = el("localConditions").getBoundingClientRect();
+        const clockLeft = clockBounds.left - stageBounds.left;
+        const clockRight = clockLeft + clockBounds.width;
+        const clockTop = clockBounds.top - stageBounds.top;
+        const clockBottom = clockTop + clockBounds.height;
+        const overlapsClock = left < clockRight + 10 && left + card.offsetWidth > clockLeft - 10 &&
+          top < clockBottom + 10 && top + card.offsetHeight > clockTop - 10;
+        if (overlapsClock) {
+          if (clockLeft - card.offsetWidth - 10 >= 10) left = Math.min(left, clockLeft - card.offsetWidth - 10);
+          else if (width > 650 && clockBottom + card.offsetHeight + 70 <= height) top = clockBottom + 10;
+        }
+        card.style.left = left + "px";
+        card.style.top = top + "px";
+        johnRect = { left: Math.min(johnRect.left, left - 5), right: Math.max(johnRect.right, left + card.offsetWidth + 5), top: Math.min(johnRect.top, top - 5), bottom: Math.max(johnRect.bottom, top + card.offsetHeight + 5) };
+      }
+    }
+    function cheerPop() {
+      if (motion.matches || paused || document.hidden || !sceneVisible) return;
+      let pop = cheerPops[cheerPopIndex % 8];
+      if (!pop) {
+        const element = node("span", "+1", "cheer-pop");
+        element.setAttribute("aria-hidden", "true");
+        el("johnLayer").append(element);
+        pop = { element, animation: null };
+        cheerPops.push(pop);
+      }
+      cheerPopIndex++;
+      pop.animation?.cancel();
+      const button = el("johnHighFive").getBoundingClientRect(), stage = el("sceneStage").getBoundingClientRect();
+      pop.element.style.left = button.left - stage.left + button.width / 2 + (cheerPopIndex % 3 - 1) * 15 + "px";
+      pop.element.style.top = button.top - stage.top + "px";
+      pop.element.hidden = false;
+      if (!pop.element.animate) { pop.element.hidden = true; return; }
+      const animation = pop.element.animate([{ transform: "translate(-50%,0)", opacity: 1 }, { transform: "translate(-50%,-60px)", opacity: 0 }], { duration: 650, easing: "ease-out" });
+      pop.animation = animation;
+      animation.finished.then(() => { if (pop.animation === animation) pop.element.hidden = true; }).catch(() => {});
+    }
+    function highFiveJohn() {
+      const week = johnWeek();
+      if (!signedIn || !week) return;
+      const now = performance.now();
+      johnCombo = now - johnLastTap <= 1400 ? johnCombo + 1 : 1;
+      johnLastTap = now;
+      johnCheers.set(week, (johnCheers.get(week) || 0) + 1);
+      cheerPop();
+      let reward;
+      try {
+        if (!document.hidden && sceneVisible) reward = scene?.cheerJohn?.({ strength: Math.min(5, 1 + Math.floor(johnCombo / 3)) });
+      } catch {}
+      const accepted = reward?.accepted === true && Number.isSafeInteger(reward.spawned) && reward.spawned >= 0;
+      johnCoinReward = accepted ? { accepted: true, spawned: reward.spawned } : { accepted: false, spawned: 0 };
+      if (accepted) johnCoins.set(week, (johnCoins.get(week) || 0) + reward.spawned);
+      renderJohn();
+      clearTimeout(johnComboTimer);
+      johnComboTimer = setTimeout(() => { johnCombo = 0; renderJohn(); }, 1400);
+      clearTimeout(johnAnnounceTimer);
+      johnAnnounceTimer = setTimeout(() => {
+        if (signedIn && johnWeek() === week) el("johnCheerAnnouncement").textContent = (johnCheers.get(week) || 0) + " cheers and " + (johnCoins.get(week) || 0) + " game coins this visit.";
+      }, 400);
+      positionJohn();
+    }
     function positionPins() {
       if (!scene || sceneFailed || !signedIn || !sceneVisible || document.hidden) return;
+      positionJohn();
       let positions;
       try {
         positions = scene.projectPins();
       } catch {
         return;
       }
-      const occupied = [];
+      const occupied = johnRect ? [johnRect] : [];
       const width = el("pins").clientWidth, height = el("pins").clientHeight;
       const ordered = [...(positions || [])].sort((left, right) => Number(right.id === selected) - Number(left.id === selected));
       for (const position of ordered) {
@@ -805,6 +1007,7 @@ export const warehousePage = String.raw`<!doctype html>
     function pinsLoop(now) {
       pinsFrame = null;
       if (!signedIn || !scene || sceneFailed || !sceneVisible || document.hidden) return;
+      positionJohn();
       if (now - pinsTime > 80) {
         positionPins();
         pinsTime = now;
@@ -813,6 +1016,7 @@ export const warehousePage = String.raw`<!doctype html>
     }
     function pauseState() {
       scene?.setPaused(paused || motion.matches || document.hidden || !sceneVisible || sceneFailed);
+      if (paused || motion.matches || document.hidden || !sceneVisible || sceneFailed) clearCheerEffects();
       el("pause").disabled = sceneFailed || motion.matches;
       el("pause").textContent = motion.matches ? "Reduced motion" : paused ? "Resume activity" : "Pause activity";
       el("pause").title = motion.matches ? "Activity is paused because reduced motion is enabled." : "Pause or resume illustrative activity";
@@ -830,6 +1034,7 @@ export const warehousePage = String.raw`<!doctype html>
       el("pause").disabled = true;
       el("reset").disabled = true;
       el("pins").querySelectorAll("button").forEach((button) => button.hidden = true);
+      positionJohn();
       renderPinMetrics();
       pauseState();
     }
@@ -842,7 +1047,7 @@ export const warehousePage = String.raw`<!doctype html>
       el("sceneMessageTitle").textContent = "Opening the roastery";
       el("sceneMessageBody").textContent = "Your dashboard figures will appear alongside the scene.";
       el("pause").disabled = el("reset").disabled = false;
-      const current = import("/warehouse-scene.js");
+      const current = import("/warehouse-scene.js?v=john-game-1");
       scenePromise = current;
       try {
         const { createWarehouseScene } = await current;
@@ -853,6 +1058,7 @@ export const warehousePage = String.raw`<!doctype html>
           onSelect: (id) => {
             if (signedIn) selectZone(id, { focus: true, moveCamera: false });
           },
+          onPersonSelect: openJohn,
           onReady: () => {
             if (signedIn && generation === sessionGeneration && !sceneFailed) {
               el("sceneMessage").hidden = true;
@@ -890,6 +1096,18 @@ export const warehousePage = String.raw`<!doctype html>
     }
     function clearReport() {
       data = null;
+      clearTimeout(johnComboTimer);
+      clearTimeout(johnAnnounceTimer);
+      johnCheers.clear();
+      johnCoins.clear();
+      johnCoinReward = null;
+      johnCombo = 0;
+      johnLastTap = 0;
+      johnRenderedWeek = null;
+      closeJohn();
+      el("johnBadge").hidden = true;
+      el("johnCheerAnnouncement").textContent = "";
+      renderJohn();
       renderWeather();
       for (const id of ["statDemand", "statRoasted", "statDispatch"]) el(id).textContent = "—";
       el("reportTime").replaceChildren();
@@ -937,6 +1155,7 @@ export const warehousePage = String.raw`<!doctype html>
       el("reportTime").replaceChildren(node("strong", weekLabel()), document.createTextNode(timestamp ? "Dashboard read " + timestamp + " Sydney time" : ""));
       renderPanel(true);
       renderWeather();
+      renderJohn();
       renderPinMetrics();
       try {
         scene?.setData(data);
@@ -1021,6 +1240,10 @@ export const warehousePage = String.raw`<!doctype html>
     });
     el("reset").addEventListener("click", () => selectZone("overview"));
     el("refresh").addEventListener("click", () => load(true));
+    el("johnBadge").addEventListener("click", () => { if (johnOpen) closeJohn(true); else openJohn(); });
+    el("johnClose").addEventListener("click", () => closeJohn(true));
+    el("johnHighFive").addEventListener("click", highFiveJohn);
+    el("johnCard").addEventListener("keydown", event => { if (event.key === "Escape") { event.preventDefault(); closeJohn(true); } });
     el("signInForm").addEventListener("submit", async (event) => {
       event.preventDefault();
       el("signIn").disabled = true;
@@ -1076,6 +1299,9 @@ export const warehousePage = String.raw`<!doctype html>
     const clockTimer = setInterval(updateClock, 1000);
     window.addEventListener("pagehide", () => {
       activeRequest?.abort();
+      clearTimeout(johnComboTimer);
+      clearTimeout(johnAnnounceTimer);
+      clearCheerEffects();
       scene?.dispose();
       scene = null;
       if (pinsFrame !== null) cancelAnimationFrame(pinsFrame);
