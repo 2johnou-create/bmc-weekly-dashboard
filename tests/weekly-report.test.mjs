@@ -164,3 +164,38 @@ test("weekly report checks the Stockroom session before reading the other source
   } }), error => error.status === 401);
   assert.deepEqual(reads, ["/api/inventory"]);
 });
+
+test("past reports use a closed Friday span and require matching Dispatch cutoff data", async () => {
+  const dispatch = [];
+  const report = await collectWeeklyReport({
+    weekStart: week,
+    stockroomCookie: "local-test-session",
+    now: new Date("2026-11-18T03:00:00Z"),
+    env: {
+      DASHBOARD_DISPATCH_URL: "https://bmc-dispatch-delivery.misty-jelly-1931.chatgpt.site/api/integrations/dashboard/weekly",
+      DISPATCH_READ_TOKEN: "fixture-read-token",
+    },
+    fetcher: async address => {
+      const url = new URL(address);
+      if (url.pathname === "/api/inventory") return Response.json({ items: [{ id: "fixture", stock: 10, unitCost: 5 }] });
+      if (url.pathname === "/api/integrations/dashboard/weekly") {
+        const selected = url.searchParams.get("week");
+        dispatch.push([selected, url.searchParams.get("through")]);
+        return Response.json({
+          sourceSystem: "bmc-dispatch", schemaVersion: "1.0", weekStart: selected,
+          periodEnd: selected === week ? "2026-11-13" : "2026-11-08",
+          planStatus: "confirmed-weekly-import",
+          wholesale: { orders: 10, completedOrders: 7, pendingOrders: 3 },
+        });
+      }
+      return new Response(null, { status: 503 });
+    },
+  });
+  assert.equal(report.week.end, "2026-11-13");
+  assert.equal(report.week.label, "9 Nov – 13 Nov 2026");
+  assert.deepEqual(dispatch.sort(), [["2026-11-02", "friday"], [week, "friday"]]);
+  assert.equal(report.metrics.wholesale.done, 7);
+  assert.equal(report.metrics.wholesale.previousOrders, null);
+  assert.equal(report.metrics.green.snapshotDate, "2026-11-13");
+  assert.equal(report.metrics.stock.value, null);
+});

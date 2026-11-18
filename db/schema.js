@@ -48,3 +48,20 @@ export const dashboardCropsterGreenStock = sqliteTable("dashboard_cropster_green
 }, table => [
   check("dashboard_cropster_green_stock_marrickville", sql`${table.location} = 'Marrickville'`),
 ]);
+
+export const dashboardWeeklyNotes = sqliteTable("dashboard_weekly_notes", {
+  weekStart: text("week_start").primaryKey(),
+  lines: text("lines_json").notNull(),
+  revision: integer("revision").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+});
+
+export const dashboardCropsterFriday = sqliteTable("dashboard_cropster_friday", {
+  weekStart: text("week_start").primaryKey(),
+  roastedKg: real("roasted_kg"),
+  roastedValue: real("roasted_value"),
+  greenKg: real("green_kg"),
+  greenValue: real("green_value"),
+  productionReadAt: integer("production_read_at"),
+  greenReadAt: integer("green_read_at"),
+});

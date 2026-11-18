@@ -1,7 +1,9 @@
 import { addDays, dashboardWeek, fetchSourceJson, isoTimestamp, mapNonCoffee, SOURCE_ORIGINS } from "./metrics.js";
 import { CROPSTER_WEBSITE, readCropsterReadings } from "./cropster.js";
 import { readCropsterMonday } from "./cropster-monday.js";
+import { readCropsterFriday } from "./cropster-friday.js";
 import { readWeeklyDemand } from "./demand.js";
+import { readFridayStock } from "./stock-history.js";
 
 const dispatchPath = "/api/integrations/dashboard/weekly";
 
@@ -9,13 +11,16 @@ function settledValue(result, fallback = null) {
   return result.status === "fulfilled" ? result.value : fallback;
 }
 
-async function readDispatch(weekStart, env, fetcher) {
+async function readDispatch(weekStart, env, fetcher, throughFriday = false) {
   if (!env.DASHBOARD_DISPATCH_URL || !env.DISPATCH_READ_TOKEN) return null;
   const url = new URL(env.DASHBOARD_DISPATCH_URL);
   if (url.origin !== SOURCE_ORIGINS.dispatch || url.pathname !== dispatchPath || url.username || url.password) return null;
   url.searchParams.set("week", weekStart);
+  if (throughFriday) url.searchParams.set("through", "friday");
+  else url.searchParams.delete("through");
   const result = await fetchSourceJson(url.href, { Authorization: `Bearer ${env.DISPATCH_READ_TOKEN}` }, fetcher);
   if (result.sourceSystem !== "bmc-dispatch" || result.schemaVersion !== "1.0" || result.weekStart !== weekStart) return null;
+  if (throughFriday && result.periodEnd !== addDays(weekStart, 4)) return null;
   return result;
 }
 
@@ -48,7 +53,9 @@ export function wholesaleDeliveryComparison(current, previous) {
   const { orders: previousOrders, done: previousDone, pending: previousPending } = dispatchCounts(previous);
   const notes = [];
   if (orders === null) {
-    if (provisional) notes.push("The saved schedule covers the entire Sydney week. Scheduled and pending counts are provisional until the weekly import is confirmed in Dispatch.");
+    if (provisional) notes.push(current.periodEnd
+      ? "The saved schedule covers Monday to Friday. The weekly import was unconfirmed by Friday."
+      : "The saved schedule covers the entire Sydney week. Scheduled and pending counts are provisional until the weekly import is confirmed in Dispatch.");
     else notes.push(current?.planStatus === "inherited-plan" ? "Confirm this week’s order import in Dispatch." : "This week’s Dispatch order total is unavailable.");
   } else if (pending === null) {
     notes.push("The confirmed Dispatch plan does not have a matching done and pending count.");
@@ -120,25 +127,34 @@ function stockMetric(inventory) {
 export async function collectWeeklyReport({ weekStart, stockroomCookie, env, now = new Date(), fetcher = fetch }) {
   const week = dashboardWeek(weekStart, now);
   const previousWeek = addDays(week.start, -7);
+  const historical = !week.isCurrent;
+  if (historical) {
+    week.end = addDays(week.start, 4);
+    const dateLabel = new Intl.DateTimeFormat("en-AU", { timeZone: "UTC", day: "numeric", month: "short" });
+    const label = date => dateLabel.format(new Date(date + "T00:00:00Z"));
+    week.label = `${label(week.start)} – ${label(week.end)} ${week.end.slice(0, 4)}`;
+  }
   const stockroomHeaders = { Cookie: stockroomCookie, Origin: SOURCE_ORIGINS.stockroom };
   // Check Stockroom access before reading other business data.
   const inventory = await fetchSourceJson(SOURCE_ORIGINS.stockroom + "/api/inventory", stockroomHeaders, fetcher);
   const demandOptions = { fetch: fetcher, now: () => now.getTime() };
-  const [{ production, green }, mondayReading, [weekDemand, previousDemand, dispatch, previousDispatch]] = await Promise.all([
-    readCropsterReadings({ db: env.DB, weekStart: week.start, followingWeekStart: addDays(week.start, 7), now }),
+  const [{ production, green }, mondayReading, stock, [weekDemand, previousDemand, dispatch, previousDispatch]] = await Promise.all([
+    historical ? readCropsterFriday(env.DB, week.start) : readCropsterReadings({ db: env.DB, weekStart: week.start, followingWeekStart: addDays(week.start, 7), now }),
     readCropsterMonday({ db: env.DB, weekStart: week.start }),
+    historical ? readFridayStock({ date: week.end, inventory, stockroomCookie, now, fetcher }) : stockMetric(inventory),
     Promise.allSettled([
       readWeeklyDemand(week.start, demandOptions),
       readWeeklyDemand(previousWeek, demandOptions),
-      readDispatch(week.start, env, fetcher),
-      readDispatch(previousWeek, env, fetcher),
+      readDispatch(week.start, env, fetcher, historical),
+      readDispatch(previousWeek, env, fetcher, true),
     ]),
   ]);
   const currentTally = settledValue(weekDemand);
   const previousTally = settledValue(previousDemand);
   const demand = weeklyDemandComparison(currentTally, previousTally, mondayReading);
-  const stock = stockMetric(inventory);
   const wholesale = wholesaleDeliveryComparison(settledValue(dispatch), settledValue(previousDispatch));
+  const greenReport = new URL("/apps/lots/inventory-report/location", CROPSTER_WEBSITE);
+  if (historical) greenReport.searchParams.set("reportDates", JSON.stringify([null, week.end]));
   return {
     week,
     generatedAt: now.toISOString(),
@@ -148,9 +164,9 @@ export async function collectWeeklyReport({ weekStart, stockroomCookie, env, now
       { label: "Last week’s roast tally", note: previousTally?.note || "Demand workbook is unavailable.", url: previousTally?.url, asOf: previousTally?.asOf },
       { label: "Monday’s completed roasts", note: mondayReading ? "Read in Cropster." : "Save the completed output from Cropster’s Monday production report.", url: new URL(`/apps/roast/production-report?dateFrom=${week.start}&dateTo=${week.start}`, CROPSTER_WEBSITE).href, asOf: mondayReading?.asOf },
       { label: "Cropster production", note: production.note, url: CROPSTER_WEBSITE, asOf: production.asOf },
-      { label: "Cropster green inventory · Marrickville", note: green.note, url: new URL("/apps/lots/inventory-report/location", CROPSTER_WEBSITE).href, asOf: green.asOf },
-      { label: "Stock Take App", note: "Current non-coffee value uses every active item’s saved stock count.", url: SOURCE_ORIGINS.stockroom },
-      { label: "Dispatch", note: "The schedule covers all seven days of the selected Sydney week. Done counts completed primary orders.", url: SOURCE_ORIGINS.dispatch },
+      { label: "Cropster green inventory · Marrickville", note: green.note, url: greenReport.href, asOf: green.asOf },
+      { label: "Stock Take App", note: historical ? stock.note : "Current non-coffee value uses every active item’s saved stock count.", url: SOURCE_ORIGINS.stockroom },
+      { label: "Dispatch", note: historical ? "Selected week’s schedules and completed handovers through Friday." : "This week’s schedule covers all seven days. Done counts completed primary orders.", url: SOURCE_ORIGINS.dispatch },
     ],
   };
 }

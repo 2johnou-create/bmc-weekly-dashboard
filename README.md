@@ -1,4 +1,4 @@
-# BMC Weekly Dashboard
+# Steam Room Weekly Dashboard
 
 A password-protected weekly operations board for Black Market Coffee. The public page contains only the sign-in interface; business figures are returned after the server verifies the existing Stock Take App password.
 
@@ -29,7 +29,9 @@ The landing page shows the weekly report. The previous operations view and saved
 | Packing rate | Stockroom's timer-linked kg per active hour, excluding breaks; kg per day with packing output. Timing coverage is shown. |
 | Delivery | Actual recorded runs and completed deliveries, with measured start-to-handover time excluding recorded breaks. Untimed orders are excluded from the average. |
 
-Weeks are Monday–Sunday in Australia/Sydney. Previous weeks can be selected; inventory always means latest saved inventory. Missing information appears as a dash. Current open issue notes, like inventory, are shown independently of the selected reporting week. The page checks its sources every minute while visible. Cropster readings display the saved snapshot date and time.
+The current week runs Monday–Sunday in Australia/Sydney and shows the latest stock figures. Previous weeks use Monday–Friday. The historical production and Marrickville stock cards use saved readings from Cropster’s dated reports. Historical non-coffee quantities are reconstructed from Stock Take App movements through Friday close and valued at today’s catalogue prices. Missing source readings appear as a dash. The page checks its sources every minute while visible.
+
+The **Note** card stores one editable list of points per reporting week. Each line becomes a separate point. Notes use Stock Take App access and stay with the selected week.
 
 ## Cropster readings
 
@@ -38,6 +40,8 @@ Read actual kilograms and historical green-ingredient cost from **Reports → Pr
 While signed in to the dashboard, save production totals under **Data sources → Record Cropster readings** and green stock under **Data sources → Record Marrickville green stock**. Cropster credentials stay in the browser or password manager. The dashboard stores the figures and capture time in its password-protected database.
 
 Record Monday’s completed kilograms separately using the Cropster Production Report filtered to Monday only. That reading supplies the Demand card’s carry-forward calculation.
+
+For a previous week, use the Friday capture under **Data sources** with the Cropster Production Report filtered to that week’s Monday and Friday and the Green Inventory Report snapshot filtered to that Friday’s Marrickville row.
 
 The demand feed reads the shared-drive copy of the workbook used for Emily’s Monday Roast Schedule. It looks for `ROAST TALLY <day> <MMM> <year>.xlsx` for the reporting week. The date in that filename identifies the week. Older filename formats also need a matching internal week. An ambiguous file or missing numeric C18 result is shown as unavailable. The dashboard reads the live Drive workbook on refresh.
 

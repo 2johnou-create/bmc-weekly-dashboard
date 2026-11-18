@@ -1,9 +1,11 @@
-import { SOURCE_ORIGINS, sydneyDate } from "./metrics.js";
+import { SOURCE_ORIGINS, mapNonCoffee, sydneyDate, validDate } from "./metrics.js";
 import { parseCsv } from "./online-orders.js";
 
 const MAX_REPORT_BYTES = 2_000_000;
+const MAX_REPORT_MONTHS = 12;
 const QUANTITY_TOLERANCE = 0.000_001;
 const VALUE_METHOD = "Month-end quantities rolled back from Stockroom movements, valued at today's catalogue prices.";
+const FRIDAY_VALUE_METHOD = "Friday closing quantities reconstructed from Stockroom movements, valued at today's catalogue prices and stock units.";
 
 export function stockMonthEnds(now = new Date()) {
   const [year, month] = sydneyDate(new Date(now)).split("-").map(Number);
@@ -15,6 +17,7 @@ function reportMonths(firstDate, lastDate) {
   const lastMonth = lastDate.slice(0, 7);
   const months = [];
   while (month.toISOString().slice(0, 7) <= lastMonth) {
+    if (months.length === MAX_REPORT_MONTHS) return null;
     months.push(month.toISOString().slice(0, 7));
     month.setUTCMonth(month.getUTCMonth() + 1);
   }
@@ -101,32 +104,29 @@ function unitsPerCount(item) {
   return 1;
 }
 
-function valueAtClose(date, items, movementsById) {
-  let total = 0, pricedItems = 0, unknown = 0;
+function valueAtClose(date, items, movementsById, method) {
+  let pricedItems = 0, missingItems = 0;
+  const countedItems = [];
   for (const [id, movements] of movementsById) {
-    if (!items.has(id) && movements.some(movement => movement.date > date)) unknown++;
+    if (!items.has(id) && movements.some(movement => movement.date > date)) missingItems++;
   }
 
   for (const item of items.values()) {
     const quantity = stockQuantityAtClose(item, movementsById.get(item.id) || [], date);
     const units = unitsPerCount(item);
-    if (quantity === null || (quantity > 0 && (!validQuantity(item.unitCost) || !Number.isFinite(units) || units <= 0))) {
-      unknown++;
-      continue;
-    }
-    if (quantity > 0) {
-      total += quantity * item.unitCost * units;
-      pricedItems++;
-    }
+    const priced = validQuantity(item.unitCost) && Number.isFinite(units) && units > 0;
+    if (quantity > 0 && priced) pricedItems++;
+    countedItems.push({ ...item, stock: quantity > 0 && !priced ? null : quantity, stockUnitQuantity: units });
   }
 
-  if (!Number.isFinite(total) || (unknown && !pricedItems)) return unavailable(date, "A priced month-end balance could not be reconstructed.");
-  const note = `${VALUE_METHOD} Current catalogue items only.${unknown ? ` ${unknown} ${unknown === 1 ? "item needs" : "items need"} a quantity check or price. Known-value subtotal shown.` : ""}`;
-  return { date, value: Math.round(total * 100) / 100, status: unknown ? "partial" : "estimated", note };
+  const valuation = mapNonCoffee({ items: countedItems });
+  const unknown = missingItems + valuation.unpricedItems;
+  if (!Number.isFinite(valuation.value) || (unknown && !pricedItems)) return unavailable(date, "A priced stock balance could not be reconstructed.");
+  const note = `${method} Current catalogue items only.${unknown ? ` ${unknown} ${unknown === 1 ? "item needs" : "items need"} a quantity check or price. Known-value subtotal shown.` : ""}`;
+  return { ...valuation, date, unpricedItems: unknown, status: unknown ? "partial" : "estimated", note };
 }
 
-export async function readStockHistory({ inventory, stockroomCookie, now = new Date(), fetcher = fetch }) {
-  const dates = stockMonthEnds(now);
+async function readBalancesAtDates({ dates, inventory, stockroomCookie, now, fetcher, method }) {
   const rawItems = Array.isArray(inventory) ? inventory : inventory?.items;
   if (!Array.isArray(rawItems) || rawItems.length === 0 || rawItems.length > 1500 || !stockroomCookie) {
     return dates.map(date => unavailable(date, "Current Stockroom quantities are unavailable."));
@@ -141,8 +141,11 @@ export async function readStockHistory({ inventory, stockroomCookie, now = new D
 
   // The source partitions by UTC. Include the UTC month containing each Sydney close,
   // because movements late on that UTC date may already belong to the next local month.
-  const lastDate = new Date(now).toISOString();
-  const months = reportMonths(dates.at(-1), lastDate);
+  const lastChange = Math.max(new Date(now).getTime(), ...rawItems.map(item => Number.isFinite(item.updatedAt) ? item.updatedAt : 0));
+  const lastDate = new Date(lastChange);
+  if (!Number.isFinite(lastDate.getTime())) return dates.map(date => unavailable(date, "The Stockroom quantity recording time is unavailable."));
+  const months = reportMonths(dates.at(-1), lastDate.toISOString());
+  if (!months) return dates.map(date => unavailable(date, "This date is outside the available Stockroom reconstruction period."));
   const reports = await Promise.allSettled(months.map(month => readMonthlyMovements(month, stockroomCookie, fetcher)));
   const movementsById = new Map();
   const missingMonths = [];
@@ -163,6 +166,22 @@ export async function readStockHistory({ inventory, stockroomCookie, now = new D
     if (missingMonths.some(month => month >= date.slice(0, 7))) {
       return unavailable(date, "Stockroom movement exports for this period are incomplete.");
     }
-    return valueAtClose(date, items, movementsById);
+    return valueAtClose(date, items, movementsById, method);
   });
+}
+
+export async function readStockHistory({ inventory, stockroomCookie, now = new Date(), fetcher = fetch }) {
+  const dates = stockMonthEnds(now);
+  const readings = await readBalancesAtDates({ dates, inventory, stockroomCookie, now, fetcher, method: VALUE_METHOD });
+  return readings.map(({ date, value, status, note }) => ({ date, value, status, note }));
+}
+
+export async function readFridayStock({ date, inventory, stockroomCookie, now = new Date(), fetcher = fetch }) {
+  const metric = { source: "stockroom", status: "unavailable", snapshotDate: date, asOf: null, currency: "AUD", value: null, itemCount: null, categoryCount: null, categories: [], unpricedItems: null };
+  const today = new Date(now);
+  if (!Number.isFinite(today.getTime()) || !validDate(date) || new Date(`${date}T00:00:00Z`).getUTCDay() !== 5 || date >= sydneyDate(today)) {
+    return { ...metric, note: "Choose a completed Friday in Sydney to estimate closing stock." };
+  }
+  const [reading] = await readBalancesAtDates({ dates: [date], inventory, stockroomCookie, now, fetcher, method: FRIDAY_VALUE_METHOD });
+  return { ...metric, status: reading.status, value: reading.value, categoryCount: reading.categoryCount ?? null, categories: reading.categories ?? [], unpricedItems: reading.unpricedItems ?? null, note: reading.note };
 }

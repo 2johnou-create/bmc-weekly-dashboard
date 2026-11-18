@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readStockHistory, stockMonthEnds } from "../worker/stock-history.js";
+import { readFridayStock, readStockHistory, stockMonthEnds } from "../worker/stock-history.js";
 
 const now = new Date("2026-11-15T01:00:00.000Z");
 const header = "Record Type,Date,Entity Type,Entity / SKU,Change Qty,Result Qty,Reason,Roasted KG,Remaining KG,Packed Qty,Packed KG,Notes,Recorded At";
@@ -87,4 +87,49 @@ test("reports read after the inventory snapshot cannot roll back a newer movemen
   ] });
   const history = await readStockHistory({ inventory, stockroomCookie: cookie, now, fetcher });
   assert.deepEqual(history.map(row => [row.status, row.value]), [["estimated", 45], ["estimated", 45], ["estimated", 45]]);
+});
+
+test("Friday stock rolls back movements after Sydney close and uses current catalogue prices and stock units", async () => {
+  const date = "2026-10-30";
+  const inventory = { items: [{ id: "cups", category: "Cups & Lids", stock: 10, unitCost: 0.2, stockUnitQuantity: 50, updatedAt: Date.parse("2026-11-01T00:00:00.005Z") }] };
+  const reports = {
+    "2026-10": [
+      movement("cups", 1, 5, "2026-10-30T12:59:59.999Z"), // Friday's last millisecond in Sydney.
+      movement("cups", 3, 8, "2026-10-30T13:00:00.000Z"),
+      movement("cups", 4, 24, "2026-10-31T03:00:00.000Z", "coffee"),
+    ],
+    "2026-11": [
+      movement("cups", 2, 10, "2026-11-01T00:00:00.005Z"),
+      movement("cups", 6, 16, "2026-11-01T03:00:00.000Z"), // Newer than the current quantity anchor.
+    ],
+  };
+  const seen = [];
+  const stock = await readFridayStock({ date, inventory, stockroomCookie: cookie, now: new Date("2026-10-31T23:59:59.999Z"), fetcher: reportFetcher(reports, seen) });
+  assert.equal(stock.snapshotDate, date);
+  assert.equal(stock.status, "estimated");
+  assert.equal(stock.value, 50);
+  assert.deepEqual(stock.categories.map(({ name, value }) => ({ name, value })), [{ name: "Cups & Lids", value: 50 }]);
+  assert.match(stock.note, /today's catalogue prices and stock units/);
+  assert.deepEqual(seen.sort(), ["2026-10", "2026-11"], "include the UTC month reached by the saved current quantity");
+  assert.doesNotMatch(JSON.stringify(stock), /stocktake remark|synthetic/);
+});
+
+test("Friday stock distinguishes an incomplete period from a known-value subtotal", async () => {
+  const options = { date: "2026-11-13", inventory: { items: [{ id: "bags", stock: 20, unitCost: 3 }, { id: "unpriced", stock: 4, unitCost: null }] }, stockroomCookie: cookie, now };
+  const missing = await readFridayStock({ ...options, fetcher: reportFetcher({ "2026-11": null }) });
+  assert.equal(missing.value, null);
+  assert.equal(missing.status, "unavailable");
+  assert.match(missing.note, /incomplete/);
+
+  const partial = await readFridayStock({ ...options, fetcher: reportFetcher({ "2026-11": [] }) });
+  assert.equal(partial.value, 60);
+  assert.equal(partial.unpricedItems, 1);
+  assert.equal(partial.status, "partial");
+  assert.match(partial.note, /Known-value subtotal/);
+
+  const seen = [];
+  const invalid = await readFridayStock({ ...options, date: "2026-11-12", fetcher: reportFetcher({}, seen) });
+  assert.equal(invalid.value, null);
+  assert.equal(invalid.status, "unavailable");
+  assert.deepEqual(seen, []);
 });

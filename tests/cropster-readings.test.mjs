@@ -199,7 +199,7 @@ test("the capture route enforces the dashboard origin, Stockroom authentication 
   }
 });
 
-test("Marrickville-only stock capture validates same origin and active session and is independent of selected week", async () => {
+test("Marrickville-only stock capture validates access and stays out of historical reports", async () => {
   const db = localDatabase(":memory:");
   const env = { DB: db, SESSION_SECRET: "synthetic-cropster-stockroom-test-session-secret-1234567" };
   const origin = "https://dashboard.test";
@@ -236,12 +236,16 @@ test("Marrickville-only stock capture validates same origin and active session a
     assert.equal((await db.prepare("SELECT COUNT(*) AS total FROM dashboard_cropster_readings").first()).total, 0);
 
     const earlier = addDays(dashboardWeek().start, -7);
-    const report = await (await worker.fetch(new Request(origin + `/api/weekly-report?week=${earlier}`, { headers: { Cookie: cookie } }), env)).json();
+    const report = await (await worker.fetch(new Request(origin + "/api/weekly-report", { headers: { Cookie: cookie } }), env)).json();
+    const historical = await (await worker.fetch(new Request(origin + `/api/weekly-report?week=${earlier}`, { headers: { Cookie: cookie } }), env)).json();
     const details = await (await worker.fetch(new Request(origin + "/api/dashboard", { headers: { Cookie: cookie } }), env)).json();
     assert.equal(report.metrics.green.location, saved.location);
     assert.equal(report.metrics.green.value, saved.value);
     assert.equal(report.metrics.green.asOf, saved.asOf);
     assert.deepEqual(report.metrics.green, details.metrics.green);
+    assert.equal(historical.metrics.green.kg, null);
+    assert.equal(historical.metrics.green.value, null);
+    assert.equal(historical.metrics.green.asOf, null);
     assert.ok(upstream.every(address => !/cropster\.com|bmc-green-forecast|\/api\/roaster/.test(address)));
   } finally {
     globalThis.fetch = originalFetch;

@@ -4,7 +4,7 @@ export const weeklyPage = String.raw`<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex,nofollow">
-  <title>Weekly dashboard | Black Market Coffee</title>
+  <title>Steam Room | Black Market Coffee</title>
   <style>
     :root {
       color-scheme: light;
@@ -24,7 +24,7 @@ export const weeklyPage = String.raw`<!doctype html>
     * { box-sizing: border-box; }
     [hidden] { display: none !important; }
     body, h1, h2, h3, p, dl, dd { margin: 0; }
-    button, input { font: inherit; }
+    button, input, textarea { font: inherit; }
     button { cursor: pointer; }
     button:disabled { opacity: .56; cursor: default; }
     a { color: inherit; text-underline-offset: .2em; }
@@ -33,8 +33,8 @@ export const weeklyPage = String.raw`<!doctype html>
     header { background: var(--paper); border-bottom: 1px solid var(--line); }
     .bar, .brand, .actions, .week-nav { display: flex; align-items: center; gap: .6rem; }
     .bar { justify-content: space-between; min-height: 4.25rem; }
-    .brand { font-size: .9rem; font-weight: 700; text-decoration: none; }
-    .mark { background: var(--accent); color: white; padding: .46rem .52rem; border-radius: .22rem; }
+    .brand { text-decoration: none; }
+    .brand img { display: block; width: auto; height: 2.9rem; max-width: 9rem; object-fit: contain; }
     .button { border: 1px solid var(--line); border-radius: .35rem; background: var(--paper); color: var(--ink); padding: .4rem .75rem; min-height: 2.7rem; }
     .actions .button { white-space: nowrap; }
     .primary { background: var(--accent); border-color: var(--accent); color: white; }
@@ -50,10 +50,21 @@ export const weeklyPage = String.raw`<!doctype html>
     .report-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: clamp(.7rem, 1.3vw, 1.15rem); align-items: start; }
     .meeting-card { grid-column: span 2; min-width: 0; color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: .55rem; }
     .meeting-card.featured { grid-column: span 3; }
+    .meeting-card.week-note { grid-column: 1 / -1; }
     .meeting-card.demand { border-top: 4px solid var(--accent); }
     .meeting-card.production { color: #fff; background: var(--green); border-color: var(--green); border-top-width: 4px; }
     .meeting-card summary { cursor: pointer; display: block; min-height: 12.65rem; padding: clamp(1rem, 1.7vw, 1.55rem); border-radius: inherit; }
     .meeting-card.featured summary { min-height: 13.8rem; }
+    .meeting-card.week-note summary { display: flex; align-items: center; gap: .65rem 1rem; min-height: 0; padding-block: .65rem; }
+    .week-note .disclosure { margin-inline-start: auto; }
+    .week-note-preview { flex: 1; min-width: 0; color: var(--muted); font-size: .87rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .week-note-points { margin: 0 0 1rem; padding-inline-start: 1.25rem; overflow-wrap: anywhere; }
+    .week-note-points li + li { margin-top: .28rem; }
+    .week-note-form { max-width: 53rem; }
+    .week-note-form label { display: block; font-weight: 700; }
+    .week-note-form textarea { display: block; width: 100%; min-height: 6rem; resize: vertical; padding: .6rem .65rem; margin: .4rem 0 .65rem; border: 1px solid var(--line); border-radius: .3rem; }
+    .week-note-form .detail-note { margin-top: .35rem; }
+    .week-note-tools { display: flex; flex-wrap: wrap; gap: .4rem .6rem; }
     .meeting-card summary::-webkit-details-marker { display: none; }
     .meeting-card summary::marker { content: ""; }
     .meeting-card summary:hover { background: rgba(0, 0, 0, .03); }
@@ -121,6 +132,7 @@ export const weeklyPage = String.raw`<!doctype html>
     .capture-fields label { display: grid; gap: .2rem; }
     .capture-fields input { width: 100%; min-width: 0; padding: .375rem; border: 1px solid var(--line); border-radius: .25rem; }
     .cropster-link { display: inline-block; margin-top: .75rem; }
+    .friday-links { display: flex; flex-wrap: wrap; gap: .4rem .85rem; margin-bottom: .65rem; }
     .wholesale-window { margin: 0 0 .65rem; }
     #greenCapture .capture-fields { margin-top: .65rem; }
     .links { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .45rem 1rem; }
@@ -135,6 +147,7 @@ export const weeklyPage = String.raw`<!doctype html>
     .skip-link:focus { top: .7rem; z-index: 1; }
     @media (min-width: 58.01rem) and (max-height: 50rem) {
       .bar { min-height: 3.4rem; }
+      .brand img { height: 2.35rem; }
       main.report { padding-block: 1.2rem 1rem; }
       .intro { margin-bottom: .55rem; }
       .report-status { margin-bottom: .65rem; }
@@ -162,7 +175,7 @@ export const weeklyPage = String.raw`<!doctype html>
       .report-grid { grid-template-columns: 1fr; }
       .meeting-card, .meeting-card.featured, .meeting-card.wholesale { grid-column: auto; }
       .meeting-card summary, .meeting-card.featured summary { min-height: 0; }
-      .brand { font-size: .8rem; }
+      .brand img { height: 2.35rem; }
       .actions { gap: .25rem; }
       .actions .button, .week-nav .button { font-size: .8rem; padding-inline: .55rem; }
       .production .metric-figure { font-size: clamp(2.1rem, 8vw, 3rem); }
@@ -177,19 +190,19 @@ export const weeklyPage = String.raw`<!doctype html>
   </style>
 </head>
 <body>
-  <a class="skip-link" href="#report">Skip to weekly dashboard</a>
+  <a class="skip-link" href="#report">Skip to Steam Room</a>
   <header><div class="wrap bar">
-    <a class="brand" href="/"><span class="mark" aria-hidden="true">BMC</span> Black Market Coffee</a>
+    <a class="brand" href="/"><img src="/bmc-logo.png" alt="Black Market Coffee"></a>
     <div id="actions" class="actions" hidden>
       <button id="refresh" class="button quiet" type="button">Refresh</button>
       <button id="logout" class="button" type="button">Sign out</button>
     </div>
   </div></header>
-  <p id="loading" class="loading" role="status">Opening weekly dashboard…</p>
+  <p id="loading" class="loading" role="status">Opening Steam Room…</p>
   <noscript><p class="loading">Enable JavaScript to sign in and view the dashboard.</p></noscript>
   <main id="login" class="login" hidden>
     <section class="sign-in" aria-labelledby="signInTitle">
-      <h1 id="signInTitle">Weekly dashboard</h1>
+      <h1 id="signInTitle">Steam Room</h1>
       <form id="signInForm">
         <label for="password">Stock Take App password</label>
         <input id="password" type="password" autocomplete="current-password" required maxlength="256">
@@ -200,7 +213,7 @@ export const weeklyPage = String.raw`<!doctype html>
   </main>
   <main id="report" class="wrap report" tabindex="-1" hidden>
     <div class="intro">
-      <div><h1>Weekly dashboard</h1><p id="dates" class="dates"></p></div>
+      <div><h1>Steam Room</h1><p id="dates" class="dates"></p></div>
       <nav class="week-nav" aria-label="Reporting week">
         <button id="previous" class="button" type="button">Previous week</button>
         <button id="next" class="button" type="button" disabled>Next week</button>
@@ -234,14 +247,14 @@ export const weeklyPage = String.raw`<!doctype html>
       </details>
       <details class="meeting-card featured production">
         <summary>
-          <span class="card-head"><span class="card-title">Roasted &amp; scheduled</span><span class="disclosure" aria-hidden="true"></span></span>
+          <span class="card-head"><span id="productionCardTitle" class="card-title">Roasted &amp; scheduled</span><span class="disclosure" aria-hidden="true"></span></span>
           <span class="production-headline">
             <span id="productionKg" class="metric-figure">—</span>
             <span id="productionValue" class="metric-secondary">—</span>
           </span>
           <span id="productionTotalLabel" class="metric-label production-total-label">Combined production</span>
           <span id="productionChange" class="comparison production-comparison"></span>
-          <span class="card-pair">
+          <span id="productionPair" class="card-pair">
             <span><span class="metric-label">Roasted</span><span id="roastedKg" class="metric-secondary">—</span></span>
             <span><span class="metric-label">Scheduled · estimate</span><span id="scheduledKg" class="metric-secondary">—</span></span>
           </span>
@@ -250,14 +263,14 @@ export const weeklyPage = String.raw`<!doctype html>
         <div class="card-body">
           <dl class="breakdown" id="productionDetails" hidden>
             <div><dt>Roasted</dt><dd id="roastedDetailKg">—</dd></div>
-            <div><dt>Scheduled output estimate</dt><dd id="scheduledDetailKg">—</dd></div>
+            <div id="scheduledDetailRow"><dt>Scheduled output estimate</dt><dd id="scheduledDetailKg">—</dd></div>
             <div><dt>Roasted green cost</dt><dd id="roastedValue">—</dd></div>
-            <div><dt>Scheduled green cost estimate</dt><dd id="scheduledValue">—</dd></div>
+            <div id="scheduledValueRow"><dt>Scheduled green cost estimate</dt><dd id="scheduledValue">—</dd></div>
           </dl>
           <h2 id="productionPreviousLabel">Previous week</h2>
           <dl class="breakdown">
-            <div><dt>Combined production</dt><dd id="previousProductionKg">—</dd></div>
-            <div><dt>Production value</dt><dd id="previousProductionValue">—</dd></div>
+            <div id="previousCombinedRow"><dt>Combined production</dt><dd id="previousProductionKg">—</dd></div>
+            <div><dt id="previousProductionValueLabel">Production value</dt><dd id="previousProductionValue">—</dd></div>
             <div><dt>Roasted</dt><dd id="previousRoastedKg">—</dd></div>
             <div id="previousScheduledRow" hidden><dt>Scheduled</dt><dd id="previousScheduledKg">—</dd></div>
           </dl>
@@ -278,18 +291,18 @@ export const weeklyPage = String.raw`<!doctype html>
         <div class="card-body">
           <h2>Marrickville green stock on hand</h2>
           <dl class="breakdown" id="greenDetails" hidden>
-            <div><dt>Current weight</dt><dd id="greenDetailKg">—</dd></div>
+            <div><dt id="greenWeightLabel">Current weight</dt><dd id="greenDetailKg">—</dd></div>
             <div><dt>Inventory value</dt><dd id="greenDetailValue">—</dd></div>
           </dl>
           <dl class="breakdown" id="greenBreakdown" hidden><div><dt>Lots needing review</dt><dd id="greenUnpriced">—</dd></div></dl>
           <p id="greenSource" class="source-note" hidden></p>
           <p id="greenNote" class="detail-note" hidden></p>
-          <a class="cropster-link" href="https://c-sar.cropster.com/apps/lots/inventory-report/location" target="_blank" rel="noopener noreferrer">Open Cropster Green Inventory Report</a>
+          <a id="greenInventoryLink" class="cropster-link" href="https://c-sar.cropster.com/apps/lots/inventory-report/location" target="_blank" rel="noopener noreferrer">Open Cropster Green Inventory Report</a>
         </div>
       </details>
       <details class="meeting-card stock">
         <summary>
-          <span class="card-head"><span class="card-title">Current non-coffee stock</span><span class="disclosure" aria-hidden="true"></span></span>
+          <span class="card-head"><span id="stockCardTitle" class="card-title">Current non-coffee stock</span><span class="disclosure" aria-hidden="true"></span></span>
           <span id="stockValue" class="metric-figure headline">—</span>
           <span id="stockItems" class="metric-secondary" hidden></span>
           <span id="stockFlag" class="status-flag" hidden></span>
@@ -325,6 +338,25 @@ export const weeklyPage = String.raw`<!doctype html>
           </dl>
           <p id="wholesaleSource" class="source-note" hidden></p>
           <p id="wholesaleNote" class="detail-note" hidden></p>
+        </div>
+      </details>
+      <details id="weekNote" class="meeting-card week-note">
+        <summary>
+          <span class="card-title">Note</span><span id="weekNotePreview" class="week-note-preview">Loading this week’s note…</span><span class="disclosure" aria-hidden="true"></span>
+        </summary>
+        <div class="card-body">
+          <ul id="weekNotePoints" class="week-note-points" aria-label="Saved points" hidden></ul>
+          <form id="weekNoteForm" class="week-note-form">
+            <label for="weekNoteInput">Meeting points</label>
+            <p id="weekNoteHelp" class="detail-note">Enter one point per line, up to 10 points. Save an empty note to clear it.</p>
+            <textarea id="weekNoteInput" maxlength="2600" rows="5" aria-describedby="weekNoteHelp weekNoteFeedback" disabled></textarea>
+            <div class="week-note-tools">
+              <button id="weekNoteSave" class="button primary" type="submit" disabled>Save note</button>
+              <button id="weekNoteReview" class="button" type="button" hidden>Keep draft and use latest version</button>
+              <button id="weekNoteRetry" class="button" type="button" hidden>Refresh note</button>
+            </div>
+            <p id="weekNoteFeedback" class="detail-note" role="status" hidden></p>
+          </form>
         </div>
       </details>
     </div>
@@ -365,6 +397,27 @@ export const weeklyPage = String.raw`<!doctype html>
           <p id="greenCaptureMessage" class="detail-note" role="status" hidden></p>
         </form>
       </details>
+      <details id="fridayCapture" class="source-details" hidden>
+        <summary>Record historical Cropster figures</summary>
+        <form id="fridayCaptureForm" class="capture-form">
+          <fieldset>
+            <legend id="fridayCaptureTitle">Friday close</legend>
+            <p id="fridayCaptureHelp" class="detail-note">Use actual roasted output and green cost from the Monday to Friday Cropster Production Report. For stock, use the dated Green Inventory Report and the Marrickville row at Friday close. Enter at least one weight.</p>
+            <div class="friday-links">
+              <a id="fridayProductionLink" class="cropster-link" target="_blank" rel="noopener noreferrer">Open Monday to Friday production</a>
+              <a id="fridayGreenLink" class="cropster-link" target="_blank" rel="noopener noreferrer">Open Friday green inventory</a>
+            </div>
+            <div class="capture-fields">
+              <label>Roasted output (kg)<input name="roastedKg" type="number" inputmode="decimal" min="0" max="1000000" step=".01" aria-describedby="fridayCaptureHelp"></label>
+              <label>Roasted green cost (AUD)<input name="roastedValue" type="number" inputmode="decimal" min="0" max="100000000" step=".01" aria-describedby="fridayCaptureHelp"></label>
+              <label>Marrickville green stock (kg)<input name="greenKg" type="number" inputmode="decimal" min="0" max="1000000" step=".01" aria-describedby="fridayCaptureHelp"></label>
+              <label>Marrickville stock value (AUD)<input name="greenValue" type="number" inputmode="decimal" min="0" max="100000000" step=".01" aria-describedby="fridayCaptureHelp"></label>
+            </div>
+          </fieldset>
+          <button id="fridayCaptureSave" type="submit" class="button primary">Save Friday figures</button>
+          <p id="fridayCaptureMessage" class="detail-note" role="status" hidden></p>
+        </form>
+      </details>
     </details>
     <footer class="links"><p>Sydney reporting week · AUD values</p><a href="/details">Operations details and issue notes</a></footer>
   </main>
@@ -382,6 +435,7 @@ export const weeklyPage = String.raw`<!doctype html>
     let requestedWeek = new URL(location.href).searchParams.get('week') || '';
     let currentRequest;
     let signedIn = false;
+    const weekNotes = new Map();
     const captureGroups = [
       ['This week', [
         ['roastedKg', 'Roasted (kg)', true], ['roastedValue', 'Roasted green cost (AUD)'],
@@ -416,9 +470,24 @@ export const weeklyPage = String.raw`<!doctype html>
       result.setUTCDate(result.getUTCDate() + offset);
       return result.toISOString().slice(0, 10);
     }
-    function weekRange(start) {
-      const end = changeWeek(start, 6);
-      return calendarDay.format(new Date(start + 'T12:00:00Z')) + ' – ' + calendarDay.format(new Date(end + 'T12:00:00Z'));
+    function dateLabel(value) {
+      if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return '';
+      const date = new Date(value + 'T12:00:00Z');
+      return Number.isFinite(date.getTime()) ? calendarDay.format(date) : '';
+    }
+    function weekRange(start, end) {
+      return dateLabel(start) + ' – ' + dateLabel(end);
+    }
+    function cropsterProductionUrl(week) {
+      const url = new URL('https://c-sar.cropster.com/apps/roast/production-report');
+      url.searchParams.set('dateFrom', week.start);
+      url.searchParams.set('dateTo', week.end);
+      return url.href;
+    }
+    function cropsterInventoryUrl(week) {
+      const url = new URL('https://c-sar.cropster.com/apps/lots/inventory-report/location');
+      if (!week.isCurrent) url.searchParams.set('reportDates', JSON.stringify([null, week.end]));
+      return url.href;
     }
     function formatTimestamp(value) {
       if (typeof value !== 'string' && typeof value !== 'number') return '';
@@ -483,61 +552,82 @@ export const weeklyPage = String.raw`<!doctype html>
       showText('demandCarryNote', demand.carryForwardNote || 'Roasted coffee on hand from the weekly tally less Monday’s actual roasted output in Cropster.');
     }
     function renderProduction(production, week, previousRange) {
-      const hasTotal = Number.isFinite(production.totalKg);
+      const historical = !week.isCurrent;
+      const hasTotal = !historical && Number.isFinite(production.totalKg);
       const hasRoasted = Number.isFinite(production.roastedKg);
+      const value = historical ? production.roastedValue : production.value;
+      set('productionCardTitle', historical ? 'Roasted Monday to Friday' : 'Roasted & scheduled');
       weightHeadline('productionKg', hasTotal ? production.totalKg : production.roastedKg);
-      set('productionValue', Number.isFinite(production.value) ? money(production.value) : '$ unavailable');
-      set('productionTotalLabel', hasTotal ? 'Roasted + scheduled estimate' : hasRoasted ? 'Recorded roast output' : 'Production weight');
+      set('productionValue', Number.isFinite(value) ? (historical ? format(value, detailCurrency) : money(value)) : '$ unavailable');
+      const outputLabel = hasTotal ? 'Roasted + scheduled estimate' : hasRoasted ? 'Recorded roast output' : 'Production weight';
+      set('productionTotalLabel', historical ? 'Completed roasts and green cost' : outputLabel);
+      el('productionPair').hidden = historical;
       set('roastedKg', weight(production.roastedKg));
       set('scheduledKg', weight(production.scheduledKg));
       const weightChange = hasTotal ? comparison(production.changePercent, 'Weight') : comparison(production.roastedChangePercent, 'Roasted kg');
       const valueChange = comparison(production.valueChangePercent, 'value');
       const fallback = hasTotal || hasRoasted ? 'Previous week comparison unavailable' : 'Production comparison unavailable';
       renderComparison('productionChange', [weightChange, valueChange].filter(Boolean).join(' · '), fallback);
-      showText('productionFlag', statusText(production, 'Cropster reading needed') || 'Cropster snapshot');
+      const productionFlag = historical ? (hasRoasted ? 'Friday archive' : 'Friday Cropster figures unavailable') : statusText(production, 'Cropster reading needed') || 'Cropster snapshot';
+      showText('productionFlag', productionFlag);
       set('roastedDetailKg', weight(production.roastedKg, detailKg));
       set('scheduledDetailKg', weight(production.scheduledKg, detailKg));
       set('roastedValue', format(production.roastedValue, detailCurrency));
       set('scheduledValue', format(production.scheduledValue, detailCurrency));
-      el('productionDetails').hidden = ![production.roastedKg, production.scheduledKg, production.roastedValue, production.scheduledValue].some(Number.isFinite);
-      el('cropsterProductionLink').href = 'https://c-sar.cropster.com/apps/roast/production-report?dateFrom=' + encodeURIComponent(week.start) + '&dateTo=' + encodeURIComponent(week.end);
+      el('scheduledDetailRow').hidden = historical;
+      el('scheduledValueRow').hidden = historical;
+      el('productionDetails').hidden = historical ? ![production.roastedKg, production.roastedValue].some(Number.isFinite) : ![production.roastedKg, production.scheduledKg, production.roastedValue, production.scheduledValue].some(Number.isFinite);
+      el('cropsterProductionLink').href = cropsterProductionUrl(week);
       set('productionPreviousLabel', 'Previous week (' + previousRange + ')');
       set('previousProductionKg', weight(production.previousKg, detailKg));
-      set('previousProductionValue', format(production.previousValue, detailCurrency));
+      el('previousCombinedRow').hidden = historical;
+      set('previousProductionValueLabel', historical ? 'Roasted green cost' : 'Production value');
+      set('previousProductionValue', format(historical ? production.previousRoastedValue : production.previousValue, detailCurrency));
       set('previousRoastedKg', weight(production.previousRoastedKg, detailKg));
       set('previousScheduledKg', weight(production.previousScheduledKg, detailKg));
-      el('previousScheduledRow').hidden = !Number.isFinite(production.previousScheduledKg);
+      el('previousScheduledRow').hidden = historical || !Number.isFinite(production.previousScheduledKg);
       const notes = [];
-      if (!Number.isFinite(production.value)) notes.push('Production value is unavailable.');
-      if (!Number.isFinite(production.scheduledKg)) notes.push('Scheduled kilograms are unavailable.');
+      if (!Number.isFinite(value)) notes.push('Green cost is unavailable.');
+      if (!historical && !Number.isFinite(production.scheduledKg)) notes.push('Scheduled kilograms are unavailable.');
       if (weightChange && !hasTotal) notes.push('The percentage compares recorded roast output between weeks.');
       showText('productionComparisonNote', notes.join(' '));
       showText('productionSource', sourceText(production, 'Cropster'));
       showText('productionNote', production.note);
     }
-    function renderGreen(green) {
+    function renderGreen(green, week) {
       const isMarrickville = green.location === 'Marrickville';
-      const kg = isMarrickville ? green.kg : null;
-      const value = isMarrickville ? green.value : null;
+      const historical = !week.isCurrent;
+      const hasFriday = historical && green.snapshotDate === week.end && Number.isFinite(green.kg);
+      const show = isMarrickville && (!historical || hasFriday);
+      const kg = show ? green.kg : null;
+      const value = show ? green.value : null;
       weightHeadline('greenKg', kg, detailKg);
       set('greenValue', Number.isFinite(value) ? format(value, detailCurrency) : '$ unavailable');
-      const flag = isMarrickville ? statusText(green, 'Cropster reading needed') || 'Cropster snapshot' : 'Marrickville reading needed';
+      const currentFlag = isMarrickville ? statusText(green, 'Cropster reading needed') || 'Cropster snapshot' : 'Marrickville reading needed';
+      const flag = historical ? (show ? 'As of Fri ' + dateLabel(green.snapshotDate) : 'Friday snapshot unavailable') : currentFlag;
       showText('greenFlag', flag);
+      set('greenWeightLabel', historical ? 'Friday closing weight' : 'Current weight');
       set('greenDetailKg', weight(kg, detailKg));
       set('greenDetailValue', format(value, detailCurrency));
       el('greenDetails').hidden = ![kg, value].some(Number.isFinite);
       set('greenUnpriced', format(green.unpricedLots, amount));
-      el('greenBreakdown').hidden = !(green.unpricedLots > 0);
-      showText('greenSource', sourceText(green, 'Cropster'));
+      el('greenBreakdown').hidden = !show || !(green.unpricedLots > 0);
+      showText('greenSource', historical && !show ? 'Source: Cropster Green Inventory Report.' : sourceText(green, 'Cropster'));
       showText('greenNote', green.note);
+      el('greenInventoryLink').href = cropsterInventoryUrl(week);
     }
-    function renderStock(stock) {
+    function renderStock(stock, week) {
+      const historical = !week.isCurrent;
+      const show = !historical || stock.snapshotDate === week.end;
       const partial = stock.status === 'partial' && Number.isFinite(stock.value);
-      set('stockValue', format(stock.value, detailCurrency));
-      showText('stockItems', Number.isFinite(stock.itemCount) ? plural(stock.itemCount, 'stock item') : '');
-      showText('stockFlag', partial ? 'Known-price subtotal' : statusText(stock, 'Stock value unavailable'));
+      set('stockCardTitle', historical ? 'Friday non-coffee stock' : 'Current non-coffee stock');
+      set('stockValue', format(show ? stock.value : null, detailCurrency));
+      showText('stockItems', show && Number.isFinite(stock.itemCount) ? plural(stock.itemCount, 'stock item') : '');
+      const estimateLabel = partial ? 'partial estimate at current prices' : 'estimated at current prices';
+      const fridayFlag = show && Number.isFinite(stock.value) ? 'Fri ' + dateLabel(stock.snapshotDate) + ' · ' + estimateLabel : 'Friday stock value unavailable';
+      showText('stockFlag', historical ? fridayFlag : partial ? 'Known-price subtotal' : statusText(stock, 'Stock value unavailable'));
       set('stockCategoryTitle', partial ? 'Known prices by category' : 'Value by category');
-      const categories = Array.isArray(stock.categories) ? stock.categories : [];
+      const categories = show && Array.isArray(stock.categories) ? stock.categories : [];
       const rows = categories.map(category => {
         const row = document.createElement('tr');
         const name = document.createElement('th');
@@ -551,18 +641,22 @@ export const weeklyPage = String.raw`<!doctype html>
       el('stockCategories').replaceChildren(...rows);
       el('stockBreakdown').hidden = !rows.length;
       const latestCount = formatTimestamp(stock.asOf);
-      showText('stockSource', latestCount ? 'Stock Take App · latest saved count ' + latestCount + ' Sydney time.' : 'Source: Stock Take App.');
+      const currentSource = latestCount ? 'Stock Take App · latest saved count ' + latestCount + ' Sydney time.' : 'Source: Stock Take App.';
+      const archivedSource = show ? 'Friday closing quantities from Stock Take App, valued using current prices.' : 'Source: Stock Take App Friday close history.';
+      showText('stockSource', historical ? archivedSource : currentSource);
       showText('stockNote', stock.note || (!rows.length ? 'Category values are unavailable.' : ''));
     }
-    function renderWholesale(wholesale, week, previousRange) {
+    function renderWholesale(wholesale, week) {
       const provisional = wholesale.provisional === true;
       set('wholesaleTotal', format(provisional ? wholesale.scheduledOrders : wholesale.orders, amount));
       set('wholesaleDone', format(wholesale.done, amount));
       set('wholesalePending', format(provisional ? wholesale.scheduledPendingOrders : wholesale.pending, amount));
       const inherited = wholesale.planStatus === 'inherited-plan' || /^Confirm this week’s order import in Dispatch\./i.test(wholesale.note || '');
       showText('wholesaleFlag', provisional ? 'Provisional · import unconfirmed' : inherited ? 'Order import unconfirmed' : statusText(wholesale, 'Dispatch totals unavailable'));
-      set('wholesaleScheduleLabel', 'Scheduled orders · ' + weekRange(week.start));
-      set('wholesalePreviousLabel', 'Previous week (' + previousRange + ')');
+      set('wholesaleScheduleLabel', 'Scheduled orders · ' + weekRange(week.start, week.end));
+      const previousStart = changeWeek(week.start, -7);
+      const dispatchPreviousRange = weekRange(previousStart, changeWeek(previousStart, 4));
+      set('wholesalePreviousLabel', 'Previous week (' + dispatchPreviousRange + ')');
       set('previousWholesaleTotal', format(wholesale.previousOrders, amount));
       set('previousWholesaleDone', format(wholesale.previousDone, amount));
       set('previousWholesalePending', format(wholesale.previousPending, amount));
@@ -595,19 +689,115 @@ export const weeklyPage = String.raw`<!doctype html>
       el('sourceList').replaceChildren(...entries);
       el('sources').hidden = !entries.length;
     }
+    function weekNoteState(weekStart) {
+      if (!weekNotes.has(weekStart)) {
+        weekNotes.set(weekStart, { saved: null, draft: null, baseRevision: 0, reading: null, saving: false, needsReload: false, error: false, message: '' });
+      }
+      return weekNotes.get(weekStart);
+    }
+    function validWeekNote(data, weekStart) {
+      return data.weekStart === weekStart && Number.isSafeInteger(data.revision) && data.revision >= 0
+        && Array.isArray(data.lines) && data.lines.every(line => typeof line === 'string');
+    }
+    function noteLines(text) { return text.split('\n').map(line => line.trim()).filter(Boolean); }
+    function noteWasChanged(state) {
+      return state.draft !== null && state.saved && noteLines(state.draft).join('\n') !== state.saved.lines.join('\n');
+    }
+    function noteNeedsReview(state) {
+      return noteWasChanged(state) && state.baseRevision !== state.saved.revision;
+    }
+    function renderWeekNote(weekStart) {
+      const state = weekNoteState(weekStart);
+      const saved = state.saved;
+      const lines = saved?.lines || [];
+      const preview = lines.length ? lines[0] + (lines.length > 1 ? ' · +' + (lines.length - 1) + ' more' : '') : 'Add meeting points';
+      set('weekNotePreview', saved ? preview : state.error ? 'Note unavailable' : 'Loading this week’s note…');
+      el('weekNotePoints').replaceChildren(...lines.map(line => {
+        const point = document.createElement('li');
+        point.textContent = line;
+        return point;
+      }));
+      el('weekNotePoints').hidden = !lines.length;
+      const input = el('weekNoteInput');
+      const text = state.draft ?? lines.join('\n');
+      if (input.value !== text) input.value = text;
+      input.disabled = !saved || state.saving;
+      const needsReview = noteNeedsReview(state);
+      el('weekNoteSave').disabled = !noteWasChanged(state) || state.saving || state.needsReload || needsReview;
+      set('weekNoteSave', state.saving ? 'Saving…' : 'Save note');
+      el('weekNoteReview').hidden = !needsReview || state.needsReload;
+      el('weekNoteRetry').hidden = !state.error && !state.needsReload;
+      el('weekNoteRetry').disabled = Boolean(state.reading) || state.saving;
+      const message = needsReview && !state.needsReload ? 'The saved note changed. Review the saved points above, then choose whether to keep your draft.' : state.message;
+      showText('weekNoteFeedback', message);
+      el('weekNoteFeedback').classList.toggle('error', state.error || Boolean(needsReview));
+    }
+    function clearWeekNotes() {
+      for (const state of weekNotes.values()) state.reading?.abort();
+      weekNotes.clear();
+      el('weekNoteInput').value = '';
+      el('weekNotePoints').replaceChildren();
+      set('weekNotePreview', 'Loading this week’s note…');
+      showText('weekNoteFeedback', '');
+    }
+    function noteIsActive(weekStart, state) { return signedIn && weekNotes.get(weekStart) === state; }
+    async function loadWeekNote(weekStart) {
+      const state = weekNoteState(weekStart);
+      if (!signedIn || state.reading || state.saving) return;
+      const controller = new AbortController();
+      state.reading = controller;
+      const timeout = setTimeout(() => controller.abort(), 12000);
+      try {
+        const response = await fetch('/api/weekly-note?week=' + encodeURIComponent(weekStart), { cache: 'no-store', signal: controller.signal });
+        const data = await readJson(response);
+        if (!noteIsActive(weekStart, state) || state.reading !== controller) return;
+        if (response.status === 401) { showExpiredSession(); return; }
+        if (!response.ok || !validWeekNote(data, weekStart)) throw new Error('The note could not be loaded.');
+        if (!state.saved || data.revision >= state.saved.revision) state.saved = data;
+        state.needsReload = false;
+        if (state.error) state.message = '';
+        state.error = false;
+      } catch (error) {
+        if (!noteIsActive(weekStart, state) || state.reading !== controller) return;
+        state.error = true;
+        state.message = error.name === 'AbortError' ? 'Loading the note timed out. Try Refresh note.' : 'The note could not be loaded. Try Refresh note.';
+      } finally {
+        clearTimeout(timeout);
+        if (state.reading === controller) {
+          state.reading = null;
+          if (noteIsActive(weekStart, state) && loadedWeek?.start === weekStart) renderWeekNote(weekStart);
+        }
+      }
+    }
+    function showExpiredSession() {
+      showSession(false);
+      showText('loginMessage', 'Your session has ended. Sign in again.');
+      el('password').focus();
+    }
     function render(data) {
       const { week, metrics } = data;
-      const previousRange = weekRange(changeWeek(week.start, -7));
-      set('dates', (week.isCurrent ? 'This week · ' : '') + week.label);
+      const previousStart = changeWeek(week.start, -7);
+      const previousRange = weekRange(previousStart, changeWeek(previousStart, week.isCurrent ? 6 : 4));
+      set('dates', (week.isCurrent ? 'This week · ' : 'Monday to Friday · ') + week.label);
       renderDemand(metrics.demand, week, previousRange);
       renderProduction(metrics.production, week, previousRange);
-      renderGreen(metrics.green);
-      renderStock(metrics.stock);
-      renderWholesale(metrics.wholesale, week, previousRange);
+      renderGreen(metrics.green, week);
+      renderStock(metrics.stock, week);
+      renderWholesale(metrics.wholesale, week);
       renderSources(data.sources);
+      if (loadedWeek?.start !== week.start) {
+        el('fridayCaptureForm').reset();
+        showText('fridayCaptureMessage', '');
+      }
       loadedWeek = week;
+      renderWeekNote(week.start);
+      loadWeekNote(week.start);
       el('capture').hidden = !week.isCurrent;
       el('greenCapture').hidden = false;
+      el('fridayCapture').hidden = week.isCurrent;
+      set('fridayCaptureTitle', 'Friday close · ' + dateLabel(week.end));
+      el('fridayProductionLink').href = cropsterProductionUrl(week);
+      el('fridayGreenLink').href = cropsterInventoryUrl(week);
       el('figures').hidden = false;
       el('currentWeek').hidden = week.isCurrent;
       el('refreshPolicy').hidden = false;
@@ -643,6 +833,11 @@ export const weeklyPage = String.raw`<!doctype html>
       el('greenCapture').open = false;
       el('greenCaptureForm').reset();
       showText('greenCaptureMessage', '');
+      el('fridayCapture').hidden = true;
+      el('fridayCapture').open = false;
+      el('fridayCaptureForm').reset();
+      showText('fridayCaptureMessage', '');
+      clearWeekNotes();
       el('sourceList').replaceChildren();
       el('stockCategories').replaceChildren();
       el('figures').querySelectorAll('[id]').forEach(node => {
@@ -721,6 +916,73 @@ export const weeklyPage = String.raw`<!doctype html>
     });
     el('currentWeek').addEventListener('click', () => { requestedWeek = ''; load(); });
     el('refresh').addEventListener('click', () => load());
+    el('weekNoteInput').addEventListener('input', event => {
+      if (!loadedWeek) return;
+      const weekStart = loadedWeek.start;
+      const state = weekNoteState(weekStart);
+      if (!state.saved || state.saving) return;
+      if (!noteWasChanged(state)) state.baseRevision = state.saved.revision;
+      state.draft = event.target.value;
+      state.message = '';
+      renderWeekNote(weekStart);
+    });
+    el('weekNoteReview').addEventListener('click', () => {
+      if (!loadedWeek) return;
+      const weekStart = loadedWeek.start;
+      const state = weekNoteState(weekStart);
+      if (!noteNeedsReview(state) || state.needsReload) return;
+      state.baseRevision = state.saved.revision;
+      state.message = 'Your draft is ready to save.';
+      renderWeekNote(weekStart);
+      el('weekNoteInput').focus();
+    });
+    el('weekNoteRetry').addEventListener('click', () => {
+      if (loadedWeek) loadWeekNote(loadedWeek.start);
+    });
+    el('weekNoteForm').addEventListener('submit', async event => {
+      event.preventDefault();
+      if (!signedIn || !loadedWeek) return;
+      const weekStart = loadedWeek.start;
+      const state = weekNoteState(weekStart);
+      if (!noteWasChanged(state) || state.saving || state.needsReload || noteNeedsReview(state)) return;
+      const lines = noteLines(state.draft);
+      if (lines.length > 10 || lines.some(line => line.length > 240)) {
+        state.message = 'Use at most 10 points, each up to 240 characters.';
+        renderWeekNote(weekStart);
+        return;
+      }
+      state.saving = true;
+      state.reading?.abort();
+      state.reading = null;
+      state.message = '';
+      renderWeekNote(weekStart);
+      try {
+        const response = await fetch('/api/weekly-note?week=' + encodeURIComponent(weekStart), {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ lines, expectedRevision: state.baseRevision }),
+        });
+        const data = await readJson(response);
+        if (!noteIsActive(weekStart, state)) return;
+        if (response.status === 401) { showExpiredSession(); return; }
+        if (response.status === 409) {
+          state.needsReload = true;
+          state.message = 'The saved note may have changed. Refresh before saving your draft.';
+          return;
+        }
+        if (!response.ok || !validWeekNote(data, weekStart)) throw new Error(data.error || 'The note could not be saved. Your draft is kept.');
+        if (!state.saved || data.revision >= state.saved.revision) state.saved = data;
+        state.draft = null;
+        state.message = lines.length ? 'Note saved.' : 'Note cleared.';
+      } catch (error) {
+        if (noteIsActive(weekStart, state)) state.message = error.message;
+      } finally {
+        state.saving = false;
+        if (noteIsActive(weekStart, state)) {
+          if (loadedWeek?.start === weekStart) renderWeekNote(weekStart);
+          if (state.needsReload) loadWeekNote(weekStart);
+        }
+      }
+    });
     for (const [heading, fields] of captureGroups) {
       const fieldset = document.createElement('fieldset');
       const legend = document.createElement('legend');
@@ -831,6 +1093,46 @@ export const weeklyPage = String.raw`<!doctype html>
         await load(false);
       } catch (error) {
         if (signedIn) showText('greenCaptureMessage', error.message);
+      } finally {
+        button.disabled = false;
+      }
+    });
+    el('fridayCaptureForm').addEventListener('submit', async event => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const button = el('fridayCaptureSave');
+      if (!signedIn || !loadedWeek || loadedWeek.isCurrent || button.disabled || !form.reportValidity()) return;
+
+      const weekStart = loadedWeek.start;
+      const payload = { weekStart };
+      for (const [name, rawValue] of new FormData(form)) {
+        if (rawValue !== '') payload[name] = Number(rawValue);
+      }
+      if (payload.roastedKg === undefined && payload.greenKg === undefined) {
+        showText('fridayCaptureMessage', 'Enter the roast weight, the Marrickville stock weight, or both.');
+        return;
+      }
+      if ((payload.roastedValue !== undefined && payload.roastedKg === undefined) || (payload.greenValue !== undefined && payload.greenKg === undefined)) {
+        showText('fridayCaptureMessage', 'Enter the matching weight for each AUD figure.');
+        return;
+      }
+      button.disabled = true;
+      showText('fridayCaptureMessage', '');
+      try {
+        const response = await fetch('/api/cropster-friday', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!signedIn) return;
+        if (response.status === 401) { showExpiredSession(); return; }
+        const result = await readJson(response);
+        if (!response.ok || !result.ok) throw new Error(result.error || 'The Friday figures could not be saved.');
+        if (!signedIn || loadedWeek?.start !== weekStart) return;
+        form.reset();
+        showText('fridayCaptureMessage', 'Friday figures saved.');
+        await load(false);
+      } catch (error) {
+        if (signedIn && loadedWeek?.start === weekStart) showText('fridayCaptureMessage', error.message);
       } finally {
         button.disabled = false;
       }

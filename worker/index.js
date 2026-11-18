@@ -3,10 +3,13 @@ import { weeklyPage } from "./weekly-ui.js";
 import { collectWeeklyReport } from "./weekly-report.js";
 import { collectDashboard, dashboardWeek, fetchSourceJson, SOURCE_ORIGINS } from "./metrics.js";
 import { saveCropsterGreenStock, saveCropsterReading } from "./cropster.js";
+import { saveCropsterFriday } from "./cropster-friday.js";
+import { brandLogo } from "./brand-logo.js";
 import { saveCropsterMonday } from "./cropster-monday.js";
 import { readWeeklyDemand } from "./demand.js";
 import { HttpError, readSession, signIn, signOut, clearCookie, requireOrigin } from "./auth.js";
 import { listIssues, createIssue, updateIssue, issuesMetric } from "./issues.js";
+import { readWeeklyNote, saveWeeklyNote } from "./weekly-note.js";
 import { readOnlineOrders, ONLINE_ORDERS_FOLDER_URL, ONLINE_ORDERS_CSV_HEADERS } from "./online-orders.js";
 
 const commonHeaders = {
@@ -31,6 +34,7 @@ async function jsonInput(request, { maximum, missing, invalid, tooLarge }) {
   catch { throw new HttpError(invalid); }
 }
 const issueBody = { maximum: 16_384, missing: "Enter the issue details.", invalid: "Enter valid issue details.", tooLarge: "The issue note is too large." };
+const weeklyNoteBody = { maximum: 16_384, missing: "Enter the weekly note.", invalid: "Enter valid weekly note details.", tooLarge: "The weekly note is too large." };
 const cropsterBody = { maximum: 2_048, missing: "Enter the Cropster reading.", invalid: "Enter a valid Cropster reading.", tooLarge: "The Cropster reading is too large." };
 const cropsterSmallBody = { ...cropsterBody, maximum: 512 };
 async function activeSession(request, env) {
@@ -66,6 +70,11 @@ export default {
         const document = url.pathname === "/" ? weeklyPage : page;
         return new Response(request.method === "HEAD" ? null : document, { headers: await htmlHeaders(document) });
       }
+      if (url.pathname === "/bmc-logo.png" && ["GET", "HEAD"].includes(request.method)) {
+        return new Response(request.method === "HEAD" ? null : brandLogo, { headers: {
+          ...commonHeaders, "Content-Type": "image/png", "Cache-Control": "public, max-age=86400",
+        } });
+      }
       if (url.pathname === "/favicon.ico") return new Response(null, { status: 204, headers: commonHeaders });
       if (url.pathname === "/robots.txt" && request.method === "GET") return new Response("User-agent: *\nDisallow: /\n", { headers: { ...commonHeaders, "Content-Type": "text/plain" } });
       if (url.pathname === "/online-orders-template.csv" && request.method === "GET") return new Response(ONLINE_ORDERS_CSV_HEADERS, { headers: { ...commonHeaders, "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": 'attachment; filename="online-orders-template.csv"' } });
@@ -87,13 +96,14 @@ export default {
         const item = request.method === "POST" ? await createIssue(env.DB, input) : await updateIssue(env.DB, issueMatch[1], input);
         return json({ ok: true, item }, request.method === "POST" ? 201 : 200);
       }
-      if (["/api/cropster-readings", "/api/cropster-monday", "/api/cropster-green-stock"].includes(url.pathname)) {
+      if (["/api/cropster-readings", "/api/cropster-monday", "/api/cropster-green-stock", "/api/cropster-friday"].includes(url.pathname)) {
         if (request.method !== "POST") return json({ error: "Method not allowed." }, 405, { Allow: "POST" });
         requireOrigin(request);
         const receivedAt = new Date();
         await activeSession(request, env);
         const input = await jsonInput(request, url.pathname === "/api/cropster-readings" ? cropsterBody : cropsterSmallBody);
         if (url.pathname === "/api/cropster-green-stock") return json(await saveCropsterGreenStock(env.DB, input, receivedAt));
+        if (url.pathname === "/api/cropster-friday") return json(await saveCropsterFriday(env.DB, input, receivedAt));
         const week = dashboardWeek(undefined, receivedAt);
         const save = url.pathname === "/api/cropster-monday" ? saveCropsterMonday : saveCropsterReading;
         return json(await save(env.DB, input, week.start, receivedAt));
@@ -131,6 +141,20 @@ export default {
           if ([401, 403].includes(error?.status)) throw new HttpError("Your Stockroom session has ended. Sign in again.", 401);
           throw new HttpError("Stockroom could not verify your access. Try Refresh.", 503);
         }
+      }
+      if (url.pathname === "/api/weekly-note") {
+        if (!["GET", "PUT"].includes(request.method)) return json({ error: "Method not allowed." }, 405, { Allow: "GET, PUT" });
+        if (request.method === "PUT") requireOrigin(request);
+        await activeSession(request, env);
+        const requestedWeeks = url.searchParams.getAll("week");
+        let week;
+        try {
+          if (requestedWeeks.length > 1 || requestedWeeks[0] === "" || (request.method === "PUT" && requestedWeeks.length === 0)) throw new Error();
+          week = dashboardWeek(requestedWeeks[0]);
+        } catch { throw new HttpError("Choose this week or an earlier Monday."); }
+        if (request.method === "GET") return json(await readWeeklyNote(env.DB, week.start));
+        const input = await jsonInput(request, weeklyNoteBody);
+        return json(await saveWeeklyNote(env.DB, week.start, input));
       }
       return json({ error: "Not found." }, 404);
     } catch (error) {
