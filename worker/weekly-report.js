@@ -1,5 +1,5 @@
-import { addDays, dashboardWeek, fetchSourceJson, isoTimestamp, mapGreen, mapNonCoffee, SOURCE_ORIGINS } from "./metrics.js";
-import { readCropsterProduction, unavailableCropsterProduction } from "./cropster-production.js";
+import { addDays, dashboardWeek, fetchSourceJson, isoTimestamp, mapNonCoffee, SOURCE_ORIGINS } from "./metrics.js";
+import { CROPSTER_WEBSITE, readCropsterReadings } from "./cropster.js";
 import { readWeeklyDemand } from "./demand.js";
 
 const dispatchPath = "/api/integrations/dashboard/weekly";
@@ -85,11 +85,6 @@ export function weeklyDemandComparison(current, previous) {
   };
 }
 
-async function readGreenStock(env, fetcher) {
-  if (typeof env.SOURCE_GREEN_PASSWORD !== "string" || !env.SOURCE_GREEN_PASSWORD) return null;
-  return mapGreen(await fetchSourceJson(`${SOURCE_ORIGINS.green}/api/roaster`, { "x-green-password": env.SOURCE_GREEN_PASSWORD }, fetcher));
-}
-
 function stockMetric(inventory) {
   try {
     const stock = mapNonCoffee(inventory);
@@ -106,19 +101,18 @@ export async function collectWeeklyReport({ weekStart, stockroomCookie, env, now
   // Check Stockroom access before reading other business data.
   const inventory = await fetchSourceJson(SOURCE_ORIGINS.stockroom + "/api/inventory", stockroomHeaders, fetcher);
   const demandOptions = { fetch: fetcher, now: () => now.getTime() };
-  const [weekDemand, previousDemand, cropster, greenStock, dispatch, previousDispatch] = await Promise.allSettled([
-    readWeeklyDemand(week.start, demandOptions),
-    readWeeklyDemand(previousWeek, demandOptions),
-    readCropsterProduction({ weekStart: week.start, env, now, fetcher }),
-    readGreenStock(env, fetcher),
-    readDispatch(week.start, env, fetcher),
-    readDispatch(previousWeek, env, fetcher),
+  const [{ production, green }, [weekDemand, previousDemand, dispatch, previousDispatch]] = await Promise.all([
+    readCropsterReadings({ db: env.DB, weekStart: week.start, followingWeekStart: addDays(week.start, 7), now }),
+    Promise.allSettled([
+      readWeeklyDemand(week.start, demandOptions),
+      readWeeklyDemand(previousWeek, demandOptions),
+      readDispatch(week.start, env, fetcher),
+      readDispatch(previousWeek, env, fetcher),
+    ]),
   ]);
   const currentTally = settledValue(weekDemand);
   const previousTally = settledValue(previousDemand);
   const demand = weeklyDemandComparison(currentTally, previousTally);
-  const production = settledValue(cropster, unavailableCropsterProduction());
-  const green = settledValue(greenStock) || { status: "unavailable", kg: null, value: null, unpricedLots: null, currency: "AUD", asOf: null, note: "Green Forecast stock is unavailable." };
   const stock = stockMetric(inventory);
   const wholesale = wholesaleDeliveryComparison(settledValue(dispatch), settledValue(previousDispatch));
   return {
@@ -128,8 +122,8 @@ export async function collectWeeklyReport({ weekStart, stockroomCookie, env, now
     sources: [
       { label: "This week’s roast tally", note: currentTally?.note || "Demand workbook is unavailable.", url: currentTally?.url, asOf: currentTally?.asOf },
       { label: "Last week’s roast tally", note: previousTally?.note || "Demand workbook is unavailable.", url: previousTally?.url, asOf: previousTally?.asOf },
-      { label: "Cropster", note: production.note },
-      { label: "Green Forecast", note: green.note },
+      { label: "Cropster production", note: production.note, url: CROPSTER_WEBSITE, asOf: production.asOf },
+      { label: "Cropster green inventory", note: green.note, url: CROPSTER_WEBSITE, asOf: green.asOf },
       { label: "Stockroom", note: "Current value covers the non-coffee inventory." },
       { label: "Dispatch", note: "Done counts completed primary orders. Scheduled and pending counts use confirmed weekly imports." },
     ],

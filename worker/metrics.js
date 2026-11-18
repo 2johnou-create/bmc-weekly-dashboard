@@ -1,4 +1,5 @@
-// Server-only adapters. Source credentials and raw operational records never leave this module.
+// Server-only adapters. Source credentials and raw operational records never leave the worker.
+import { CROPSTER_WEBSITE, cropsterGreenInventory, cropsterProduction, readCropsterReadings } from "./cropster.js";
 export const SOURCE_ORIGINS = Object.freeze({
   stockroom: "https://bmc-stockroom.misty-jelly-1931.chatgpt.site",
   green: "https://bmc-green-forecast.misty-jelly-1931.chatgpt.site",
@@ -111,21 +112,6 @@ export function mapNonCoffee(payload) {
   return { ...base("stockroom", asOf, `${unpricedItems ? `${unpricedItems} items need a price or valid quantity. Known value shown. ` : ""}Current non-coffee stock; coffee is excluded.${invalid ? " Some quantities need review." : ""}`, unpricedItems ? "partial" : "live"), value: rounded(value), itemCount: items.length, categoryCount: categories.size, categories: [...categories.values()].map(group => ({ ...group, value: rounded(group.value) })).sort((a, b) => b.value - a.value || a.name.localeCompare(b.name)), unpricedItems, currency: "AUD" };
 }
 
-export function mapGreen(payload) {
-  const state = object(payload?.state);
-  if (!state) throw new Error("Green stock data is unavailable.");
-  const lots = rows(state.stockLots, 2500);
-  let kg = 0, value = 0, unpricedLots = 0, invalid = 0;
-  for (const lot of lots) {
-    const quantity = nonnegative(lot.remainingKg), price = nonnegative(lot.pricePerKg);
-    if (quantity === null) { invalid++; continue; }
-    kg += quantity;
-    if (quantity > 0 && price === null) unpricedLots++;
-    else value += quantity * (price ?? 0);
-  }
-  return { ...base("green", payload.sourceUpdatedAtUtc || payload.updatedAt, `Current physical stock lots; supplier contract balances are excluded.${unpricedLots || invalid ? " Known totals shown; some lots need review." : ""} Source update time is not provided.`, unpricedLots || invalid ? "partial" : "live"), kg: rounded(kg), value: rounded(value), currency: "AUD", unpricedLots: unpricedLots + invalid };
-}
-
 export function mapDemand(payload, weekStart) {
   const state = object(payload?.state);
   if (!state) throw new Error("Weekly demand data is unavailable.");
@@ -196,28 +182,30 @@ export function mapDispatchOrders(payload, weekStart) {
   };
 }
 
-export async function collectDashboard({ weekStart, stockroomCookie, password, env = {}, readProduction }) {
+export async function collectDashboard({ weekStart, stockroomCookie, env = {} }) {
   const now = new Date();
   const week = dashboardWeek(weekStart, now);
+  const production = cropsterProduction();
   const metrics = {
-    demand: unavailable("green", { kg: null }, "Weekly demand is not connected."),
-    roasted: unavailable("Cropster", { kg: null }, "Cropster roast records are unavailable."),
-    green: unavailable("green", { kg: null, value: null, currency: "AUD", unpricedLots: null }, "Green stock is unavailable."),
+    demand: unavailable("Weekly roast tally", { kg: null }, "Weekly demand is not connected."),
+    production,
+    roasted: unavailable("Cropster", { kg: null }, production.note),
+    green: cropsterGreenInventory(),
     nonCoffee: unavailable("stockroom", { value: null, itemCount: null, categoryCount: null, categories: [], unpricedItems: null, currency: "AUD" }, "Non-coffee stock is unavailable."),
     wholesale: unavailable("wholesale", { orders: null, clients: null, value: null, currency: "AUD" }, "A confirmed wholesale order ledger is not connected."),
     online: unavailable("online", { orders: null, value: null, currency: "AUD" }, "Choose the online order source."),
     issues: unavailable("issues", { count: null, items: [] }, "Choose the customer issue source."),
-    roastingRate: unavailable("Cropster", { weekKg: null, kgPerDay: null, days: null, byDay: [] }, "Cropster roast records are unavailable."),
+    roastingRate: unavailable("Cropster", { weekKg: null, kgPerDay: null, days: null, byDay: [] }, production.note),
     packingRate: unavailable("stockroom", { kgPerHour: null, kgPerDay: null, packedKg: null, timedCoveragePercent: null }, "Packing rates are unavailable."),
     delivery: unavailable("dispatch", { shifts: null, completedShifts: null, orders: null, avgMinutes: null, totalMinutes: null }, "The weekly delivery summary is not connected."),
   };
   const sources = [];
-  const [inventory, production, packing, green, dispatch] = await Promise.allSettled([
-    fetchSourceJson(`${SOURCE_ORIGINS.stockroom}/api/inventory`, { Cookie: stockroomCookie || "", Origin: SOURCE_ORIGINS.stockroom }),
-    readProduction?.({ weekStart: week.start, env, now }),
+  const inventoryRead = fetchSourceJson(`${SOURCE_ORIGINS.stockroom}/api/inventory`, { Cookie: stockroomCookie || "", Origin: SOURCE_ORIGINS.stockroom });
+  const [inventory, packing, dispatch, cropster] = await Promise.allSettled([
+    inventoryRead,
     fetchSourceJson(`${SOURCE_ORIGINS.stockroom}/api/coffee/packing-timer?week=${week.start}`, { Cookie: stockroomCookie || "", Origin: SOURCE_ORIGINS.stockroom }),
-    fetchSourceJson(`${SOURCE_ORIGINS.green}/api/roaster`, { "x-green-password": env.SOURCE_GREEN_PASSWORD || password || "" }),
     env.DASHBOARD_DISPATCH_URL && env.DISPATCH_READ_TOKEN ? fetchSourceJson(`${env.DASHBOARD_DISPATCH_URL}${env.DASHBOARD_DISPATCH_URL.includes("?") ? "&" : "?"}week=${week.start}`, { Authorization: `Bearer ${env.DISPATCH_READ_TOKEN}` }) : Promise.reject(new Error("The weekly delivery summary is not connected.")),
+    inventoryRead.then(() => readCropsterReadings({ db: env.DB, weekStart: week.start, followingWeekStart: addDays(week.start, 7), now })),
   ]);
   if (inventory.status === "rejected" && [401, 403].includes(inventory.reason?.status)) {
     const error = new Error("Your Stock Take session has expired. Sign in again.");
@@ -228,32 +216,28 @@ export async function collectDashboard({ weekStart, stockroomCookie, password, e
     try { action(); } catch { for (const key of keys) metrics[key] = { ...metrics[key], status: "unavailable", note: failureNote }; }
   };
   if (inventory.status === "fulfilled") safeMap(["nonCoffee"], () => { metrics.nonCoffee = mapNonCoffee(inventory.value); }, "The inventory source returned incomplete data.");
-  if (production.status === "fulfilled" && production.value?.source === "Cropster") {
-    const { roastedKg, byDay, days, asOf, note } = production.value;
-    const kg = nonnegative(roastedKg);
-    const source = base("Cropster", asOf, note, kg === null ? "unavailable" : "live");
-    metrics.roasted = { ...source, kg };
+  if (cropster.status === "fulfilled") {
+    const { production, green } = cropster.value;
+    metrics.production = production;
+    metrics.green = green;
+    const { source, asOf, stale, note, roastedKg: kg } = production;
+    const status = kg === null ? "unavailable" : stale ? "stale" : "live";
+    metrics.roasted = { source, asOf, stale, status, note, kg };
     metrics.roastingRate = {
-      ...source,
-      weekKg: kg,
-      kgPerDay: kg !== null && days > 0 ? rounded(kg / days) : null,
-      days: days ?? null,
-      byDay: byDay ?? [],
+      source, asOf, stale, status: status === "live" ? "partial" : status,
+      weekKg: kg, kgPerDay: null, days: null, byDay: [],
+      note: kg === null ? note : `${note} Daily totals require a daily reading from Cropster.`,
     };
   }
   if (packing.status === "fulfilled") safeMap(["packingRate"], () => { metrics.packingRate = mapPacking(packing.value, week.start); }, "The packing source returned incomplete data.");
-  if (green.status === "fulfilled") {
-    safeMap(["green"], () => { metrics.green = mapGreen(green.value); }, "The green stock source returned incomplete data.");
-    safeMap(["demand"], () => { metrics.demand = mapDemand(green.value, week.start); }, "The demand source returned incomplete data.");
-  }
   if (dispatch.status === "fulfilled") {
     safeMap(["delivery"], () => { metrics.delivery = mapDeliverySummary(dispatch.value, week.start); }, "This feed does not supply matching weekly shifts and timing.");
     safeMap(["wholesale"], () => Object.assign(metrics, mapDispatchOrders(dispatch.value, week.start)), "Confirmed wholesale orders are not available for this week.");
   }
   for (const [id, label, keys, url] of [
-    ["cropster", "Cropster", ["roasted", "roastingRate"], null],
+    ["cropster", "Cropster production", ["production"], CROPSTER_WEBSITE],
     ["stockroom", "Stock Take App", ["nonCoffee", "packingRate"], SOURCE_ORIGINS.stockroom],
-    ["green", "Green Forecast", ["green", "demand"], SOURCE_ORIGINS.green],
+    ["green", "Cropster green inventory", ["green"], CROPSTER_WEBSITE],
     ["dispatch", "Dispatch", ["delivery"], SOURCE_ORIGINS.dispatch],
     ["wholesale", "Wholesale delivery jobs", ["wholesale"], SOURCE_ORIGINS.dispatch],
     ["online", "Online orders", ["online"], null],
@@ -261,8 +245,8 @@ export async function collectDashboard({ weekStart, stockroomCookie, password, e
   ]) {
     const values = keys.map(key => metrics[key]);
     const available = values.filter(value => value.status !== "unavailable");
-    const status = !available.length ? "unavailable" : available.length !== values.length || values.some(value => value.status === "partial") ? "partial" : "live";
-    sources.push({ id, label, status, asOf: latest(values.map(value => value.asOf)), note: status === "unavailable" ? values[0].note : available.length !== values.length ? "Some information could not be read. Refresh to retry." : id === "green" ? "Current saved green stock; source update time is not provided." : "Read from the live app on refresh.", url });
+    const status = !available.length ? "unavailable" : values.some(value => value.status === "stale") ? "stale" : available.length !== values.length || values.some(value => value.status === "partial") ? "partial" : "live";
+    sources.push({ id, label, status, asOf: latest(values.map(value => value.asOf)), note: id === "cropster" || id === "green" || status === "unavailable" ? values[0].note : available.length !== values.length ? "Some information could not be read. Refresh to retry." : "Read from the live app on refresh.", url });
   }
   return { week, generatedAt: now.toISOString(), metrics, sources };
 }

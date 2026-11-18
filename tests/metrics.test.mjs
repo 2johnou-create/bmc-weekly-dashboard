@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { dashboardWeek, sydneyDate, mapNonCoffee, mapGreen, mapDemand, mapPacking, mapDeliverySummary, mapDispatchOrders, fetchSourceJson, collectDashboard, SOURCE_ORIGINS } from "../worker/metrics.js";
+import { dashboardWeek, sydneyDate, mapNonCoffee, mapDemand, mapPacking, mapDeliverySummary, mapDispatchOrders, fetchSourceJson, collectDashboard, SOURCE_ORIGINS } from "../worker/metrics.js";
 
 const week = "2026-11-02";
 const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
@@ -26,15 +26,6 @@ test("non-coffee valuation respects pieces per carton and reports missing prices
   assert.equal(metric.unpricedItems, 1);
   assert.equal(metric.status, "partial");
   assert.deepEqual(metric.categories.find(row => row.name === "Packaging"), { name: "Packaging", value: 20, itemCount: 2, unpricedItems: 1 });
-});
-
-test("physical green stock excludes contract balances and preserves unpriced lots", () => {
-  const metric = mapGreen({ state: { stockLots: [{ remainingKg: 120, pricePerKg: 9 }, { remainingKg: 20, pricePerKg: null }], contracts: [{ remainingKg: 6000, pricePerKg: 10 }] } });
-  assert.equal(metric.kg, 140);
-  assert.equal(metric.value, 1080);
-  assert.equal(metric.unpricedLots, 1);
-  assert.equal(metric.asOf, null);
-  assert.equal(metric.status, "partial");
 });
 
 test("demand uses only the exact entered week and keeps planning separate from roast actuals", () => {
@@ -116,6 +107,8 @@ test("source failures remain unavailable and the operations dashboard reads roas
     assert.equal(result.metrics.roasted.kg, null);
     assert.equal(result.metrics.roasted.source, "Cropster");
     assert.equal(result.metrics.roastingRate.weekKg, null);
+    assert.equal(result.metrics.green.kg, null);
+    assert.equal(result.metrics.green.source, "Cropster");
     assert.equal(result.metrics.delivery.shifts, null);
     assert.equal(result.metrics.online.orders, null);
     assert.equal(result.metrics.issues.count, null);
@@ -123,13 +116,6 @@ test("source failures remain unavailable and the operations dashboard reads roas
     assert.equal(result.metrics.online.note, "Choose the online order source.");
     assert.equal(result.metrics.demand.status, "unavailable");
     assert.equal(JSON.stringify(result).includes("bmc_stockroom_session"), false);
-    assert.equal(paths.some(path => path === "/api/coffee" || path === "/api/coffee/production"), false);
-    const connected = await collectDashboard({
-      weekStart: week,
-      stockroomCookie: "bmc_stockroom_session=valid",
-      readProduction: async () => ({ source: "Cropster", roastedKg: 120, days: 2, byDay: [] }),
-    });
-    assert.equal(connected.metrics.roasted.kg, 120);
-    assert.equal(connected.metrics.roastingRate.kgPerDay, 60);
+    assert.equal(paths.some(path => ["/api/coffee", "/api/coffee/production", "/api/roaster"].includes(path)), false);
   } finally { globalThis.fetch = originalFetch; }
 });

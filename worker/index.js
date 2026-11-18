@@ -1,8 +1,8 @@
 import { page } from "./ui.js";
 import { weeklyPage } from "./weekly-ui.js";
 import { collectWeeklyReport } from "./weekly-report.js";
-import { readCropsterProduction } from "./cropster-production.js";
 import { collectDashboard, dashboardWeek, fetchSourceJson, SOURCE_ORIGINS } from "./metrics.js";
+import { saveCropsterReading } from "./cropster.js";
 import { readWeeklyDemand } from "./demand.js";
 import { HttpError, readSession, signIn, signOut, clearCookie, requireOrigin } from "./auth.js";
 import { listIssues, createIssue, updateIssue, issuesMetric } from "./issues.js";
@@ -16,20 +16,21 @@ const commonHeaders = {
   "X-Robots-Tag": "noindex, nofollow",
 };
 function json(data, status = 200, headers = {}) { return Response.json(data, { status, headers: { ...commonHeaders, ...headers } }); }
-async function issueInput(request) {
-  if (!request.body || !request.headers.get("content-type")?.startsWith("application/json")) throw new HttpError("Enter the issue details.");
-  const maximum = 16_384;
-  if (Number(request.headers.get("content-length")) > maximum) throw new HttpError("The issue note is too large.", 413);
+async function jsonInput(request, { maximum, missing, invalid, tooLarge }) {
+  if (!request.body || request.headers.get("content-type")?.split(";")[0].trim().toLowerCase() !== "application/json") throw new HttpError(missing);
+  if (Number(request.headers.get("content-length")) > maximum) throw new HttpError(tooLarge, 413);
   const reader = request.body.getReader(); const decoder = new TextDecoder(); let size = 0, text = "";
   while (true) {
     const chunk = await reader.read(); if (chunk.done) break;
     size += chunk.value.byteLength;
-    if (size > maximum) { await reader.cancel(); throw new HttpError("The issue note is too large.", 413); }
+    if (size > maximum) { await reader.cancel(); throw new HttpError(tooLarge, 413); }
     text += decoder.decode(chunk.value, { stream: true });
   }
   try { return JSON.parse(text + decoder.decode()); }
-  catch { throw new HttpError("Enter valid issue details."); }
+  catch { throw new HttpError(invalid); }
 }
+const issueBody = { maximum: 16_384, missing: "Enter the issue details.", invalid: "Enter valid issue details.", tooLarge: "The issue note is too large." };
+const cropsterBody = { maximum: 2_048, missing: "Enter the Cropster reading.", invalid: "Enter a valid Cropster reading.", tooLarge: "The Cropster reading is too large." };
 async function activeSession(request, env) {
   const session = await readSession(request, env);
   if (!session) throw new HttpError("Sign in with your Stock Take App password.", 401);
@@ -80,9 +81,18 @@ export default {
         if (request.method !== "GET") requireOrigin(request);
         await activeSession(request, env);
         if (request.method === "GET") return json(await listIssues(env.DB));
-        const input = await issueInput(request);
+        const input = await jsonInput(request, issueBody);
         const item = request.method === "POST" ? await createIssue(env.DB, input) : await updateIssue(env.DB, issueMatch[1], input);
         return json({ ok: true, item }, request.method === "POST" ? 201 : 200);
+      }
+      if (url.pathname === "/api/cropster-readings") {
+        if (request.method !== "POST") return json({ error: "Method not allowed." }, 405, { Allow: "POST" });
+        requireOrigin(request);
+        const receivedAt = new Date();
+        await activeSession(request, env);
+        const input = await jsonInput(request, cropsterBody);
+        const week = dashboardWeek(undefined, receivedAt);
+        return json(await saveCropsterReading(env.DB, input, week.start, receivedAt));
       }
       if (url.pathname === "/api/dashboard") {
         if (request.method !== "GET") return json({ error: "Method not allowed." }, 405, { Allow: "GET" });
@@ -92,7 +102,7 @@ export default {
         try { week = dashboardWeek(url.searchParams.get("week") || undefined); }
         catch { return json({ error: "Choose this week or an earlier Monday." }, 400); }
         const [data, demand, notes, online] = await Promise.all([
-          collectDashboard({ weekStart: week.start, stockroomCookie: session.stockroomCookie, env, readProduction: readCropsterProduction }),
+          collectDashboard({ weekStart: week.start, stockroomCookie: session.stockroomCookie, env }),
           readWeeklyDemand(week.start, env),
           listIssues(env.DB).then(issuesMetric).catch(notesUnavailable),
           readOnlineOrders(week.start, env).catch(onlineUnavailable),
@@ -100,7 +110,7 @@ export default {
         data.metrics.demand = demand;
         data.metrics.issues = notes;
         data.metrics.online = online;
-        data.sources = data.sources.map(source => source.id === "green" ? { ...source, status: data.metrics.green.status, note: data.metrics.green.note } : source.id === "issues" ? { id: "issues", label: "Customer issue notes", status: notes.status, asOf: notes.asOf, note: notes.note, url: null } : source.id === "online" ? { id: "online", label: "Online orders folder", status: online.status, asOf: online.asOf, note: online.note, url: ONLINE_ORDERS_FOLDER_URL } : source);
+        data.sources = data.sources.map(source => source.id === "issues" ? { id: "issues", label: "Customer issue notes", status: notes.status, asOf: notes.asOf, note: notes.note, url: null } : source.id === "online" ? { id: "online", label: "Online orders folder", status: online.status, asOf: online.asOf, note: online.note, url: ONLINE_ORDERS_FOLDER_URL } : source);
         data.sources.unshift({ id: "demand", label: "Weekly roast tally", status: demand.status, asOf: demand.asOf, note: demand.note, url: demand.url || null });
         return json(data);
       }

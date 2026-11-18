@@ -1,0 +1,187 @@
+import { HttpError } from "./auth.js";
+
+export const CROPSTER_WEBSITE = "https://c-sar.cropster.com/app/";
+const STALE_MS = 24 * 60 * 60 * 1000;
+const MAX_KG = 1_000_000;
+const MAX_AUD = 100_000_000;
+const fields = {
+  roastedKg: "roasted_kg",
+  scheduledKg: "scheduled_kg",
+  roastedValue: "roasted_value",
+  scheduledValue: "scheduled_value",
+  previousRoastedKg: "previous_roasted_kg",
+  previousScheduledKg: "previous_scheduled_kg",
+  previousRoastedValue: "previous_roasted_value",
+  previousScheduledValue: "previous_scheduled_value",
+  greenKg: "green_kg",
+  greenValue: "green_value",
+};
+const columns = ["week_start", ...Object.values(fields), "recorded_at"];
+const required = new Set(["roastedKg", "greenKg"]);
+const permitted = new Set(["weekStart", ...Object.keys(fields)]);
+
+function captureMetadata(reading, now, status, note) {
+  const stale = now.getTime() - reading.recorded_at > STALE_MS;
+  return {
+    source: "Cropster",
+    status: stale ? "stale" : status,
+    stale,
+    asOf: new Date(reading.recorded_at).toISOString(),
+    currency: "AUD",
+    note: ["Read in Cropster.", note, stale && "This reading is over 24 hours old."].filter(Boolean).join(" "),
+  };
+}
+
+function total(first, second) {
+  return first === null || second === null ? null : first + second;
+}
+
+function percent(current, previous) {
+  if (current === null || previous === null || previous <= 0) return null;
+  const change = (current - previous) / previous * 1000;
+  return Number.isFinite(change) ? Math.round(change) / 10 : null;
+}
+
+export function cropsterProduction(reading = null, now = new Date()) {
+  if (reading) {
+    const roastedKg = reading.roasted_kg;
+    const scheduledKg = reading.scheduled_kg;
+    const previousRoastedKg = reading.previous_roasted_kg;
+    const previousScheduledKg = reading.previous_scheduled_kg;
+    const totalKg = total(roastedKg, scheduledKg);
+    const previousKg = total(previousRoastedKg, previousScheduledKg);
+    const value = total(reading.roasted_value, reading.scheduled_value);
+    const previousValue = total(reading.previous_roasted_value, reading.previous_scheduled_value);
+    const complete = [totalKg, previousKg, value, previousValue].every(amount => amount !== null);
+    const note = scheduledKg === null ? "Cost covers green coffee. Outstanding scheduled kilograms are unavailable in this reading." :
+      "Scheduled output and cost are estimates from Cropster. Cost covers green coffee.";
+    return {
+      ...captureMetadata(reading, now, complete ? "live" : "partial", note),
+      totalKg,
+      roastedKg,
+      scheduledKg,
+      previousKg,
+      previousRoastedKg,
+      previousScheduledKg,
+      changePercent: percent(totalKg, previousKg),
+      roastedChangePercent: percent(roastedKg, previousRoastedKg),
+      value,
+      roastedValue: reading.roasted_value,
+      scheduledValue: reading.scheduled_value,
+      previousValue,
+      previousRoastedValue: reading.previous_roasted_value,
+      previousScheduledValue: reading.previous_scheduled_value,
+      valueChangePercent: percent(value, previousValue),
+    };
+  }
+
+  return {
+    source: "Cropster",
+    status: "unavailable",
+    stale: false,
+    totalKg: null,
+    roastedKg: null,
+    scheduledKg: null,
+    previousKg: null,
+    previousRoastedKg: null,
+    previousScheduledKg: null,
+    changePercent: null,
+    roastedChangePercent: null,
+    value: null,
+    roastedValue: null,
+    scheduledValue: null,
+    previousValue: null,
+    previousRoastedValue: null,
+    previousScheduledValue: null,
+    valueChangePercent: null,
+    currency: "AUD",
+    asOf: null,
+    note: "Sign in to Cropster to view completed roasts in the Production Report and scheduled roasts, including Friday, in Roasts → Schedule.",
+  };
+}
+
+export function cropsterGreenInventory(reading = null, now = new Date()) {
+  if (reading) {
+    const value = reading.green_value;
+    return {
+      ...captureMetadata(reading, now, value === null ? "partial" : "live", "Green Inventory Report, all locations."),
+      kg: reading.green_kg,
+      value,
+      unpricedLots: null,
+    };
+  }
+
+  return {
+    source: "Cropster",
+    status: "unavailable",
+    stale: false,
+    kg: null,
+    value: null,
+    currency: "AUD",
+    unpricedLots: null,
+    asOf: null,
+    note: "Sign in to Cropster and open Green Inventory to see current weight and value.",
+  };
+}
+
+function priorWeekProjection(followingReading) {
+  if (!Number.isFinite(followingReading?.previous_roasted_kg)) return null;
+  return {
+    recorded_at: followingReading.recorded_at,
+    roasted_kg: followingReading.previous_roasted_kg,
+    scheduled_kg: followingReading.previous_scheduled_kg,
+    roasted_value: followingReading.previous_roasted_value,
+    scheduled_value: followingReading.previous_scheduled_value,
+    previous_roasted_kg: null,
+    previous_scheduled_kg: null,
+    previous_roasted_value: null,
+    previous_scheduled_value: null,
+  };
+}
+
+export async function readCropsterReadings({ db, weekStart, followingWeekStart, now = new Date() }) {
+  try {
+    if (!db || typeof db.prepare !== "function") return { production: cropsterProduction(), green: cropsterGreenInventory() };
+    // Production belongs to the selected week. Green stock uses the most recent reading across weeks.
+    const { results } = await db.prepare(`SELECT ${columns.join(", ")} FROM dashboard_cropster_readings
+      WHERE week_start IN (?, ?, (SELECT week_start FROM dashboard_cropster_readings ORDER BY recorded_at DESC, week_start DESC LIMIT 1))
+      ORDER BY recorded_at DESC, week_start DESC`).bind(weekStart, followingWeekStart).all();
+    const selected = results.find(reading => reading.week_start === weekStart);
+    const prior = selected ? null : priorWeekProjection(results.find(reading => reading.week_start === followingWeekStart));
+    const production = cropsterProduction(selected || prior, now);
+    if (prior) production.note += " This week was captured as the previous week in the following reading.";
+    return { production, green: cropsterGreenInventory(results[0], now) };
+  } catch {
+    const note = "Saved Cropster readings could not be loaded. Try refreshing.";
+    return { production: { ...cropsterProduction(), note }, green: { ...cropsterGreenInventory(), note } };
+  }
+}
+
+export async function saveCropsterReading(db, input, currentWeekStart, now = new Date()) {
+  if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).some(key => !permitted.has(key))) {
+    throw new HttpError("Enter valid Cropster reading fields.");
+  }
+  if (typeof input.weekStart !== "string" || input.weekStart !== currentWeekStart) {
+    throw new HttpError("A Cropster reading must use the current Sydney Monday.");
+  }
+  const amounts = Object.keys(fields).map(key => {
+    const value = input[key];
+    if ((value === null || value === undefined) && !required.has(key)) return null;
+    const maximum = key.endsWith("Kg") ? MAX_KG : MAX_AUD;
+    if (!Number.isFinite(value) || value < 0 || value > maximum) throw new HttpError(`Enter a valid Cropster value for ${key}.`);
+    return value;
+  });
+
+  let saved;
+  try {
+    const updates = columns.slice(1).map(column => `${column} = excluded.${column}`);
+    saved = await db.prepare(`INSERT INTO dashboard_cropster_readings (${columns.join(", ")})
+      VALUES (${columns.map(() => "?").join(", ")}) ON CONFLICT(week_start) DO UPDATE SET ${updates.join(", ")}
+      WHERE excluded.recorded_at >= dashboard_cropster_readings.recorded_at RETURNING week_start, recorded_at`)
+      .bind(currentWeekStart, ...amounts, now.getTime()).first();
+  } catch {
+    throw new HttpError("The Cropster reading could not be saved. Try again.", 503);
+  }
+  if (!saved) throw new HttpError("A newer Cropster reading has already been saved.", 409);
+  return { ok: true, weekStart: saved.week_start, asOf: new Date(saved.recorded_at).toISOString() };
+}

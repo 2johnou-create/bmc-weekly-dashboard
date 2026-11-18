@@ -73,9 +73,10 @@ test("demand uses the previous verified tally as its baseline", () => {
   assert.equal(weeklyDemandComparison(tally(100), { kg: 70, status: "partial" }).status, "partial");
 });
 
-test("the landing report reads separately protected stock summaries without returning source credentials", async () => {
+test("the landing report reads protected Stockroom totals and requires a Cropster reading for green stock", async () => {
   const stockroomCookie = "stockroom-test-session";
   const greenPassword = "green-password-test";
+  let greenForecastRead = false;
   const report = await collectWeeklyReport({ weekStart: week, stockroomCookie, env: { SOURCE_GREEN_PASSWORD: greenPassword }, now, fetcher: async (address, { headers }) => {
     const { pathname } = new URL(address);
     if (pathname === "/api/inventory") {
@@ -84,17 +85,17 @@ test("the landing report reads separately protected stock summaries without retu
       return Response.json({ items: [{ category: "Packaging", stock: 4, unitCost: 2 }] });
     }
     if (pathname === "/api/roaster") {
-      assert.equal(headers.Cookie, undefined);
-      assert.equal(headers["x-green-password"], greenPassword);
-      return Response.json({ state: { stockLots: [{ remainingKg: 12, pricePerKg: 9 }], contracts: [{ remainingKg: 500 }] } });
+      greenForecastRead = true;
     }
     assert.equal(headers.Cookie, undefined);
     assert.equal(headers["x-green-password"], undefined);
     return Response.json({}, { status: 503 });
   } });
   assert.deepEqual(Object.keys(report.metrics), ["demand", "production", "green", "stock", "wholesale"]);
-  assert.equal(report.metrics.green.kg, 12);
-  assert.equal(report.metrics.green.value, 108);
+  assert.equal(greenForecastRead, false);
+  assert.equal(report.metrics.green.kg, null);
+  assert.equal(report.metrics.green.value, null);
+  assert.equal(report.metrics.green.source, "Cropster");
   assert.equal(report.metrics.stock.value, 8);
   assert.deepEqual(report.metrics.stock.categories, [{ name: "Packaging", itemCount: 1, value: 8, unpricedItems: 0 }]);
   assert.ok(!JSON.stringify(report).includes(greenPassword));

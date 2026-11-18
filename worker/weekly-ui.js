@@ -94,6 +94,7 @@ export const weeklyPage = String.raw`<!doctype html>
     .card-body { border-top: 1px solid var(--line); padding: .96rem clamp(1rem, 1.7vw, 1.55rem) 1.15rem; font-size: .89rem; }
     .production .card-body { border-color: #779083; }
     .card-body h2 { font-size: 1rem; line-height: 1.3; margin-bottom: .58rem; }
+    .production .breakdown + h2 { margin-top: .85rem; }
     .breakdown { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .55rem .85rem; }
     dt { color: var(--muted); font-size: .84rem; line-height: 1.35; }
     dd { font-size: 1.05rem; font-weight: 700; margin-top: .16rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
@@ -108,6 +109,13 @@ export const weeklyPage = String.raw`<!doctype html>
     .source-details a, .links a { font-weight: 700; }
     .source-list { padding-left: 1.15rem; margin: .55rem 0 0; max-width: 72ch; }
     .source-list li + li { margin-top: .4rem; }
+    .capture-form { max-width: 42rem; margin-block: .75rem; color: var(--ink); }
+    .capture-form fieldset { border: 0; padding: 0; margin: 0 0 .8rem; }
+    .capture-form legend { font-weight: 700; margin-bottom: .4rem; }
+    .capture-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .45rem .75rem; }
+    .capture-fields label { display: grid; gap: .2rem; }
+    .capture-fields input { width: 100%; min-width: 0; padding: .375rem; border: 1px solid var(--line); border-radius: .25rem; }
+    .cropster-link { display: inline-block; margin-top: .75rem; }
     .links { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .45rem 1rem; }
     .login { display: grid; place-items: center; min-height: 60vh; padding: 1rem; }
     .sign-in { width: min(100%, 25rem); padding: 1.45rem; background: var(--paper); border: 1px solid var(--line); border-top: 4px solid var(--accent); border-radius: .55rem; }
@@ -192,7 +200,7 @@ export const weeklyPage = String.raw`<!doctype html>
         <button id="currentWeek" class="button" type="button" hidden>This week</button>
       </nav>
     </div>
-    <div class="report-status"><p id="status" role="status"></p><p id="refreshPolicy" hidden>Refreshes every minute</p></div>
+    <div class="report-status"><p id="status" role="status"></p><p id="refreshPolicy" hidden>Live feeds refresh every minute</p></div>
     <div id="figures" class="report-grid" hidden>
       <details class="meeting-card featured demand">
         <summary>
@@ -219,11 +227,17 @@ export const weeklyPage = String.raw`<!doctype html>
           <span id="productionChange" class="comparison production-comparison"></span>
           <span class="card-pair">
             <span><span class="metric-label">Roasted</span><span id="roastedKg" class="metric-secondary">—</span></span>
-            <span><span class="metric-label">Scheduled</span><span id="scheduledKg" class="metric-secondary">—</span></span>
+            <span><span class="metric-label">Scheduled · estimate</span><span id="scheduledKg" class="metric-secondary">—</span></span>
           </span>
           <span id="productionFlag" class="status-flag" hidden></span>
         </summary>
         <div class="card-body">
+          <dl class="breakdown" id="productionDetails" hidden>
+            <div><dt>Roasted</dt><dd id="roastedDetailKg">—</dd></div>
+            <div><dt>Scheduled output estimate</dt><dd id="scheduledDetailKg">—</dd></div>
+            <div><dt>Roasted green cost</dt><dd id="roastedValue">—</dd></div>
+            <div><dt>Scheduled green cost estimate</dt><dd id="scheduledValue">—</dd></div>
+          </dl>
           <h2 id="productionPreviousLabel">Previous week</h2>
           <dl class="breakdown">
             <div><dt>Combined production</dt><dd id="previousProductionKg">—</dd></div>
@@ -234,6 +248,7 @@ export const weeklyPage = String.raw`<!doctype html>
           <p id="productionComparisonNote" class="source-note" hidden></p>
           <p id="productionSource" class="source-note" hidden></p>
           <p id="productionNote" class="detail-note" hidden></p>
+          <a id="cropsterProductionLink" class="cropster-link" target="_blank" rel="noopener noreferrer">Open Cropster Production Report</a>
         </div>
       </details>
       <details class="meeting-card green-stock">
@@ -245,9 +260,14 @@ export const weeklyPage = String.raw`<!doctype html>
         </summary>
         <div class="card-body">
           <h2>Green stock on hand</h2>
+          <dl class="breakdown" id="greenDetails" hidden>
+            <div><dt>Current weight</dt><dd id="greenDetailKg">—</dd></div>
+            <div><dt>Inventory value</dt><dd id="greenDetailValue">—</dd></div>
+          </dl>
           <dl class="breakdown" id="greenBreakdown" hidden><div><dt>Lots needing review</dt><dd id="greenUnpriced">—</dd></div></dl>
           <p id="greenSource" class="source-note" hidden></p>
           <p id="greenNote" class="detail-note" hidden></p>
+          <a class="cropster-link" href="https://c-sar.cropster.com/apps/lots/inventory-report/location" target="_blank" rel="noopener noreferrer">Open Cropster Green Inventory Report</a>
         </div>
       </details>
       <details class="meeting-card stock">
@@ -290,7 +310,19 @@ export const weeklyPage = String.raw`<!doctype html>
         </div>
       </details>
     </div>
-    <details id="sources" class="source-details" hidden><summary>Data sources</summary><ul id="sourceList" class="source-list"></ul></details>
+    <details id="sources" class="source-details" hidden>
+      <summary>Data sources</summary>
+      <ul id="sourceList" class="source-list"></ul>
+      <details id="capture" class="source-details" hidden>
+        <summary>Record Cropster readings</summary>
+        <form id="captureForm" class="capture-form">
+          <p class="detail-note">Use the figures from the Cropster website. Enter scheduled output and green cost for batches still to roast. Use 0 only when Cropster confirms none. Blank fields are unavailable.</p>
+          <div id="captureFields"></div>
+          <button id="captureSave" type="submit" class="button primary">Save readings</button>
+          <p id="captureMessage" class="detail-note" role="status" hidden></p>
+        </form>
+      </details>
+    </details>
     <footer class="links"><p>Sydney reporting week · AUD values</p><a href="/details">Operations details and issue notes</a></footer>
   </main>
   <script>
@@ -298,14 +330,28 @@ export const weeklyPage = String.raw`<!doctype html>
     const amount = new Intl.NumberFormat('en-AU', { maximumFractionDigits: 1 });
     const detailKg = new Intl.NumberFormat('en-AU', { maximumFractionDigits: 2 });
     const currency = new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', maximumFractionDigits: 0 });
+    const detailCurrency = new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD' });
     const dateTime = new Intl.DateTimeFormat('en-AU', { timeZone: 'Australia/Sydney', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
     const calendarDay = new Intl.DateTimeFormat('en-AU', { timeZone: 'UTC', day: 'numeric', month: 'short' });
     const unavailable = '—';
-    const sourceNames = { stockroom: 'Stock Take App', green: 'Green Forecast', dispatch: 'Dispatch', cropster: 'Cropster' };
+    const sourceNames = { stockroom: 'Stock Take App', dispatch: 'Dispatch', cropster: 'Cropster' };
     let loadedWeek;
     let requestedWeek = new URL(location.href).searchParams.get('week') || '';
     let currentRequest;
     let signedIn = false;
+    const captureGroups = [
+      ['This week', [
+        ['roastedKg', 'Roasted (kg)', true], ['roastedValue', 'Roasted green cost (AUD)'],
+        ['scheduledKg', 'Outstanding output (kg, estimate)'], ['scheduledValue', 'Outstanding green cost (AUD, estimate)'],
+      ]],
+      ['Previous week', [
+        ['previousRoastedKg', 'Previous roasted (kg)'], ['previousRoastedValue', 'Previous roasted green cost (AUD)'],
+        ['previousScheduledKg', 'Previous outstanding output (kg)'], ['previousScheduledValue', 'Previous outstanding green cost (AUD)'],
+      ]],
+      ['Green inventory · all locations', [
+        ['greenKg', 'Green stock (kg)', true], ['greenValue', 'Green stock value (AUD)'],
+      ]],
+    ];
 
     function format(value, formatter, unit = '') {
       return Number.isFinite(value) ? formatter.format(value) + unit : unavailable;
@@ -358,10 +404,12 @@ export const weeklyPage = String.raw`<!doctype html>
     function sourceText(metric, fallback) {
       const label = sourceNames[metric.source] || metric.source || fallback;
       const timestamp = formatTimestamp(metric.asOf);
+      if (label === 'Cropster' && timestamp) return 'Read in Cropster ' + timestamp + ' Sydney time.';
       return timestamp ? label + ' updated ' + timestamp + ' Sydney time.' : 'Source: ' + label + '.';
     }
     function statusText(metric, unavailableLabel) {
       if (metric.status === 'unavailable') return unavailableLabel;
+      if (metric.stale) return 'Cropster reading is over 24 hours old';
       if (metric.status === 'stale') return 'Last saved data';
       if (metric.status === 'partial') return 'Partial data';
       if (metric.status === 'estimated') return 'Estimated';
@@ -382,23 +430,28 @@ export const weeklyPage = String.raw`<!doctype html>
       showText('demandSource', sourceText(demand, 'Weekly roast tally'));
       showText('demandNote', demand.note || (!change && demand.previousKg === 0 ? 'Percentage change is unavailable when the previous week is zero.' : ''));
     }
-    function renderProduction(production, previousRange) {
+    function renderProduction(production, week, previousRange) {
       const hasTotal = Number.isFinite(production.totalKg);
       const hasRoasted = Number.isFinite(production.roastedKg);
       weightHeadline('productionKg', hasTotal ? production.totalKg : production.roastedKg);
       set('productionValue', Number.isFinite(production.value) ? money(production.value) : '$ unavailable');
-      set('productionTotalLabel', hasTotal ? 'Roasted and still scheduled' : hasRoasted ? 'Recorded roast output' : 'Production weight');
+      set('productionTotalLabel', hasTotal ? 'Roasted + scheduled estimate' : hasRoasted ? 'Recorded roast output' : 'Production weight');
       set('roastedKg', weight(production.roastedKg));
       set('scheduledKg', weight(production.scheduledKg));
       const weightChange = hasTotal ? comparison(production.changePercent, 'Weight') : comparison(production.roastedChangePercent, 'Roasted kg');
       const valueChange = comparison(production.valueChangePercent, 'value');
       const fallback = hasTotal || hasRoasted ? 'Previous week comparison unavailable' : 'Production comparison unavailable';
       renderComparison('productionChange', [weightChange, valueChange].filter(Boolean).join(' · '), fallback);
-      const connectionNeeded = production.status === 'unavailable' && /connect the Cropster|Cropster rejected/i.test(production.note || '');
-      showText('productionFlag', connectionNeeded ? 'Cropster connection needed' : statusText(production, 'Production unavailable'));
+      showText('productionFlag', statusText(production, 'Cropster reading needed') || 'Cropster snapshot');
+      set('roastedDetailKg', weight(production.roastedKg, detailKg));
+      set('scheduledDetailKg', weight(production.scheduledKg, detailKg));
+      set('roastedValue', format(production.roastedValue, detailCurrency));
+      set('scheduledValue', format(production.scheduledValue, detailCurrency));
+      el('productionDetails').hidden = ![production.roastedKg, production.scheduledKg, production.roastedValue, production.scheduledValue].some(Number.isFinite);
+      el('cropsterProductionLink').href = 'https://c-sar.cropster.com/apps/roast/production-report?dateFrom=' + encodeURIComponent(week.start) + '&dateTo=' + encodeURIComponent(week.end);
       set('productionPreviousLabel', 'Previous week (' + previousRange + ')');
       set('previousProductionKg', weight(production.previousKg, detailKg));
-      set('previousProductionValue', money(production.previousValue));
+      set('previousProductionValue', format(production.previousValue, detailCurrency));
       set('previousRoastedKg', weight(production.previousRoastedKg, detailKg));
       set('previousScheduledKg', weight(production.previousScheduledKg, detailKg));
       el('previousScheduledRow').hidden = !Number.isFinite(production.previousScheduledKg);
@@ -412,11 +465,14 @@ export const weeklyPage = String.raw`<!doctype html>
     }
     function renderGreen(green) {
       weightHeadline('greenKg', green.kg);
-      set('greenValue', money(green.value));
-      showText('greenFlag', statusText(green, 'Green stock unavailable'));
+      set('greenValue', Number.isFinite(green.value) ? money(green.value) : '$ unavailable');
+      showText('greenFlag', statusText(green, 'Cropster reading needed') || 'Cropster snapshot');
+      set('greenDetailKg', weight(green.kg, detailKg));
+      set('greenDetailValue', format(green.value, detailCurrency));
+      el('greenDetails').hidden = ![green.kg, green.value].some(Number.isFinite);
       set('greenUnpriced', format(green.unpricedLots, amount));
       el('greenBreakdown').hidden = !(green.unpricedLots > 0);
-      showText('greenSource', sourceText(green, 'Green Forecast'));
+      showText('greenSource', sourceText(green, 'Cropster'));
       showText('greenNote', green.note);
     }
     function renderStock(stock) {
@@ -483,12 +539,13 @@ export const weeklyPage = String.raw`<!doctype html>
       const previousRange = weekRange(changeWeek(week.start, -7));
       set('dates', (week.isCurrent ? 'This week · ' : '') + week.label);
       renderDemand(metrics.demand, week, previousRange);
-      renderProduction(metrics.production, previousRange);
+      renderProduction(metrics.production, week, previousRange);
       renderGreen(metrics.green);
       renderStock(metrics.stock);
       renderWholesale(metrics.wholesale, previousRange);
       renderSources(data.sources);
       loadedWeek = week;
+      el('capture').hidden = !week.isCurrent;
       el('figures').hidden = false;
       el('currentWeek').hidden = week.isCurrent;
       el('refreshPolicy').hidden = false;
@@ -514,6 +571,10 @@ export const weeklyPage = String.raw`<!doctype html>
       el('report').setAttribute('aria-busy', 'false');
       el('figures').hidden = true;
       el('sources').hidden = true;
+      el('capture').hidden = true;
+      el('capture').open = false;
+      el('captureForm').reset();
+      showText('captureMessage', '');
       el('sourceList').replaceChildren();
       el('stockCategories').replaceChildren();
       el('figures').querySelectorAll('[id]').forEach(node => {
@@ -592,6 +653,50 @@ export const weeklyPage = String.raw`<!doctype html>
     });
     el('currentWeek').addEventListener('click', () => { requestedWeek = ''; load(); });
     el('refresh').addEventListener('click', () => load());
+    for (const [heading, fields] of captureGroups) {
+      const fieldset = document.createElement('fieldset');
+      const legend = document.createElement('legend');
+      legend.textContent = heading;
+      const grid = document.createElement('div');
+      grid.className = 'capture-fields';
+      for (const [name, caption, required] of fields) {
+        const label = document.createElement('label');
+        const input = document.createElement('input');
+        input.name = name;
+        input.type = 'number';
+        input.inputMode = 'decimal';
+        input.min = '0';
+        input.step = '.01';
+        input.required = Boolean(required);
+        label.append(caption, input);
+        grid.append(label);
+      }
+      fieldset.append(legend, grid);
+      el('captureFields').append(fieldset);
+    }
+    el('captureForm').addEventListener('submit', async event => {
+      event.preventDefault();
+      if (!signedIn || !loadedWeek?.isCurrent) return;
+      const fields = Object.fromEntries([...new FormData(el('captureForm'))].map(([key, value]) => [key, value === '' ? null : Number(value)]));
+      el('captureSave').disabled = true;
+      showText('captureMessage', '');
+      try {
+        const response = await fetch('/api/cropster-readings', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ weekStart: loadedWeek.start, ...fields }),
+        });
+        const result = await readJson(response);
+        if (!response.ok || !result.ok) throw new Error(result.error || 'The readings could not be saved.');
+        if (!signedIn) return;
+        el('captureForm').reset();
+        showText('captureMessage', 'Cropster readings saved.');
+        await load(false);
+      } catch (error) {
+        showText('captureMessage', error.message);
+      } finally {
+        el('captureSave').disabled = false;
+      }
+    });
     el('signInForm').addEventListener('submit', async event => {
       event.preventDefault();
       el('signIn').disabled = true;
