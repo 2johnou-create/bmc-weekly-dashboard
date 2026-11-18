@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { labReport, mergeGreenCoverage } from "../worker/roastery-lab.js";
+import { sydneyDate } from "../worker/metrics.js";
 
 const today = "2026-11-19";
 const names = {
@@ -231,4 +232,76 @@ test("missing or duplicate source months remain unknown, without converting bag 
   assert.equal(result.groups[0].columns[0].cells.find(cell => cell.month === "2026-11").state, "unknown");
   assert.equal(result.groups[0].columns[0].coverageThrough, null);
   assert.equal("kg" in result.groups[0].columns[0], false);
+});
+
+test("two-month labels use actual origin green input independently of three-month forecasts and recipe shares", () => {
+  const data = fixture();
+  for (const [index, kg] of [900, 100, 200].entries()) data.use.months[index].rows.find(row => row.name === names.brazil).kg = kg;
+  const historicalDecaf = "Brazil Santos Decaf NY2/3 SC14/16 Coficom";
+  for (const [index, kg] of [100, 20, 0].entries()) data.use.months[index].rows.push({ name: historicalDecaf, kg });
+  const report = labReport(data, today);
+  const plan = contracts();
+  plan.columns.find(column => column.id === "I").origin = "Colombia";
+  const result = mergeGreenCoverage(report.consumption, report.prices, plan, today);
+  const origin = result.origins.find(item => item.name === names.brazil);
+  const lanes = Object.fromEntries(result.groups.flatMap(group => group.columns.map(column => [column.id, column])));
+  assert.equal(origin.avgMonthlyKg, 400);
+  assert.equal(origin.twoMonthAverageKg, 150);
+  assert.equal(origin.depletionMonth, "2027-01");
+  assert.equal(lanes["liberty-D"].twoMonthAverageKg, 150);
+  assert.equal(lanes["rhythm-D"].twoMonthAverageKg, 150);
+  assert.equal(lanes["liberty-C"].twoMonthAverageKg, 100, "Honduras profile resolves the actual Colombian coffee");
+  assert.equal(lanes["rhythm-F"].twoMonthAverageKg, 120, "China profile resolves the actual Peruvian coffee");
+  assert.equal(lanes["rhythm-G"].twoMonthAverageKg, 80, "unrecorded stock does not hide known origin use");
+  assert.equal(lanes["decaf-I"].twoMonthAverageKg, 75);
+  assert.equal(result.origins.find(item => item.name === historicalDecaf).twoMonthAverageKg, 10);
+  assert.deepEqual(result.twoMonthAverageMonths, ["2026-09", "2026-10"]);
+  assert.deepEqual(report.consumption.twoMonthAverageMonths, result.twoMonthAverageMonths);
+  report.prices.highlights[0].components[0].name = "Unknown profile";
+  assert.equal(mergeGreenCoverage(report.consumption, report.prices, plan, today).groups[0].columns[1].twoMonthAverageKg, null);
+});
+
+test("two-month averages require both complete month reports, treating absent coffee in a complete report as zero", () => {
+  const average = data => labReport(data, today).consumption.origins.find(origin => origin.name === names.brazil).twoMonthAverageKg;
+  const data = fixture();
+  data.use.months[2].rows.find(row => row.name === names.brazil).kg = 200;
+  data.use.months[1].rows = data.use.months[1].rows.filter(row => row.name !== names.brazil);
+  assert.equal(average(data), 100);
+  data.use.months[2].rows = data.use.months[2].rows.filter(row => row.name !== names.brazil);
+  assert.equal(average(data), 0);
+  data.use.months[1].complete = false;
+  data.use.months[1].rows.push({ name: names.brazil, kg: 200 });
+  assert.equal(average(data), null, "a row in an incomplete month is insufficient");
+  data.use.months.splice(1, 1);
+  assert.equal(average(data), null, "a missing complete month is not zero");
+  const report = labReport(data, today);
+  const result = mergeGreenCoverage(report.consumption, report.prices, contracts(), today);
+  assert.deepEqual(result.twoMonthAverageMonths, ["2026-09", "2026-10"]);
+  assert.equal(result.groups[0].columns[2].twoMonthAverageKg, null);
+  const oldMissing = fixture();
+  oldMissing.use.months[0].complete = false;
+  assert.equal(average(oldMissing), 300, "only the latest two complete months establish the new rate");
+});
+
+test("Sydney New Year rolls the two-month period from October–November to November–December and excludes current-month data", () => {
+  const data = fixture();
+  data.use.months = [
+    { month: "2026-10", complete: true, rows: [{ name: names.brazil, kg: 10 }] },
+    { month: "2026-11", complete: true, rows: [{ name: names.brazil, kg: 20 }] },
+    { month: "2026-12", complete: true, rows: [{ name: names.brazil, kg: 30 }] },
+    { month: "2027-01", complete: false, rows: [{ name: names.brazil, kg: 999_999 }] },
+  ];
+  const beforeDate = sydneyDate(new Date("2026-12-31T12:59:59Z"));
+  const afterDate = sydneyDate(new Date("2026-12-31T13:00:00Z"));
+  const before = labReport(data, beforeDate);
+  const after = labReport(data, afterDate);
+  assert.deepEqual(before.consumption.twoMonthAverageMonths, ["2026-10", "2026-11"]);
+  assert.equal(before.consumption.origins.find(origin => origin.name === names.brazil).twoMonthAverageKg, 15);
+  assert.deepEqual(after.consumption.twoMonthAverageMonths, ["2026-11", "2026-12"]);
+  assert.equal(after.consumption.origins.find(origin => origin.name === names.brazil).twoMonthAverageKg, 25);
+  const result = mergeGreenCoverage(after.consumption, after.prices, contracts(), afterDate);
+  assert.deepEqual(result.twoMonthAverageMonths, ["2026-11", "2026-12"]);
+  assert.equal(result.groups[0].columns[2].twoMonthAverageKg, 25);
+  const missing = mergeGreenCoverage(labReport({}, afterDate).consumption, {}, {}, afterDate);
+  assert.deepEqual(missing.twoMonthAverageMonths, ["2026-11", "2026-12"]);
 });

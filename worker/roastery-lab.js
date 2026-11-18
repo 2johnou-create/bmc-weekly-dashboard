@@ -319,6 +319,7 @@ export function mergeGreenCoverage(consumption = {}, prices = {}, contracts = {}
         label: coverageText(source?.origin, 160) || "Origin unavailable",
         rateLabel: coverageText(source?.rateLabel, 256),
         coffee: origin?.name ?? null,
+        twoMonthAverageKg: knownQuantity(origin?.twoMonthAverageKg),
         stockDepletionMonth: monthKey(origin?.depletionMonth) ? origin.depletionMonth : null,
         coverageThrough,
         firstGapMonth: future.find(cell => cell.state === "gap")?.month ?? null,
@@ -352,6 +353,7 @@ export function mergeGreenCoverage(consumption = {}, prices = {}, contracts = {}
     return {
       name: origin?.name ?? originNames.get(id),
       kg: knownQuantity(origin?.kg), avgMonthlyKg: knownQuantity(origin?.avgMonthlyKg),
+      twoMonthAverageKg: knownQuantity(origin?.twoMonthAverageKg),
       lastMonthKg: knownQuantity(origin?.lastMonthKg),
       depletionMonth: monthKey(origin?.depletionMonth) ? origin.depletionMonth : null,
       locations: (Array.isArray(origin?.locations) ? origin.locations : []).filter(location =>
@@ -365,7 +367,9 @@ export function mergeGreenCoverage(consumption = {}, prices = {}, contracts = {}
     status, asOf: contracts.asOf ?? null, sourceUrl: contracts.sourceUrl ?? null,
     sourceUpdatedLabel: coverageText(contracts.sourceUpdatedLabel, 160),
     note: coverageText(contracts.note) || "The CONTRACTS planning calendar is unavailable. Unknown months are left unconfirmed.",
-    years, currentYear, currentMonth, groups, origins,
+    years, currentYear, currentMonth,
+    twoMonthAverageMonths: validDate(today) ? previousMonths(today).slice(-2) : [],
+    groups, origins,
     originNote: "Observed green use is reported once per actual Cropster coffee across all recorded locations, not allocated to blends. Recipe percentages describe use; shared Brazil also serves other coffees. Stock-only finish estimates exclude future contracts. All recorded coffees explicitly named Decaf or Decaffeinated are shown separately; their recipe shares are not recorded and the contract plan does not allocate their use.",
   };
 }
@@ -400,11 +404,13 @@ export function labReport(data = {}, today = sydneyDate()) {
   const origins = [...originNames].map(([id, name]) => {
     const coffee = stock.get(id);
     const total = totalIfKnown(monthlyUse.map(month => month.coffees.get(id) ?? (month.complete ? 0 : null)));
+    const twoMonthTotal = totalIfKnown(monthlyUse.slice(-2).map(month => month.complete ? month.coffees.get(id) ?? 0 : null));
     const monthlyKg = total === null ? null : total / 3;
     const avgMonthlyKg = monthlyKg === null ? null : round(monthlyKg);
     const kg = recordedStock.has(id) ? round(coffee.kg) : null;
     return {
       name, kg, avgMonthlyKg,
+      twoMonthAverageKg: twoMonthTotal === null ? null : round(twoMonthTotal / 2),
       lastMonthKg: lastMonthUse.coffees.get(id) ?? (lastMonthUse.complete ? 0 : null),
       depletionMonth: stockAsOf && kg !== null && monthlyKg !== null ? forecastMonth(stockAsOf, coffee.kg, monthlyKg) : null,
       locations: [...(coffee?.locations ?? [])].filter(([, kg]) => kg > 0).sort(([left], [right]) => left.localeCompare(right, "en-AU"))
@@ -435,6 +441,7 @@ export function labReport(data = {}, today = sydneyDate()) {
       stockTotalKg: data.inventory?.totalKg ?? (stockAsOf && stock.size > 0 ? round(sum([...stock.values()].map(coffee => coffee.kg))) : null),
       forecasts,
       origins,
+      twoMonthAverageMonths: period.slice(-2),
       note: sumKg === null ? "Three completed Cropster months are needed for the average." :
         sumBags === null ? "Bag counts need recorded bag sizes or counts from Cropster." : "",
       forecastNote: "Estimated from the last three completed months and all recorded locations. Assumes the same use and no incoming deliveries. New coffees with no recorded use have no projected finish month.",

@@ -122,6 +122,8 @@ export const roasteryLabPage = String.raw`<!doctype html>
     .coverage-matrix tbody th { position:sticky; left:0; z-index:2; background:#fafbf7; font-weight:700; }
     .coverage-matrix .group-end { border-inline-end:3px solid #8c9d89; }
     .coverage-rate { display:block; font-size:.875rem; font-weight:450; color:var(--muted); margin-top:.15rem; }
+    .coverage-average { display:block; margin-top:.2rem; font-size:.8125rem; font-weight:650; line-height:1.3; color:#425749; font-variant-numeric:tabular-nums; }
+    .coverage-average-note { margin:0 0 .6rem; font-size:.8125rem; line-height:1.45; color:var(--muted); }
     .coverage-current > th { background:#fff0c8; box-shadow:inset 3px 0 #a5282c; }
     .coverage-current > th small { display:block; font-size:.75rem; font-weight:650; }
     .coverage-matrix td { padding:.1rem; }
@@ -315,6 +317,7 @@ export const roasteryLabPage = String.raw`<!doctype html>
             <section aria-labelledby="coverageTitle">
               <div class="coverage-controls"><h2 id="coverageTitle">Green coffee contract calendar</h2><label for="coverageYear">Year <select id="coverageYear" disabled></select></label></div>
               <div class="coverage-legend"><span><i class="coverage-key contracted" aria-hidden="true"></i>✓ Contracted</span><span><i class="coverage-key gap" aria-hidden="true"></i>Gap · uncontracted</span><span><i class="coverage-key unknown" aria-hidden="true"></i>? Unknown</span><span><i class="coverage-key stock-runout-key" aria-hidden="true"></i>Stock-only runout</span></div>
+              <p id="coverageAverageNote" class="coverage-average-note"></p>
               <p id="coverageStatus" class="note" hidden></p>
               <p id="coverageEmpty" class="note" hidden>Contract coverage is unavailable.</p>
               <div id="coverageScroll" class="coverage-scroll" role="region" aria-label="Yearly contract calendar. Scroll to view all coffee lanes." tabindex="0" hidden>
@@ -791,6 +794,9 @@ export const roasteryLabPage = String.raw`<!doctype html>
           const origin = node('th', shortLabel, last ? 'group-end' : '');
           origin.scope = 'col';
           origin.title = [fullLabel, column.rateLabel, column.stockDepletionMonth && 'Stock-only runout ' + (monthText(column.stockDepletionMonth) || column.stockDepletionMonth), column.sourceColumn && 'Source column ' + column.sourceColumn].filter(Boolean).join(' · ');
+          const average = node('span', format(column.twoMonthAverageKg) + ' kg/mo', 'coverage-average');
+          average.title = 'Cropster average of the last two completed months' + (column.coffee ? ' · ' + column.coffee : '') + '. Total coffee use across all blends; no recipe allocation.';
+          origin.append(average);
           if (column.coverageThrough) origin.append(node('span', 'Through ' + (monthText(column.coverageThrough) || column.coverageThrough), 'coverage-rate'));
           if (column.firstGapMonth) origin.append(node('span', 'Gap ' + (monthText(column.firstGapMonth) || column.firstGapMonth), 'coverage-rate'));
           originRow.append(origin);
@@ -844,6 +850,8 @@ export const roasteryLabPage = String.raw`<!doctype html>
     }
     function renderCoverage(coverage, consumption) {
       coverageData = coverage || {};
+      const averageMonths = (coverageData.twoMonthAverageMonths || []).map(monthText).filter(Boolean);
+      el('coverageAverageNote').textContent = 'Cropster 2-month average: ' + (averageMonths.length === 2 ? averageMonths.join(' and ') : 'last two completed months') + ', in kg/month. Shared coffee totals repeat across blends.';
       const years = [...new Set((coverageData.years || []).filter(Number.isInteger))].sort((a, b) => a - b);
       if (!years.includes(coverageYear)) coverageYear = years.includes(coverageData.currentYear) ? coverageData.currentYear : years.at(0) ?? null;
       const year = el('coverageYear');
@@ -1080,7 +1088,7 @@ export const roasteryLabPage = String.raw`<!doctype html>
       setBusy(false);
       el('board').hidden = true;
       for (const id of ['blendHighlights', 'blendDetails', 'otherPriceRows', 'monthRows', 'lastMonthRows', 'originRows', 'coverageHeaders', 'coverageMonths', 'coverageYear', 'releaseRows', 'latestReleases', 'purchaseDays', 'selectedPurchases', 'upcomingPurchases', 'purchaseTotalRows']) el(id).replaceChildren();
-      for (const id of ['releasePreview', 'qaPreview', 'latestQa', 'stockAsOf', 'coverageStatus', 'coverageSource', 'coverageNote', 'originNote', 'originAverageLabel', 'originLastMonthLabel', 'sourceNote', 'status', 'consumptionNote', 'lastMonthTitle', 'consumptionWindow', 'priceDates', 'lossNote', 'coffeeCChange', 'coffeeCContract', 'coffeeCTiming', 'coffeeCAsOf', 'coffeeCNote', 'purchasePreview', 'purchaseNote', 'purchaseAsOf', 'purchaseMonth', 'selectedPurchaseDate', 'selectedPurchaseEmpty', 'upcomingPurchaseEmpty']) el(id).textContent = '';
+      for (const id of ['releasePreview', 'qaPreview', 'latestQa', 'stockAsOf', 'coverageStatus', 'coverageAverageNote', 'coverageSource', 'coverageNote', 'originNote', 'originAverageLabel', 'originLastMonthLabel', 'sourceNote', 'status', 'consumptionNote', 'lastMonthTitle', 'consumptionWindow', 'priceDates', 'lossNote', 'coffeeCChange', 'coffeeCContract', 'coffeeCTiming', 'coffeeCAsOf', 'coffeeCNote', 'purchasePreview', 'purchaseNote', 'purchaseAsOf', 'purchaseMonth', 'selectedPurchaseDate', 'selectedPurchaseEmpty', 'upcomingPurchaseEmpty']) el(id).textContent = '';
       for (const id of ['avgKg', 'avgBags', 'coffeeCPrice']) el(id).textContent = missing;
       for (const id of ['coffeeCSource', 'purchaseSource', 'coverageLink']) safeSourceLink(id, undefined);
       el('coverageYear').disabled = true;
