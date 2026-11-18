@@ -513,10 +513,10 @@ export const roasteryLabPage = String.raw`<!doctype html>
       const kind = event.kind === 'ordered' ? 'Ordered' : 'Planned order';
       const details = [includeDate && dateText(event.date), kind, event.supplier].filter(Boolean);
       item.append(node('p', details.join(' · '), 'purchase-meta'));
-      const quantity = [withUnit(event.kg, 'kg'), Number.isFinite(event.bags) && withUnit(event.bags, 'bags'), purchaseMoney(event)].filter(Boolean);
+      const quantity = [Number.isFinite(event.kg) && withUnit(event.kg, 'kg'), Number.isFinite(event.bags) && withUnit(event.bags, 'bags'), purchaseMoney(event)].filter(Boolean);
       item.append(node('p', quantity.join(' · '), 'purchase-quantity'));
       if (event.quantityText) item.append(node('p', event.quantityText, 'purchase-meta purchase-note'));
-      const payment = [event.invoice && 'Invoice ' + event.invoice,
+      const payment = [event.invoice && 'Reference ' + event.invoice.replace(/\n/g, ' · '),
         validCalendarDate(event.dueDate) && 'Payment due ' + dateText(event.dueDate)].filter(Boolean);
       if (payment.length) item.append(node('p', payment.join(' · '), 'purchase-meta'));
       if (event.note) item.append(node('p', event.note, 'note purchase-note'));
