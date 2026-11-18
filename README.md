@@ -8,7 +8,7 @@ The landing page shows the weekly report. The previous operations view and saved
 
 | Weekly report | Figure |
 | --- | --- |
-| Demand | Planned kilograms from the exact-week roast tally. Percentage change uses last week's tally as its baseline when the previous total is above zero. |
+| Demand | Kilograms from `3. Roast Planning!C18` in the dated weekly ROAST TALLY. Percentage change uses last week's tally as its baseline when the previous total is above zero. |
 | Roasted and scheduled | Cropster Production Report output and recorded green cost, plus the remaining schedule’s estimated output and green cost. Expand for last week’s figures and the capture time. |
 | Current green bean stock | The most recent Cropster Green Inventory Report snapshot across all locations, in kg and AUD. |
 | Current non-coffee stock | Latest Stockroom value, using counted stock × pieces per stock unit × unit cost. Items without prices are flagged. |
@@ -18,7 +18,7 @@ The landing page shows the weekly report. The previous operations view and saved
 
 | Figure | Source and definition |
 | --- | --- |
-| Weekly demand | Exact-week roast tally from the existing public 2026 Drive folder. The workbook's internal Monday and totals must agree. Copied channel-reference dates are flagged. |
+| Weekly demand | The saved numeric value in `3. Roast Planning!C18` of the dated ROAST TALLY in the shared Drive folder. |
 | Weekly roasted | Completed output recorded from the Cropster Production Report for the selected Sydney week. |
 | Green stock | Current physical Cropster green lots, reported in kilograms. |
 | Non-coffee stock | Current Stockroom inventory: counted stock × pieces per stock unit × unit cost, grouped by category. Missing prices make the known value partial. |
@@ -37,7 +37,7 @@ Read actual kilograms and historical green-ingredient cost from **Reports → Pr
 
 While signed in to the dashboard, open **Data sources → Record Cropster readings** to save the current week’s verified aggregates. Cropster credentials stay in the browser or password manager. The dashboard stores the figures and capture time in its password-protected database.
 
-Demand discovery reads Google's existing public folder listing and validates the matching workbook. This depends on Google's HTML structure; renamed, missing, private or changed-format workbooks become unavailable. No Google sharing permissions are changed. A known workbook is only a fallback when its internal week matches the requested week. This is a live read, not a committed copy of business data.
+The demand feed reads the shared-drive copy of the workbook used for Emily’s Monday Roast Schedule. It looks for `ROAST TALLY <day> <MMM> <year>.xlsx` for the reporting week. The date in that filename identifies the week. Older filename formats also need a matching internal week. An ambiguous file or missing numeric C18 result is shown as unavailable. The dashboard reads the live Drive workbook on refresh.
 
 ## Online order uploads
 

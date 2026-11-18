@@ -363,12 +363,12 @@ export const weeklyPage = String.raw`<!doctype html>
       set(id, value || '');
       el(id).hidden = !value;
     }
-    function weightHeadline(id, value) {
+    function weightHeadline(id, value, formatter = amount) {
       if (!Number.isFinite(value)) { set(id, unavailable); return; }
       const unit = document.createElement('span');
       unit.className = 'unit';
       unit.textContent = ' kg';
-      el(id).replaceChildren(amount.format(value), unit);
+      el(id).replaceChildren(formatter.format(value), unit);
     }
     function plural(value, singular) { return amount.format(value) + ' ' + singular + (value === 1 ? '' : 's'); }
     function changeWeek(date, offset) {
@@ -416,7 +416,7 @@ export const weeklyPage = String.raw`<!doctype html>
       return '';
     }
     function renderDemand(demand, week, previousRange) {
-      weightHeadline('demandKg', demand.kg);
+      weightHeadline('demandKg', demand.kg, detailKg);
       const change = comparison(demand.changePercent);
       let fallback = 'Previous week’s demand unavailable';
       if (!Number.isFinite(demand.kg)) fallback = 'Demand comparison unavailable';
@@ -427,7 +427,7 @@ export const weeklyPage = String.raw`<!doctype html>
       set('demandPreviousLabel', 'Previous week (' + previousRange + ')');
       set('demandDetail', weight(demand.kg, detailKg));
       set('demandPrevious', weight(demand.previousKg, detailKg));
-      showText('demandSource', sourceText(demand, 'Weekly roast tally'));
+      showText('demandSource', sourceText(demand, 'Weekly roast tally · 3. Roast Planning!C18'));
       showText('demandNote', demand.note || (!change && demand.previousKg === 0 ? 'Percentage change is unavailable when the previous week is zero.' : ''));
     }
     function renderProduction(production, week, previousRange) {

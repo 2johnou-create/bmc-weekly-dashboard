@@ -1,7 +1,10 @@
 import { unzipSync, strFromU8 } from "../vendor/fflate.mjs";
 
 const FOLDER_URL = "https://drive.google.com/drive/folders/1rxLbvoqyaxEdRJWJeWBOwmnmDqxnHXEo";
-const KNOWN_TALLY = { id: "1uJnlW7nU7eB_mWRe-cG7kaiX5qPq8tJV", name: "NEW ROAST TALLY 2ND NOV.xlsx", mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", modified: null };
+const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+const SHEET_MIME = "application/vnd.google-apps.spreadsheet";
+const KNOWN_TALLY = { id: "1uJnlW7nU7eB_mWRe-cG7kaiX5qPq8tJV", name: "NEW ROAST TALLY 2ND NOV.xlsx", mime: XLSX_MIME, modified: null };
+const DEMAND_CELL = "3. Roast Planning!C18";
 const MAX_BYTES = 2_000_000;
 const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
 const cache = new WeakMap();
@@ -37,6 +40,11 @@ function filenameDate(name, year) {
   return `${match[3] || year}-${String(month).padStart(2, "0")}-${match[1].padStart(2, "0")}`;
 }
 
+function namedWeeklyTally(name, weekStart) {
+  return /^ROAST\s+TALLY\s+\d{1,2}\s+[A-Z]{3}\s+20\d{2}(?:\.xlsx)?$/i.test(name.trim())
+    && filenameDate(name, weekStart.slice(0, 4)) === weekStart;
+}
+
 // Drive's public folder listing is not a stable API. Never execute its scripts.
 export function parseDriveFolderCandidates(html, weekStart) {
   if (typeof html !== "string" || html.length > MAX_BYTES) throw new Error("Folder listing is too large.");
@@ -51,21 +59,22 @@ export function parseDriveFolderCandidates(html, weekStart) {
   } else {
     for (const match of html.matchAll(/<(?:div|tr)\b[^>]*\bdata-id=["'][^"']+["'][^>]*>/gi)) {
       const id = attribute(match[0], "data-id"), title = attribute(match[0], "data-tooltip");
-      if (title) candidates.push({ id, name: title.replace(/ Microsoft Excel$/, ""), mime: title.includes("Microsoft Excel") ? KNOWN_TALLY.mime : "application/vnd.google-apps.spreadsheet", modified: null });
+      if (title) candidates.push({ id, name: title.replace(/ Microsoft Excel$/, ""), mime: title.includes("Microsoft Excel") ? XLSX_MIME : SHEET_MIME, modified: null });
     }
   }
   const unique = new Map();
   for (const file of candidates) {
     if (typeof file.id !== "string" || !/^[\w-]{20,100}$/.test(file.id) || typeof file.name !== "string" || file.name.length > 240) continue;
-    if (!/roast/i.test(file.name) || !/tally/i.test(file.name) || /template|example/i.test(file.name)) continue;
-    if (![KNOWN_TALLY.mime, "application/vnd.google-apps.spreadsheet"].includes(file.mime)) continue;
+    if (!/roast/i.test(file.name) || !/tally/i.test(file.name) || /template|example|master/i.test(file.name)) continue;
+    if (![XLSX_MIME, SHEET_MIME].includes(file.mime)) continue;
     const date = filenameDate(file.name, weekStart.slice(0, 4));
-    // A filename is only a discovery hint; the internal workbook date is authoritative.
-    if (date && date !== weekStart) continue;
+    if (date !== weekStart) continue;
     const modified = typeof file.modified === "number" && Number.isFinite(file.modified) && file.modified > 0 ? new Date(file.modified).toISOString() : null;
     unique.set(file.id, { ...file, modified, date });
   }
-  return [...unique.values()].sort((a, b) => Number(b.date === weekStart) - Number(a.date === weekStart) || (b.modified || "").localeCompare(a.modified || "")).slice(0, 3);
+  const matches = [...unique.values()];
+  const named = matches.filter(file => namedWeeklyTally(file.name, weekStart));
+  return (named.length ? named : matches).sort((a, b) => (b.modified || "").localeCompare(a.modified || "")).slice(0, 3);
 }
 
 function safeXml(bytes) {
@@ -88,14 +97,13 @@ function cells(xml, shared) {
     let value = raw === undefined ? null : xmlText(raw);
     if (type === "s") value = /^\d+$/.test(value || "") ? shared[Number(value)] ?? null : null;
     if (type === "inlineStr") value = texts(content);
-    const formula = content.match(/<(?:\w+:)?f\b[^>]*>([\s\S]*?)<\/(?:\w+:)?f>/)?.[1];
-    if (value !== null || formula) result.set(ref, { value, formula: formula ? xmlText(formula) : null });
+    if (value !== null) result.set(ref, { value, type });
   }
   return result;
 }
 function number(cell) {
   const value = cell?.value;
-  if (typeof value !== "string" || !value.trim() || !/^\d+(?:\.\d+)?(?:e[+-]?\d+)?$/i.test(value)) return null;
+  if ((cell?.type !== null && cell?.type !== "n") || typeof value !== "string" || !/^\d+(?:\.\d+)?(?:e[+-]?\d+)?$/i.test(value.trim())) return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
@@ -114,34 +122,7 @@ function excelDate(value, date1904) {
   const parsed = new Date(`${date}T00:00:00Z`);
   return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === date ? date : null;
 }
-function planningTotal(sheet) {
-  if (!sheet) return null;
-  const header = [...sheet].find(([, cell]) => /demand\s*\(kg\)/i.test(cell.value || ""));
-  if (!header) return null;
-  const column = header[0].match(/^[A-Z]+/)[0], headerRow = Number(header[0].match(/\d+$/)[0]);
-  let sum = 0, rows = 0;
-  for (let row = headerRow + 1; row <= headerRow + 80; row++) {
-    const label = sheet.get(`B${row}`)?.value?.trim();
-    const cell = sheet.get(`${column}${row}`), value = number(cell);
-    if ((!label || /^total\b/i.test(label)) && cell?.formula && /^SUM\(/i.test(cell.formula) && rows) {
-      if (value === null || Math.abs(sum - value) > 0.02) throw new Error("Demand totals disagree.");
-      return value;
-    }
-    if (!label) continue;
-    if (value === null) return null;
-    sum += value;
-    rows++;
-  }
-  return null;
-}
-function tallyTotal(sheet) {
-  const totals = [...sheet].filter(([, cell]) => /^(?:BLEND TOTAL|SINGLE ORIGIN TOTAL)$/i.test(cell.value || ""));
-  if (!totals.length) return null;
-  const amounts = totals.map(([ref]) => number(sheet.get(`J${ref.match(/\d+$/)[0]}`)));
-  return amounts.some(value => value === null) ? null : amounts.reduce((sum, value) => sum + value, 0);
-}
-
-export function parseWeeklyDemandWorkbook(bytes, weekStart) {
+export function parseWeeklyDemandWorkbook(bytes, weekStart, filename = "") {
   if (!(bytes instanceof Uint8Array) || bytes.byteLength > MAX_BYTES || bytes[0] !== 80 || bytes[1] !== 75) throw new Error("The source did not return an Excel workbook.");
   let entries = 0, totalSize = 0;
   const names = new Set();
@@ -152,34 +133,31 @@ export function parseWeeklyDemandWorkbook(bytes, weekStart) {
     return /^xl\/(?:workbook\.xml|_rels\/workbook\.xml\.rels|sharedStrings\.xml|worksheets\/sheet\d+\.xml)$/.test(file.name);
   } });
   const workbook = safeXml(archive["xl/workbook.xml"]), rels = safeXml(archive["xl/_rels/workbook.xml.rels"]);
-  const sharedXml = archive["xl/sharedStrings.xml"] ? safeXml(archive["xl/sharedStrings.xml"]) : "";
+  // The Monday Roast Schedule uses an explicitly dated workbook name. Older naming
+  // formats still need their internal date to confirm the reporting week.
+  const checkTallyDate = !namedWeeklyTally(filename, weekStart);
+  const sharedXml = checkTallyDate && archive["xl/sharedStrings.xml"] ? safeXml(archive["xl/sharedStrings.xml"]) : "";
   const shared = [...sharedXml.matchAll(/<(?:\w+:)?si\b[^>]*>([\s\S]*?)<\/(?:\w+:)?si>/g)].map(match => texts(match[1]));
   if (shared.length > 20_000) throw new Error("Workbook text is too large.");
   const relationships = new Map([...rels.matchAll(/<Relationship\b([^>]+)\/?\s*>/g)].map(match => [attribute(match[1], "Id"), attribute(match[1], "Target")]));
   const sheets = new Map();
   for (const match of workbook.matchAll(/<sheet\b([^>]+)\/?\s*>/g)) {
     const name = attribute(match[1], "name"), relation = attribute(match[1], "r:id"), target = relationships.get(relation);
-    if (name !== "1. Roast Tally" && name !== "3. Roast Planning") continue;
+    if (name !== "3. Roast Planning" && (!checkTallyDate || name !== "1. Roast Tally")) continue;
     if (!target || target.split("/").includes("..")) throw new Error("Workbook relationship is not supported.");
     const path = target.startsWith("/") ? target.slice(1) : `xl/${target}`;
     sheets.set(name, cells(safeXml(archive[path]), shared));
   }
-  const tally = sheets.get("1. Roast Tally");
-  if (!tally || !/week commencing/i.test(tally.get("B2")?.value || "")) throw new Error("Workbook week is missing.");
-  const actualWeek = excelDate(tally.get("C2")?.value, /<workbookPr\b[^>]*date1904=["'](?:1|true)["']/i.test(workbook));
-  if (!actualWeek) throw new Error("Workbook week is missing or invalid.");
-  if (actualWeek !== weekStart) throw new TallyWeekMismatch();
-  const plan = planningTotal(sheets.get("3. Roast Planning")), total = tallyTotal(tally);
-  if (plan !== null && total !== null && Math.abs(plan - total) > 0.02) throw new Error("Demand totals disagree.");
-  const kg = plan ?? total;
-  if (kg === null || !Number.isFinite(kg) || kg > 1_000_000) throw new Error("Weekly demand total is missing.");
-  const month = Number(weekStart.slice(5, 7)), day = Number(weekStart.slice(8, 10));
-  const olderChannelNotes = [...tally.values()].some(cell => {
-    if (!/^\*\s*(?:Online|Subscriptions):/i.test(cell.value || "")) return false;
-    const period = cell.value.match(/\b(\d{1,2})[–-](\d{1,2})\s+([a-z]{3,9})\b/i);
-    return period && (MONTHS.indexOf(period[3].slice(0, 3).toLowerCase()) + 1 !== month || Number(period[1]) < day || Number(period[2]) > day + 6);
-  });
-  return { kg: Math.round(kg * 100) / 100, olderChannelNotes };
+  if (checkTallyDate) {
+    const tally = sheets.get("1. Roast Tally");
+    if (!tally || !/week commencing/i.test(tally.get("B2")?.value || "")) throw new Error("Workbook week is missing.");
+    const actualWeek = excelDate(tally.get("C2")?.value, /<workbookPr\b[^>]*date1904=["'](?:1|true)["']/i.test(workbook));
+    if (!actualWeek) throw new Error("Workbook week is missing or invalid.");
+    if (actualWeek !== weekStart) throw new TallyWeekMismatch();
+  }
+  const kg = number(sheets.get("3. Roast Planning")?.get("C18"));
+  if (kg === null || kg > 1_000_000) throw new Error(`No numeric demand is saved in ${DEMAND_CELL}.`);
+  return { kg: Math.round(kg * 100) / 100 };
 }
 
 function allowedUrl(value) {
@@ -234,13 +212,22 @@ export async function readWeeklyDemand(weekStart, env = {}) {
   try {
     try { candidates = parseDriveFolderCandidates(strFromU8(await readBytes(FOLDER_URL, fetcher, controller.signal)), weekStart); }
     catch { folderFailed = true; }
-    if (weekStart === "2026-11-02" && !candidates.some(file => file.id === KNOWN_TALLY.id)) candidates.push(KNOWN_TALLY);
+    const named = candidates.filter(file => namedWeeklyTally(file.name, weekStart));
+    if (named.length > 1) return unavailable("More than one dated ROAST TALLY matches this week in the shared folder.");
+    if (weekStart === "2026-11-02" && !candidates.length) candidates.push(KNOWN_TALLY);
     for (const candidate of candidates.slice(0, 3)) {
       if (controller.signal.aborted) break;
       try {
-        const url = candidate.mime === "application/vnd.google-apps.spreadsheet" ? `https://docs.google.com/spreadsheets/d/${candidate.id}/export?format=xlsx` : `https://drive.google.com/uc?export=download&id=${candidate.id}`;
-        const result = parseWeeklyDemandWorkbook(await readBytes(url, fetcher, controller.signal), weekStart);
-        const value = { status: result.olderChannelNotes || folderFailed ? "partial" : "live", kg: result.kg, source: "Weekly roast tally", asOf: candidate.modified, note: `Planned coffee demand for the week starting ${weekStart}.${result.olderChannelNotes ? " Online and subscription reference dates in the tally are outside this week; review those inputs." : ""}${folderFailed ? " The folder listing could not be refreshed; the known workbook was re-read and its week verified." : ""}`, url: `https://docs.google.com/spreadsheets/d/${candidate.id}/edit` };
+        const url = candidate.mime === SHEET_MIME ? `https://docs.google.com/spreadsheets/d/${candidate.id}/export?format=xlsx` : `https://drive.google.com/uc?export=download&id=${candidate.id}`;
+        const result = parseWeeklyDemandWorkbook(await readBytes(url, fetcher, controller.signal), weekStart, candidate.name);
+        const value = {
+          status: folderFailed ? "partial" : "live",
+          kg: result.kg,
+          source: "Weekly roast tally",
+          asOf: candidate.modified,
+          note: `Demand from ${DEMAND_CELL} in ${candidate.name}.${folderFailed ? " The known workbook was used while the folder listing was unavailable." : ""}`,
+          url: `https://docs.google.com/spreadsheets/d/${candidate.id}/edit`,
+        };
         if (entries.size >= 8) entries.delete(entries.keys().next().value);
         entries.set(weekStart, { time: now, value });
         return { ...value };
@@ -253,6 +240,12 @@ export async function readWeeklyDemand(weekStart, env = {}) {
       weekMismatch: true,
       url: `https://docs.google.com/spreadsheets/d/${wrongWeekFile.id}/edit`,
     };
-    return unavailable(folderFailed ? "The roast tally could not be reached. Try refreshing." : "No readable roast tally with the matching internal week was found. Add this week's tally to the shared roast folder.");
+    if (folderFailed) return unavailable("The shared roast tally folder could not be reached. Try refreshing.");
+    const candidate = candidates[0];
+    if (candidate) return {
+      ...unavailable(`Unable to read ${DEMAND_CELL} from ${candidate.name}.`),
+      url: `https://docs.google.com/spreadsheets/d/${candidate.id}/edit`,
+    };
+    return unavailable("The dated ROAST TALLY for this week is missing from the shared folder.");
   } finally { clearTimeout(timer); }
 }
