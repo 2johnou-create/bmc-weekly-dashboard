@@ -28,6 +28,7 @@ export async function readCropsterFriday(db, weekStart) {
   if (Number.isFinite(current?.roasted_kg)) {
     const previousKg = previous?.roasted_kg ?? null;
     const previousValue = previous?.roasted_value ?? null;
+    const changePercent = comparison(current.roasted_kg, previousKg);
     Object.assign(production, {
       status: current.roasted_value === null ? "partial" : "live",
       asOf: capturedAt(current.production_read_at),
@@ -35,7 +36,8 @@ export async function readCropsterFriday(db, weekStart) {
       roastedKg: current.roasted_kg,
       previousKg,
       previousRoastedKg: previousKg,
-      changePercent: comparison(current.roasted_kg, previousKg),
+      changePercent,
+      roastedChangePercent: changePercent,
       value: current.roasted_value,
       roastedValue: current.roasted_value,
       previousValue,

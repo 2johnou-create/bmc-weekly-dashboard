@@ -18,6 +18,7 @@ test("stores Friday production and Marrickville stock independently for the sele
     assert.equal(archive.production.roastedKg, 150);
     assert.equal(archive.production.previousRoastedKg, 100);
     assert.equal(archive.production.changePercent, 50);
+    assert.equal(archive.production.roastedChangePercent, 50);
     assert.equal(archive.production.valueChangePercent, 60);
     assert.equal(archive.production.scheduledKg, null);
     assert.equal(archive.green.snapshotDate, "2026-11-13");
