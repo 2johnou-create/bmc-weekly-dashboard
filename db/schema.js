@@ -65,3 +65,21 @@ export const dashboardCropsterFriday = sqliteTable("dashboard_cropster_friday", 
   productionReadAt: integer("production_read_at"),
   greenReadAt: integer("green_read_at"),
 });
+
+export const dashboardRoasteryLabSettings = sqliteTable("dashboard_roastery_lab_settings", {
+  id: text("id").primaryKey(),
+  releases: text("releases_json").notNull(),
+  qa: text("qa").notNull(),
+  revision: integer("revision").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+}, table => [
+  check("dashboard_roastery_lab_settings_one_record", sql`${table.id} = 'lab'`),
+]);
+
+export const dashboardRoasteryLabCropster = sqliteTable("dashboard_roastery_lab_cropster", {
+  part: text("part").primaryKey(),
+  data: text("data_json").notNull(),
+  recordedAt: integer("recorded_at").notNull(),
+}, table => [
+  check("dashboard_roastery_lab_cropster_part", sql`${table.part} IN ('inventory', 'recipes', 'use', 'loss')`),
+]);

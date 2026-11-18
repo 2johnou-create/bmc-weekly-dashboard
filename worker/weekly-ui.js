@@ -31,10 +31,14 @@ export const weeklyPage = String.raw`<!doctype html>
     :focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
     .wrap { width: min(100% - 3rem, 86rem); margin-inline: auto; }
     header { background: var(--paper); border-bottom: 1px solid var(--line); }
-    .bar, .brand, .actions, .week-nav { display: flex; align-items: center; gap: .6rem; }
+    .bar, .brand, .actions, .dashboard-nav, .week-nav { display: flex; align-items: center; gap: .6rem; }
     .bar { justify-content: space-between; min-height: 4.25rem; }
     .brand { text-decoration: none; }
     .brand img { display: block; width: auto; height: 2.9rem; max-width: 9rem; object-fit: contain; }
+    .dashboard-nav { margin-inline: .6rem auto; gap: .35rem; font-size: .87rem; }
+    .dashboard-nav a { padding: .45rem .65rem; border-radius: .3rem; text-decoration: none; white-space: nowrap; }
+    .dashboard-nav a:hover { background: var(--background); }
+    .dashboard-nav a[aria-current] { background: var(--green-light); color: var(--green); font-weight: 700; }
     .button { border: 1px solid var(--line); border-radius: .35rem; background: var(--paper); color: var(--ink); padding: .4rem .75rem; min-height: 2.7rem; }
     .actions .button { white-space: nowrap; }
     .primary { background: var(--accent); border-color: var(--accent); color: white; }
@@ -176,6 +180,8 @@ export const weeklyPage = String.raw`<!doctype html>
       .meeting-card, .meeting-card.featured, .meeting-card.wholesale { grid-column: auto; }
       .meeting-card summary, .meeting-card.featured summary { min-height: 0; }
       .brand img { height: 2.35rem; }
+      .bar { flex-wrap: wrap; gap: .2rem .45rem; padding-block: .35rem; }
+      .dashboard-nav { order: 3; flex-basis: 100%; margin: 0 0 .2rem; }
       .actions { gap: .25rem; }
       .actions .button, .week-nav .button { font-size: .8rem; padding-inline: .55rem; }
       .production .metric-figure { font-size: clamp(2.1rem, 8vw, 3rem); }
@@ -183,7 +189,7 @@ export const weeklyPage = String.raw`<!doctype html>
     @media print {
       :root, .meeting-card.production { background: white; color: black; }
       .production .metric-label, .production .status-flag, .production .source-note, .production .detail-note, .production .comparison .context, .production dt { color: #444; }
-      .actions, .week-nav, .disclosure, .source-details, .links { display: none !important; }
+      .actions, .dashboard-nav, .week-nav, .disclosure, .source-details, .links { display: none !important; }
       .meeting-card { break-inside: avoid; }
       .wrap { width: 100%; }
     }
@@ -193,6 +199,10 @@ export const weeklyPage = String.raw`<!doctype html>
   <a class="skip-link" href="#report">Skip to Steam Room</a>
   <header><div class="wrap bar">
     <a class="brand" href="/"><img src="/bmc-logo.png" alt="Black Market Coffee"></a>
+    <nav class="dashboard-nav" aria-label="Dashboards">
+      <a href="/" aria-current="page">Steam Room</a>
+      <a href="/roastery-lab">Roastery Lab</a>
+    </nav>
     <div id="actions" class="actions" hidden>
       <button id="refresh" class="button quiet" type="button">Refresh</button>
       <button id="logout" class="button" type="button">Sign out</button>

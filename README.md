@@ -33,6 +33,24 @@ The current week runs Monday–Sunday in Australia/Sydney and shows the latest s
 
 The **Note** card stores one editable list of points per reporting week. Each line becomes a separate point. Notes use Stock Take App access and stay with the selected week.
 
+## Roastery Lab
+
+Switch between **Steam Room** and **Roastery Lab** in the header. Both pages use the Stock Take App sign-in.
+
+- Signature blend green cost uses the saved Cropster recipe shares multiplied by the matching current lot's raw AUD price per kilogram. Roast loss is shown separately, using the recorded green and roasted weights over the stated period. Missing ingredient prices leave the blend price blank.
+- Green consumption averages the last three completed Sydney calendar months. It uses green input in the Production Report, excluding transfers. The latest completed month has its own actuals. Bag figures require recorded bags or verified conversion data and remain blank where only kilograms are available.
+- The projected finish month uses the current Cropster balance across all recorded locations and each coffee's observed average monthly consumption. Supplier-held balances are included. The estimate assumes steady usage and no incoming stock. Coffees with no observed consumption or missing coverage have no estimated finish month.
+- Upcoming Release and QA Status save to the shared dashboard. Changes use a saved revision so an older draft cannot overwrite a newer edit.
+
+Roastery Lab reads the latest verified reports saved from the signed-in Cropster website. Update them with **Cropster reports → Record Cropster reports** using the contract below. Each supplied section replaces its prior reading. Other sections stay available. When a month closes, include all three completed consumption months in the new reading. Raw reports belong in the dashboard's private database and should never be committed.
+
+| Section | Fields |
+| --- | --- |
+| `inventory` | `asOf` (Sydney date), optional `totalKg`, and `rows` of `{name,location,lotId,kg,pricePerKg}` from the dated all-location inventory. `lotId` and prices are optional; use AUD. |
+| `recipes` | `asOf` and `rows` of `{name,signature,components}` where each component has `{name,coffee,percent}`. Use Cropster profile names and set `coffee` to the exact inventory name when the roast profile and actual green lot names differ. |
+| `use` | `months` of `{month,complete,kg,bags,rows}`. Use `YYYY-MM`, matching whole-month roast input, and one `{name,kg,bags}` row per coffee. `complete` is true only when all consumed coffees in the month are represented. Bag fields are optional. |
+| `loss` | `asOf`, optional `from`, and `rows` of `{name,greenKg,roastedKg,batches}` from the same period. Use the total weight of the matched roasts for each profile, blend, or origin. |
+
 ## Cropster readings
 
 Read actual kilograms and historical green-ingredient cost from **Reports → Production Report**. Read remaining estimated roast output in **Roasts → Schedule**, including Friday and excluding completed batches. Estimate remaining green cost from the scheduled lot inputs and their Cropster AUD per-kg prices when all prices are available. Read the **Marrickville** row in **Green Inventory Report → By location** for current green stock and value.

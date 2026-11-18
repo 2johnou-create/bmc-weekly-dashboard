@@ -15,11 +15,24 @@ export function localDatabase(filename, migrations = new URL("../drizzle/", impo
       sqlite.exec("COMMIT");
     } catch (error) { sqlite.exec("ROLLBACK"); sqlite.close(); throw error; }
   }
+  const execute = Symbol("execute statement");
   const wrap = (sql, parameters = []) => ({
     bind(...values) { return wrap(sql, values); },
     async first(column) { const row = sqlite.prepare(sql).get(...parameters); return row ? column ? row[column] : row : null; },
     async all() { return { results: sqlite.prepare(sql).all(...parameters), success: true }; },
-    async run() { const result = sqlite.prepare(sql).run(...parameters); return { success: true, meta: { changes: Number(result.changes) } }; },
+    [execute]() { const result = sqlite.prepare(sql).run(...parameters); return { success: true, meta: { changes: Number(result.changes) } }; },
+    async run() { return this[execute](); },
   });
-  return { prepare: sql => wrap(sql), close: () => sqlite.close() };
+  return {
+    prepare: sql => wrap(sql),
+    async batch(statements) {
+      sqlite.exec("BEGIN");
+      try {
+        const results = statements.map(statement => statement[execute]());
+        sqlite.exec("COMMIT");
+        return results;
+      } catch (error) { sqlite.exec("ROLLBACK"); throw error; }
+    },
+    close: () => sqlite.close(),
+  };
 }

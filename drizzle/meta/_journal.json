@@ -43,6 +43,13 @@
       "when": 1795002728637,
       "tag": "0005_cropster_friday",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1795026846071,
+      "tag": "0006_roastery_lab",
+      "breakpoints": true
     }
   ]
 }

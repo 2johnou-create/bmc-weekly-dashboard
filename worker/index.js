@@ -1,5 +1,6 @@
 import { page } from "./ui.js";
 import { weeklyPage } from "./weekly-ui.js";
+import { roasteryLabPage } from "./roastery-lab-ui.js";
 import { collectWeeklyReport } from "./weekly-report.js";
 import { collectDashboard, dashboardWeek, fetchSourceJson, SOURCE_ORIGINS } from "./metrics.js";
 import { saveCropsterGreenStock, saveCropsterReading } from "./cropster.js";
@@ -10,6 +11,8 @@ import { readWeeklyDemand } from "./demand.js";
 import { HttpError, readSession, signIn, signOut, clearCookie, requireOrigin } from "./auth.js";
 import { listIssues, createIssue, updateIssue, issuesMetric } from "./issues.js";
 import { readWeeklyNote, saveWeeklyNote } from "./weekly-note.js";
+import { readRoasteryLab, saveLabCropster } from "./roastery-lab.js";
+import { saveLabSettings } from "./roastery-lab-settings.js";
 import { readOnlineOrders, ONLINE_ORDERS_FOLDER_URL, ONLINE_ORDERS_CSV_HEADERS } from "./online-orders.js";
 
 const commonHeaders = {
@@ -37,6 +40,9 @@ const issueBody = { maximum: 16_384, missing: "Enter the issue details.", invali
 const weeklyNoteBody = { maximum: 16_384, missing: "Enter the weekly note.", invalid: "Enter valid weekly note details.", tooLarge: "The weekly note is too large." };
 const cropsterBody = { maximum: 2_048, missing: "Enter the Cropster reading.", invalid: "Enter a valid Cropster reading.", tooLarge: "The Cropster reading is too large." };
 const cropsterSmallBody = { ...cropsterBody, maximum: 512 };
+const labSettingsBody = { maximum: 32_768, missing: "Enter release or QA details.", invalid: "Enter valid release and QA details.", tooLarge: "The release and QA notes are too large." };
+const labCropsterBody = { ...cropsterBody, maximum: 350_000, tooLarge: "The Cropster report is too large." };
+const documents = new Map([["/", weeklyPage], ["/details", page], ["/roastery-lab", roasteryLabPage]]);
 async function activeSession(request, env) {
   const session = await readSession(request, env);
   if (!session) throw new HttpError("Sign in with your Stock Take App password.", 401);
@@ -66,8 +72,8 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     try {
-      if (["/", "/details"].includes(url.pathname) && ["GET", "HEAD"].includes(request.method)) {
-        const document = url.pathname === "/" ? weeklyPage : page;
+      if (documents.has(url.pathname) && ["GET", "HEAD"].includes(request.method)) {
+        const document = documents.get(url.pathname);
         return new Response(request.method === "HEAD" ? null : document, { headers: await htmlHeaders(document) });
       }
       if (url.pathname === "/bmc-logo.png" && ["GET", "HEAD"].includes(request.method)) {
@@ -155,6 +161,16 @@ export default {
         if (request.method === "GET") return json(await readWeeklyNote(env.DB, week.start));
         const input = await jsonInput(request, weeklyNoteBody);
         return json(await saveWeeklyNote(env.DB, week.start, input));
+      }
+      if (["/api/roastery-lab", "/api/roastery-lab/settings", "/api/roastery-lab/cropster"].includes(url.pathname)) {
+        const action = url.pathname.split("/")[3];
+        const method = action ? "PUT" : "GET";
+        if (request.method !== method) return json({ error: "Method not allowed." }, 405, { Allow: method });
+        if (action) requireOrigin(request);
+        await activeSession(request, env);
+        if (action === "settings") return json(await saveLabSettings(env.DB, await jsonInput(request, labSettingsBody)));
+        if (action === "cropster") await saveLabCropster(env.DB, await jsonInput(request, labCropsterBody));
+        return json(await readRoasteryLab(env.DB));
       }
       return json({ error: "Not found." }, 404);
     } catch (error) {
