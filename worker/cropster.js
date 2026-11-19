@@ -30,7 +30,7 @@ function captureMetadata(reading, now, status, note) {
     stale,
     asOf: new Date(reading.recorded_at).toISOString(),
     currency: "AUD",
-    note: ["Read in Cropster.", note, stale && "This reading is over 24 hours old."].filter(Boolean).join(" "),
+    note: ["Read in Cropster and saved at the capture time shown. Dashboard Refresh reloads this saved reading; it does not fetch Cropster again.", note, stale && "This reading is over 24 hours old."].filter(Boolean).join(" "),
   };
 }
 

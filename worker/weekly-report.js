@@ -239,6 +239,15 @@ export async function collectWeeklyReport({ weekStart, stockroomCookie, env, now
   return {
     week,
     generatedAt: now.toISOString(),
+    cropsterRefresh: {
+      mode: historical ? "friday-archive" : "saved-readings",
+      fetched: false,
+      productionAsOf: production.asOf || null,
+      greenAsOf: green.asOf || null,
+      note: historical
+        ? "Cropster figures use the saved Friday archive for this week."
+        : "Cropster was not fetched again. Roasted, scheduled and green stock figures use saved readings.",
+    },
     metrics: { demand, production, green, stock, wholesale, expenses: { ...expenses, greenForecast } },
     sources: [
       { label: "This week’s roast tally", note: currentTally?.note || "Demand workbook is unavailable.", url: currentTally?.url, asOf: currentTally?.asOf },

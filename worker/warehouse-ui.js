@@ -205,7 +205,8 @@ export const warehousePage = String.raw`<!doctype html>
     <h1>Warehouse</h1><form id="signInForm"><label for="password">Stock Take App password</label><input id="password" type="password" autocomplete="current-password" maxlength="256" required><button id="signIn" class="button primary" type="submit">Sign in</button><p id="loginMessage" role="alert" hidden></p></form>
   </main>
   <main id="warehouse" class="wrap" hidden tabindex="-1">
-    <div class="intro"><div><h1>Warehouse</h1><p>Illustrative activity · dashboard figures refresh every minute</p></div><p id="reportTime" class="report-time" aria-live="polite"></p></div>
+    <div class="intro"><div><h1>Warehouse</h1><p>Illustrative activity · dashboard checks every minute</p></div><p id="reportTime" class="report-time" aria-live="polite"></p></div>
+    <p id="cropsterFreshness" class="source" hidden></p>
     <p id="status" class="status-line" role="status" hidden></p>
     <div class="workspace">
       <div class="stage-column">
@@ -397,7 +398,7 @@ export const warehousePage = String.raw`<!doctype html>
       const title = node("span", label, "source-title");
       p.append(title);
       const at = date(metric.asOf, true);
-      if (at) p.append(" · " + at + " Sydney time");
+      if (at) p.append((label.startsWith("Cropster") ? " · captured " : " · ") + at + " Sydney time");
       if (metric.stale || metric.status === "stale") p.append(" · saved reading may be out of date");
       else if (metric.status === "partial") p.append(" · partial data");
       else if (metric.status === "unavailable") p.append(" · unavailable");
@@ -418,6 +419,10 @@ export const warehousePage = String.raw`<!doctype html>
     }
     function metricNote(metric = {}) {
       return note(metric.note);
+    }
+    function cropsterRefreshText(report) {
+      const policy = report?.cropsterRefresh || {};
+      return policy.mode === 'friday-archive' ? 'Cropster: saved Friday archive.' : 'Cropster: saved readings · automatic sync not connected.';
     }
     function makeClockMarks() {
       const marks = el("clockMarks");
@@ -1315,6 +1320,8 @@ export const warehousePage = String.raw`<!doctype html>
       renderWeather();
       for (const id of ["statDemand", "statRoasted", "statDispatch"]) el(id).textContent = "—";
       el("reportTime").replaceChildren();
+      el("cropsterFreshness").textContent = "";
+      el("cropsterFreshness").hidden = true;
       el("statRoastSource").textContent = "Cropster";
       el("statDispatchSource").textContent = "Dispatch";
       el("zoneDetails").replaceChildren(empty("Dashboard figures are loading."));
@@ -1355,9 +1362,11 @@ export const warehousePage = String.raw`<!doctype html>
       dispatchPollFailed = false;
       renderDispatchSummary();
       const cropsterDate = date(production.asOf, true);
-      el("statRoastSource").textContent = cropsterDate ? "Cropster saved " + cropsterDate : "Cropster reading unavailable";
+      el("statRoastSource").textContent = cropsterDate ? "Cropster captured " + cropsterDate + " Sydney time" : "Cropster reading unavailable";
       const timestamp = date(data.generatedAt, true);
-      el("reportTime").replaceChildren(node("strong", weekLabel()), document.createTextNode(timestamp ? "Dashboard read " + timestamp + " Sydney time" : ""));
+      el("reportTime").replaceChildren(node("strong", weekLabel()), document.createTextNode(timestamp ? "Dashboard checked " + timestamp + " Sydney time" : ""));
+      el("cropsterFreshness").textContent = cropsterRefreshText(data.weekly);
+      el("cropsterFreshness").hidden = false;
       renderPanel(true);
       renderWeather();
       renderJohn();
@@ -1445,7 +1454,8 @@ export const warehousePage = String.raw`<!doctype html>
         setMessage("status", "");
         if (fresh) {
           const checked = new Date(next.generatedAt || Date.now()).toLocaleTimeString("en-AU", { timeZone: "Australia/Sydney", hour: "numeric", minute: "2-digit", second: "2-digit" });
-          el("reportTime").replaceChildren(node("strong", weekLabel()), document.createTextNode("Refresh complete. Checked " + checked + " Sydney time"));
+          el("reportTime").replaceChildren(node("strong", weekLabel()), document.createTextNode("Dashboard rechecked " + checked + " Sydney time"));
+          setMessage("status", "Cropster was not fetched again. Original capture times are in the source details.");
         }
       } catch {
         if (activeRequest === controller && generation === sessionGeneration && signedIn) {

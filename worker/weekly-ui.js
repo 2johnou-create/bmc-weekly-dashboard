@@ -242,7 +242,7 @@ export const weeklyPage = String.raw`<!doctype html>
         <button id="currentWeek" class="button" type="button" hidden>This week</button>
       </nav>
     </div>
-    <div class="report-status"><p id="status" role="status"></p><p id="refreshPolicy" hidden>Live feeds refresh every minute</p></div>
+    <div class="report-status"><p id="status" role="status"></p><p id="refreshPolicy" hidden>Cropster uses saved readings.</p></div>
     <div id="figures" class="report-grid" hidden>
       <details class="meeting-card featured demand">
         <summary>
@@ -591,8 +591,13 @@ export const weeklyPage = String.raw`<!doctype html>
     function sourceText(metric, fallback) {
       const label = sourceNames[metric.source] || metric.source || fallback;
       const timestamp = formatTimestamp(metric.asOf);
-      if (label === 'Cropster' && timestamp) return 'Read in Cropster ' + timestamp + ' Sydney time.';
+      if (label === 'Cropster' && timestamp) return 'Saved Cropster reading captured ' + timestamp + ' Sydney time.';
       return timestamp ? label + ' updated ' + timestamp + ' Sydney time.' : 'Source: ' + label + '.';
+    }
+    function cropsterRefreshText(report) {
+      const policy = report.cropsterRefresh || {};
+      const historical = policy.mode === 'friday-archive' || report.week?.isCurrent === false;
+      return historical ? 'Cropster: saved Friday archive.' : 'Cropster: saved readings · automatic sync not connected.';
     }
     function statusText(metric, unavailableLabel) {
       if (metric.status === 'unavailable') return unavailableLabel;
@@ -646,7 +651,7 @@ export const weeklyPage = String.raw`<!doctype html>
       const valueChange = comparison(production.valueChangePercent, 'value');
       const fallback = hasTotal || hasRoasted ? 'Previous week comparison unavailable' : 'Production comparison unavailable';
       renderComparison('productionChange', [weightChange, valueChange].filter(Boolean).join(' · '), fallback);
-      const productionFlag = historical ? (hasRoasted ? 'Friday archive' : 'Friday Cropster figures unavailable') : statusText(production, 'Cropster reading needed') || 'Cropster snapshot';
+      const productionFlag = historical ? (hasRoasted ? 'Friday archive' : 'Friday Cropster figures unavailable') : statusText(production, 'Cropster reading needed') || 'Saved Cropster reading';
       showText('productionFlag', productionFlag);
       set('roastedDetailKg', weight(production.roastedKg, detailKg));
       set('scheduledDetailKg', weight(production.scheduledKg, detailKg));
@@ -875,7 +880,7 @@ export const weeklyPage = String.raw`<!doctype html>
         label.textContent = source.label;
         entry.append(label);
         const timestamp = formatTimestamp(source.asOf);
-        if (timestamp) entry.append(' updated ' + timestamp + ' Sydney time.');
+        if (timestamp) entry.append((source.label.startsWith('Cropster') ? ' captured ' : ' updated ') + timestamp + ' Sydney time.');
         if (source.note) entry.append(' ' + source.note);
         return entry;
       });
@@ -1002,8 +1007,9 @@ export const weeklyPage = String.raw`<!doctype html>
       el('figures').hidden = false;
       el('currentWeek').hidden = week.isCurrent;
       el('refreshPolicy').hidden = false;
+      set('refreshPolicy', cropsterRefreshText(data));
       const checked = formatTimestamp(data.generatedAt);
-      set('status', checked ? 'Last checked ' + checked + ' Sydney time' : 'Figures loaded');
+      set('status', checked ? 'Dashboard checked ' + checked + ' Sydney time' : 'Saved dashboard figures loaded');
       el('status').classList.remove('error');
       return noteRequest;
     }
@@ -1112,7 +1118,8 @@ export const weeklyPage = String.raw`<!doctype html>
           const noteChecked = await noteRequest;
           if (currentRequest !== controller || !signedIn) return;
           const checked = new Date().toLocaleTimeString('en-AU', { timeZone: 'Australia/Sydney', hour: 'numeric', minute: '2-digit', second: '2-digit' });
-          set('status', 'Refresh complete. Checked ' + checked + ' Sydney time.' +
+          set('status', 'Dashboard rechecked ' + checked + ' Sydney time. ' +
+            (data.week?.isCurrent === false ? 'Saved Friday Cropster archive reloaded.' : 'Cropster was not fetched again.') +
             (noteChecked === false ? ' The meeting note could not be checked. Use Refresh note to try again.' : '') +
             (noteChecked === 'saving' ? ' The meeting note is still saving.' : ''));
         }
