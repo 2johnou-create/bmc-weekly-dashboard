@@ -5,7 +5,7 @@ import { createLimiter, settlesWithin } from "./runtime-limits.mjs";
 import { browserFailureCode, safeProgress } from "./progress.mjs";
 import { cloneCheckpoint, emitCheckpoint } from "./checkpoint.mjs";
 import {
-  CROPSTER_ORIGIN, aggregateScheduleRead, parseInventory, inventoryPrices, parseMarrickvilleStock,
+  CROPSTER_ORIGIN, aggregateScheduleRead, parseInventory, parseLegacyInventory, inventoryPrices, parseMarrickvilleStock,
   parseRoastedCost, parseRoastedOutput, parseScheduleDay, sameProduction, parseMonthlyUse, parseLoss,
   parseBlend, parseProfileGroup, parseProfileInputs, assembleRecipes, blendLoss, parseScheduleWeek, sameScheduleReads, previousProduction,
 } from "./parse.mjs";
@@ -33,6 +33,7 @@ function paths(range) {
     schedule: Array.from({ length: 5 }, (_, index) => `/apps/roast/schedule/calendar/day?date=${addDays(range.weekStart, index)}`),
     weekSchedule: `/apps/roast/schedule/calendar/week?date=${range.weekStart}`,
     prices: "/app/inventory/overview",
+    legacyPrices: "/apps/lots/inventory-report?pageSize=100",
     green: "/apps/lots/inventory-report/location",
   };
 }
@@ -260,7 +261,7 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
         catch (error) {
           if (!(error instanceof ReaderError) || error.code === "CROPSTER_CHANGED_DURING_READ") throw error;
           phase = "pagination"; emit(stage, "running", phase);
-          if (["production", "stock", "schedule"].includes(kind)) await expandLegacy(page);
+          if (["production", "stock", "schedule", "legacyPrices"].includes(kind)) await expandLegacy(page);
           phase = "parse"; emit(stage, "running", phase);
           result = await snapshotUntilParsed(page, parse);
         }
@@ -272,7 +273,7 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
         throw error instanceof ReaderError ? error : new ReaderError(code);
       } finally { if (page) await closePage(page); }
     });
-    const inventory = (stage = "inventory") => limit(async () => {
+    const modernInventory = (stage = "inventory") => limit(async () => {
       let page, phase = "open";
       emit(stage, "running", phase);
       try {
@@ -311,6 +312,14 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
         throw error instanceof ReaderError ? error : new ReaderError(code);
       } finally { if (page) await closePage(page); }
     });
+    const inventory = async (stage = "inventory") => {
+      try {
+        return await view(sourcePaths.legacyPrices, "legacyPrices", snapshot => parseLegacyInventory(snapshot, sydneyDate(now())), stage + "_legacy");
+      } catch (error) {
+        if (error instanceof ReaderError && ["CROPSTER_AUTH_REQUIRED", "CROPSTER_TIMEOUT", "CROPSTER_CLEANUP_TIMEOUT"].includes(error.code)) throw error;
+        return modernInventory(stage);
+      }
+    };
     const scheduleSources = new Set();
     const readSchedules = async (verify = false, forceDays = false) => {
       const prefix = verify ? "weekly_schedule_verify_" : "weekly_schedule_";

@@ -151,3 +151,40 @@ test("rendered weekly capture scopes dates, machines and batch counts to calenda
     assert.deepEqual(captured.calendarWeek.rows, [{ machineId: "M1", cellCount: 8, summary: header.innerText, batchCounts: counts, emptyCells: [false, false, true, true, true, true, true] }]);
   } finally { globalThis.document = originalDocument; globalThis.location = originalLocation; }
 });
+
+test("legacy inventory readiness requires every visible row to finish rendering its lot link", () => {
+  const originalDocument = globalThis.document;
+  let loaded = false;
+  try {
+    globalThis.document = {
+      body: { innerText: "Green Inventory Report Show 1 - 2 of 2" }, querySelector: () => null,
+      querySelectorAll: selector => selector === "table thead" ? [{ innerText: "Lot ID-Tag Name Weight (kg) Price" }]
+        : selector === "table tbody tr" ? [0, 1].map(index => ({ querySelectorAll: () => index === 0 || loaded ? [{ innerText: "PG-0901" }] : [] })) : [],
+    };
+    assert.equal(renderedViewReady("legacyPrices"), false);
+    loaded = true;
+    assert.equal(renderedViewReady("legacyPrices"), true);
+  } finally { globalThis.document = originalDocument; }
+});
+
+test("legacy inventory capture reads the verified display scope from exact rendered controls", () => {
+  const originalDocument = globalThis.document, originalLocation = globalThis.location;
+  const buttons = [{ innerText: "Snapshot Report", className: "button active ember-view" }, { innerText: "Timeframe Report", className: "button ember-view" }].map(button => ({ ...button, getAttribute: () => null }));
+  const textInputs = [{ type: "text", value: "" }, { type: "text", value: "" }], rowCheckbox = { type: "checkbox", checked: false };
+  try {
+    globalThis.document = {
+      title: "Synthetic source", body: { innerText: "Green Inventory Report" },
+      querySelectorAll: selector => selector === ".ember-power-select-multiple-options" ? [{ innerText: "", querySelectorAll: () => [] }]
+        : selector === "input.toggle[data-test-checkbox]" ? [{ checked: false }]
+        : selector === 'button,[role="button"]' ? buttons
+        : selector === "table input" ? [...textInputs, rowCheckbox]
+        : selector === 'table input[type="checkbox"]' ? [rowCheckbox] : [],
+    };
+    globalThis.location = { href: "https://c-sar.cropster.com/apps/lots/inventory-report?pageSize=100" };
+    assert.deepEqual(captureDocument().legacyInventoryScope, {
+      locationControls: [{ text: "", selected: [] }], consumedControls: [{ checked: false }],
+      snapshotButtons: [{ text: "Snapshot Report", class: "button active ember-view", pressed: null }, { text: "Timeframe Report", class: "button ember-view", pressed: null }],
+      nonCheckboxInputs: textInputs, checkedRows: 0,
+    });
+  } finally { globalThis.document = originalDocument; globalThis.location = originalLocation; }
+});

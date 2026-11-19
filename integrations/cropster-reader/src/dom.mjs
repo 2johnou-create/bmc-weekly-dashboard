@@ -9,6 +9,12 @@ export function renderedViewReady(kind) {
   if (kind === "group") return /Associated profiles/.test(body) && /Green inventory/.test(body) && Boolean(document.querySelector('a[href*="/apps/roast/profiles/"]'));
   if (kind === "profile") return /Components\s*\/\s*Green lots/i.test(body) && /Blend %/.test(headings) && /Green weight/.test(headings) && Boolean(document.querySelector('table tbody a[href*="/lots/"]'));
   if (kind === "prices") return /ID-Tag/.test(headings) && /Price/.test(headings) && /\d+\s*-\s*\d+\s+of\s+\d+\s+items/.test(body);
+  if (kind === "legacyPrices") {
+    const rows = Array.from(document.querySelectorAll("table tbody tr"));
+    return /Green Inventory Report/.test(body) && /Lot ID-Tag/.test(headings) && /Price/.test(headings) && rows.length > 0
+      && rows.every(row => Array.from(row.querySelectorAll('a[href*="/apps/lots/inventory/"]')).some(link => /^PG-\d+$/.test(compact(link.innerText))))
+      && /Show\s+\d+\s*-\s*\d+\s+of\s+\d+/.test(body);
+  }
   if (kind === "stock") return /Values refer to (?:the )?inventory on/.test(body) && /Location/.test(headings) && /Total value/.test(headings) && /Show\s+\d+\s*-\s*\d+\s+of\s+\d+/.test(body);
   if (kind === "schedule") {
     const empty = ["No coffees scheduled", "No profiles scheduled", "No green lots scheduled"].every(marker => body.includes(marker));
@@ -32,6 +38,7 @@ export function viewDiagnostics({ kind, expectedPath }) {
   else if (kind === "group") { expectedBody = /Associated profiles/.test(body) && /Green inventory/.test(body); expectedHeaders = false; }
   else if (kind === "profile") { expectedBody = /Components\s*\/\s*Green lots/i.test(body); expectedHeaders = /Blend %/.test(headings) && /Green weight/.test(headings); }
   else if (kind === "prices") { expectedBody = /Green Inventory/i.test(body); expectedHeaders = /ID-Tag/.test(headings) && /Price/.test(headings); }
+  else if (kind === "legacyPrices") { expectedBody = /Green Inventory Report/.test(body); expectedHeaders = /Lot ID-Tag/.test(headings) && /Price/.test(headings); }
   else if (kind === "stock") { expectedBody = /Values refer to (?:the )?inventory on/.test(body); expectedHeaders = /Location/.test(headings) && /Total value/.test(headings); }
   else if (kind === "schedule") { expectedBody = /Scheduled coffees/.test(body) && /Summary per green lot/.test(body); expectedHeaders = /To roast/.test(headings); }
   else { expectedBody = /Production report/.test(body); expectedHeaders = /Amount of green/.test(headings); }
@@ -59,6 +66,13 @@ export function captureDocument() {
     text: text(document.body).slice(0, 200000),
     links: Array.from(document.querySelectorAll("a[href]")).slice(0, 1500).map(link => ({ text: text(link), href: link.href })),
     activeFilters: Array.from(document.querySelectorAll('[role="status"]')).map(text).filter(value => /^Filters\s*:/.test(value)),
+    legacyInventoryScope: {
+      locationControls: Array.from(document.querySelectorAll(".ember-power-select-multiple-options")).map(control => ({ text: text(control), selected: Array.from(control.querySelectorAll(".ember-power-select-multiple-option")).map(text) })),
+      consumedControls: Array.from(document.querySelectorAll("input.toggle[data-test-checkbox]")).map(input => ({ checked: input.checked })),
+      snapshotButtons: Array.from(document.querySelectorAll('button,[role="button"]')).filter(button => ["Snapshot Report", "Timeframe Report"].includes(text(button))).map(button => ({ text: text(button), class: button.className, pressed: button.getAttribute("aria-pressed") })),
+      nonCheckboxInputs: Array.from(document.querySelectorAll("table input")).filter(input => input.type !== "checkbox").map(input => ({ type: input.type, value: input.value })),
+      checkedRows: Array.from(document.querySelectorAll('table input[type="checkbox"]')).filter(input => input.checked).length,
+    },
     scheduleStatuses: Object.fromEntries(Array.from(document.querySelectorAll('input[type="checkbox"][id*="-status-"]')).map(input => [input.id.split("-status-").at(-1), input.checked])),
     scheduleMachines: Object.fromEntries(Array.from(document.querySelectorAll('input[type="checkbox"][id*="-machine-"]')).map(input => [input.id.split("-machine-").at(-1), input.checked])),
     calendarWeek: {

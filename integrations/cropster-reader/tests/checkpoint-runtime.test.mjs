@@ -5,6 +5,7 @@ import { dateLabel } from "../src/dates.mjs";
 import { ReaderError } from "../src/errors.mjs";
 import { cloneCheckpoint } from "../src/checkpoint.mjs";
 import { weekSnapshot } from "./week-schedule.fixture.mjs";
+import { legacyInventorySnapshot } from "./legacy-inventory.fixture.mjs";
 
 const origin = "https://c-sar.cropster.com";
 const table = (headers, rows, footers = []) => ({ headers, rows, footers, pagination: `Show 1 - ${rows.length} of ${rows.length}` });
@@ -37,7 +38,7 @@ function sourceSnapshot(address) {
   throw new Error("Unexpected synthetic source path");
 }
 
-function simulatedBrowser({ failPrevious = false, fastWeek = false, inventoryFailures = 0, extraInventory = false } = {}) {
+function simulatedBrowser({ failPrevious = false, fastWeek = false, inventoryFailures = 0, extraInventory = false, legacyInventory = false, invalidLegacyScope = false } = {}) {
   const visits = [], waits = [], navigations = [];
   const context = { async newPage() {
     let address;
@@ -56,6 +57,11 @@ function simulatedBrowser({ failPrevious = false, fastWeek = false, inventoryFai
       locator: selector => ({ isVisible: async () => false, count: async () => selector.includes("-status-") ? 1 : 0, check: async () => {} }),
       getByRole: () => ({ count: async () => 0 }),
       evaluate: async () => {
+        if (legacyInventory && new URL(address).pathname === "/apps/lots/inventory-report") {
+          const snapshot = legacyInventorySnapshot();
+          if (invalidLegacyScope) snapshot.legacyInventoryScope.consumedControls[0].checked = true;
+          return snapshot;
+        }
         const snapshot = new URL(address).pathname === "/apps/roast/schedule/calendar/week" && fastWeek ? { ...weekSnapshot(), url: address } : structuredClone(sourceSnapshot(address));
         if (extraInventory && new URL(address).pathname === "/app/inventory/overview") {
           snapshot.text = "1-25 of 2 items";
@@ -163,5 +169,26 @@ test("a second unavailable inventory leaves a verified weekly checkpoint and doe
   assert.equal(result.production.scheduledValue, null);
   assert.ok(result.warnings.includes("INVENTORY_UNAVAILABLE"));
   assert.equal(source.visits.filter(address => new URL(address).pathname === "/app/inventory/overview").length, 2);
+  await reader.close();
+});
+
+test("verified legacy stock is the primary inventory path and skips the modern app", async () => {
+  const source = simulatedBrowser({ fastWeek: true, legacyInventory: true });
+  const reader = createBrowserReader({ timeoutMs: 1800000, chromiumSandbox: false }, { now: () => new Date("2026-02-05T00:00:00Z"), launch: async () => source.browser });
+  const result = await reader.read("2026-02-02", { scope: "all" });
+  assert.equal(result.lab.inventory.rows.length, 3);
+  assert.equal(result.lab.inventory.rows[1].positionId, "PositionB");
+  assert.equal(result.production.scheduledValue, 230);
+  assert.equal(source.visits.filter(address => new URL(address).pathname === "/app/inventory/overview").length, 0);
+  assert.equal(source.visits.filter(address => new URL(address).pathname === "/apps/lots/inventory-report").length, 1);
+  await reader.close();
+});
+
+test("unproven legacy scope falls back to the bounded modern inventory reader", async () => {
+  const source = simulatedBrowser({ fastWeek: true, legacyInventory: true, invalidLegacyScope: true, extraInventory: true });
+  const reader = createBrowserReader({ timeoutMs: 1800000, chromiumSandbox: false }, { now: () => new Date("2026-02-05T00:00:00Z"), launch: async () => source.browser });
+  const result = await reader.read("2026-02-02", { scope: "all" });
+  assert.equal(result.lab.inventory.rows.length, 2);
+  assert.equal(source.visits.filter(address => new URL(address).pathname === "/app/inventory/overview").length, 1);
   await reader.close();
 });

@@ -267,6 +267,51 @@ export function parseInventory(snapshots, asOf) {
   };
 }
 
+export function parseLegacyInventory(snapshot, asOf) {
+  sourceUrl(snapshot, "/apps/lots/inventory-report");
+  const text = compact(snapshot.text), date = dateLabel(asOf);
+  if (!text.includes("for " + date) || !text.replaceAll("Values refer to the inventory on ", "Values refer to inventory on ").includes("Values refer to inventory on " + date)) throw new ReaderError("CROPSTER_SCOPE_UNVERIFIED");
+  const scope = snapshot.legacyInventoryScope;
+  const snapshotButton = scope?.snapshotButtons?.filter(button => compact(button.text) === "Snapshot Report");
+  const timeframeButton = scope?.snapshotButtons?.filter(button => compact(button.text) === "Timeframe Report");
+  if (!scope || scope.locationControls?.length !== 1 || !Array.isArray(scope.locationControls[0].selected) || scope.locationControls[0].selected.length !== 0 || compact(scope.locationControls[0].text)
+    || scope.consumedControls?.length !== 1 || scope.consumedControls[0].checked !== false || scope.checkedRows !== 0
+    || !Array.isArray(scope.nonCheckboxInputs) || scope.nonCheckboxInputs.length > 10 || scope.nonCheckboxInputs.some(input => input.type !== "text" || trim(input.value))
+    || snapshotButton?.length !== 1 || timeframeButton?.length !== 1 || !/\bactive\b/.test(snapshotButton[0].class || "") || /\bactive\b/.test(timeframeButton[0].class || "")) throw new ReaderError("CROPSTER_SCOPE_UNVERIFIED");
+  const table = tableWith(snapshot, ["lot id-tag", "name", "weight (kg)", "total value", "location", "price"]);
+  if (!completeTable(snapshot, table) || table.rows.length === 0) throw new ReaderError("CROPSTER_TABLE_INCOMPLETE");
+  const seen = new Set(), positions = new Set(), values = [];
+  const rows = table.rows.map((row, index) => {
+    const lotId = trim(row[table.index("lot id-tag")]);
+    const name = compact(row[table.index("name")]), location = compact(row[table.index("location")]);
+    const kg = kilograms(row[table.index("weight (kg)")]), value = aud(row[table.index("total value")]);
+    const priceText = compact(row[table.index("price")]).match(new RegExp("^(" + numeric + ")\\s*\\$\\s*/\\s*kg$"));
+    const pricePerKg = priceText ? number(priceText[1]) : null;
+    const links = (table.rowLinks?.[index] || []).filter(link => {
+      try { const url = new URL(link.href, CROPSTER_ORIGIN); return url.origin === CROPSTER_ORIGIN && /^\/apps\/lots\/inventory\/[A-Za-z0-9_-]+$/.test(url.pathname) && compact(link.text) === lotId; }
+      catch { return false; }
+    });
+    if (!/^PG-\d+$/.test(lotId) || !name || name.length > 160 || !location || location.length > 160 || kg === null || value === null || pricePerKg === null
+      || !close(kg * pricePerKg, value, 0.011) || links.length !== 1) throw new ReaderError("CROPSTER_INVENTORY_UNAVAILABLE");
+    const key = JSON.stringify([lotId, location]), positionId = new URL(links[0].href, CROPSTER_ORIGIN).pathname.split("/").at(-1);
+    if (seen.has(key) || positions.has(positionId)) throw new ReaderError("CROPSTER_INVENTORY_UNAVAILABLE");
+    seen.add(key); positions.add(positionId); values.push(value);
+    return { name, location, lotId, kg, pricePerKg, positionId };
+  });
+  const totals = (table.footers || []).filter(row => /^Total - page:\s*\d+$/.test(compact(row[table.index("lot id-tag")])));
+  if (totals.length !== 1) throw new ReaderError("CROPSTER_TOTAL_UNAVAILABLE");
+  const total = totals[0], totalKg = sum(rows.map(row => row.kg)), totalValue = sum(values), locations = new Set(rows.map(row => row.location)).size;
+  const footerCount = Number(compact(total[table.index("lot id-tag")]).match(/\d+$/)?.[0]);
+  const locationCount = compact(total[table.index("location")]).match(/^Count:\s*(\d+)$/)?.[1];
+  const overview = text.split("Green Inventory Overview")[1]?.split("By lot")[0] || "";
+  const overviewTotals = overview.match(new RegExp("(" + numeric + ")\\s+kg\\s+(" + numeric + ")\\s+AUD\\s+(\\d+)\\s+Locations\\s+(\\d+)\\s+# of lots"));
+  if (footerCount !== rows.length || Number(locationCount) !== locations || !close(kilograms(total[table.index("weight (kg)")]), totalKg, 0.011)
+    || !close(aud(total[table.index("total value")]), totalValue, 0.011) || !overviewTotals
+    || Number(overviewTotals[3]) !== locations || Number(overviewTotals[4]) !== rows.length
+    || !close(number(overviewTotals[1]), totalKg, 0.51) || !close(number(overviewTotals[2]), totalValue, 0.51)) throw new ReaderError("CROPSTER_TOTAL_UNAVAILABLE");
+  return { asOf, allLocationsComplete: true, totalKg: round(totalKg), rows };
+}
+
 export function inventoryPrices(inventory) {
   const positions = inventory.rows.map(row => ({ id: row.lotId, location: row.location, price: row.pricePerKg }));
   const byLot = new Map();
