@@ -82,7 +82,8 @@ async function websiteJob(config, env, weekStart, jobId, fetcher) {
       ...(jobId ? {} : { body: JSON.stringify({ weekStart }) }),
     });
     if (jobId && response.status === 404) { const expired = new Error("The background job has expired."); expired.jobExpired = true; throw expired; }
-    if (!response.ok || !response.headers.get("content-type")?.includes("application/json")) throw new Error();
+    if (!response.ok) { const unavailable = new Error("Reader returned an unsuccessful response."); unavailable.safeCode = "READER_HTTP_" + response.status; throw unavailable; }
+    if (!response.headers.get("content-type")?.includes("application/json")) { const unexpected = new Error("Reader returned an unexpected response."); unexpected.safeCode = "READER_CONTENT_TYPE"; throw unexpected; }
     const length = Number(response.headers.get("content-length"));
     if (length > MAX_BODY) throw new Error();
     const reader = response.body?.getReader();
@@ -251,8 +252,13 @@ export async function readCurrentCropster({ env, weekStart, followingWeekStart, 
 
 export async function verifyCropsterJob({ env, weekStart, jobId, fetcher = fetch }) {
   const config = connection(env);
-  if (!config.valid || !validSyncJobId(jobId)) throw new Error("The source job cannot be verified.");
-  return websiteJob(config, env, weekStart, jobId, fetcher);
+  if (!config.valid || !validSyncJobId(jobId)) { const invalid = new Error("The source job cannot be verified."); invalid.safeCode = "READER_CONFIGURATION"; throw invalid; }
+  try { return await websiteJob(config, env, weekStart, jobId, fetcher); }
+  catch (error) {
+    if (!error.safeCode) error.safeCode = /cache.*(?:unsupported|not supported)|unsupported.*cache/i.test(error.message || "") ? "READER_CACHE_MODE" :
+      /redirect.*(?:unsupported|not supported)|unsupported.*redirect/i.test(error.message || "") ? "READER_REDIRECT_MODE" : "READER_FETCH_OR_PROTOCOL";
+    throw error;
+  }
 }
 
 export async function ingestCropsterSync({ env, weekStart, jobId, input, status = "complete", now = new Date() }) {

@@ -679,17 +679,30 @@ export const weeklyPage = String.raw`<!doctype html>
       if (signal.aborted) throw new DOMException('Source update stopped.', 'AbortError');
       const pending = pendingSourceSyncForWeek(weekStart);
       if (!fresh && !pending) return null;
+      const unavailable = () => {
+        const retained = pendingSourceSyncForWeek(weekStart);
+        return { ...(retained || {}), status: retained ? 'running' : 'unavailable',
+          weekStart: retained?.weekStart || weekStart || currentSourceSyncWeek(), checkUnavailable: true };
+      };
       const options = { cache: 'no-store', credentials: 'same-origin', signal };
       const query = pending && !fresh ? '?' + new URLSearchParams({ jobId: pending.jobId, week: pending.weekStart }) : '';
-      const response = await fetch('/api/source-sync' + query, fresh ? {
-        ...options, method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(weekStart ? { weekStart } : {}),
-      } : options);
+      let response;
+      try {
+        response = await fetch('/api/source-sync' + query, fresh ? {
+          ...options, method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(weekStart ? { weekStart } : {}),
+        } : options);
+      } catch (error) {
+        if (signal.aborted || error?.name === 'AbortError' || error?.status === 401) throw error;
+        return unavailable();
+      }
+      if (signal.aborted) throw new DOMException('Source update stopped.', 'AbortError');
       if (response.status === 401) {
         const error = new Error('Your session has ended. Sign in again.');
         error.status = 401;
         throw error;
       }
+      if ([408, 429].includes(response.status) || response.status >= 500 && response.status <= 599) return unavailable();
       const state = await readJson(response);
       if (signal.aborted) throw new DOMException('Source update stopped.', 'AbortError');
       if (!response.ok) throw new Error(state.error || 'The source update could not be checked.');
@@ -711,6 +724,7 @@ export const weeklyPage = String.raw`<!doctype html>
       return { status: state.status, weekStart: state.weekStart, ...(jobId ? { jobId } : {}), note: state.note };
     }
     function sourceSyncResultText(report, cropsterReport = report, sync) {
+      if (sync?.checkUnavailable) return 'Cropster update status could not be checked. Other sources were rechecked.';
       if (sync?.status === 'running' || sourceSyncIsRunning(cropsterReport)) return 'Cropster updating in background. Other sources were rechecked.';
       const summary = report?.sourceSync || report?.weekly?.sourceSync;
       if (sync?.status === 'failed' && !sync.jobId) return 'Cropster could not update. Previous readings are shown. Other sources were rechecked.';
@@ -1226,6 +1240,7 @@ export const weeklyPage = String.raw`<!doctype html>
         if (weekToLoad) query.set('week', weekToLoad);
         if (fresh) query.set('refresh', '1');
         if (sync?.jobId) { query.set('sourceSyncJob', sync.jobId); query.set('sourceSyncWeek', sync.weekStart); }
+        if (sync?.checkUnavailable) query.set('sourceSyncCheckUnavailable', '1');
         const response = await fetch('/api/weekly-report' + (query.size ? '?' + query : ''), { cache: 'no-store', signal: controller.signal });
         if (currentRequest !== controller) return;
         if (response.status === 401) {

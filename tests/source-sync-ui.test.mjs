@@ -266,7 +266,7 @@ for (const view of views) {
     assert.equal(timer.pending.size, 0);
   });
 
-  test(view.name + " keeps its previous cards and draft when the pending status request fails", async () => {
+  test(view.name + " rechecks other cards and retains the Cropster reference when the pending status connection fails", async () => {
     let fail = false;
     const app = runtime(view, async (address, options) => {
       const url = new URL(address, "https://dashboard.test");
@@ -278,12 +278,63 @@ for (const view of views) {
     const previous = app.state.payload;
     fail = true;
     await app.load(false);
-    assert.equal(app.state.payload, previous);
-    assert.equal(app.state.rendered, 1);
-    assert.equal(app.calls.length, 3);
+    assert.notEqual(app.state.payload, previous);
+    assert.equal(app.state.rendered, 2);
+    assert.equal(app.calls.length, 4);
+    const lastUrl = new URL(app.calls[3].address, "https://dashboard.test");
+    assert.equal(lastUrl.pathname, view.path);
+    assert.equal(lastUrl.searchParams.get("sourceSyncCheckUnavailable"), "1");
+    assert.equal(lastUrl.searchParams.get("sourceSyncJob"), jobId);
     assert.equal(app.pending().jobId, jobId);
     assert.equal(app.el("weekNoteInput").value, "Unsaved meeting draft");
-    assert.match(app.el("status").textContent, /Connection unavailable|Refresh failed/);
+    assert.match(app.el("status").textContent, /Cropster update status could not be checked\. Other sources were rechecked\./);
+    assert.doesNotMatch(app.el("status").textContent, /All connected sources/);
+  });
+
+  test(view.name + " still reads other cards after a transient503 from a pending-job GET", async () => {
+    const timer = clock();
+    const reference = {jobId, weekStart: week, startedAt: timer.Date.now()};
+    const storage = new Map([["bmc-dashboard-cropster-source-job-v1", JSON.stringify(reference)]]);
+    const app = runtime(view, async (address, options) => {
+      const url = new URL(address, "https://dashboard.test");
+      if (url.pathname === "/api/source-sync") {
+        assert.notEqual(options.method, "POST");
+        return response({error: "Temporarily unavailable"}, 503);
+      }
+      assert.equal(url.pathname, view.path);
+      assert.equal(url.searchParams.get("sourceSyncCheckUnavailable"), "1");
+      assert.equal(url.searchParams.get("sourceSyncJob"), jobId);
+      assert.equal(url.searchParams.get("sourceSyncWeek"), week);
+      return response(fixtureReport(view));
+    }, timer, "", storage);
+    await app.load(false);
+    assert.equal(app.calls.length, 2);
+    assert.equal(app.state.rendered, 1);
+    assert.deepEqual(app.pending(), reference);
+    assert.match(app.el("status").textContent, /Cropster update status could not be checked/);
+    assert.doesNotMatch(app.el("status").textContent, /All connected sources/);
+    assert.equal(app.el("weekNoteInput").value, "Unsaved meeting draft");
+  });
+
+  test(view.name + " bypasses other feed caches without retrying a503 source start in the report", async () => {
+    const app = runtime(view, async (address, options) => {
+      const url = new URL(address, "https://dashboard.test");
+      if (url.pathname === "/api/source-sync") {
+        assert.equal(options.method, "POST");
+        return response({error: "Temporarily unavailable"}, 503);
+      }
+      assert.equal(url.pathname, view.path);
+      assert.equal(url.searchParams.get("refresh"), "1");
+      assert.equal(url.searchParams.get("sourceSyncCheckUnavailable"), "1");
+      assert.equal(url.searchParams.has("sourceSyncJob"), false);
+      return response(fixtureReport(view));
+    });
+    await app.load(true, {fresh: true});
+    assert.equal(app.calls.length, 2);
+    assert.equal(app.state.rendered, 1);
+    assert.equal(app.pending(), null);
+    assert.match(app.el("status").textContent, /Cropster update status could not be checked/);
+    assert.doesNotMatch(app.el("status").textContent, /All connected sources/);
   });
 
   test(view.name + " accepts immediate completion without polling", async () => {
@@ -407,6 +458,31 @@ test("a completion for a different pending job is rejected without losing the va
   const storage = new Map([["bmc-dashboard-cropster-source-job-v1", JSON.stringify({jobId, weekStart: week, startedAt: timer.Date.now()})]]);
   const app = runtime(views[0], async () => response({status: "complete", jobId: "99999999-2222-4333-8444-555555555555", weekStart: week}), timer, "", storage);
   await app.load(false);
+  assert.equal(app.calls.length, 1);
+  assert.equal(app.state.rendered, 0);
+  assert.equal(app.pending().jobId, jobId);
+});
+
+test("source protocol and permission failures are not treated as transient transport failures", async () => {
+  for (const status of [400, 403, 404, 409, 422]) {
+    const app = runtime(views[0], async () => response({error: "Invalid request"}, status));
+    await app.load(true, {fresh: true});
+    assert.equal(app.calls.length, 1);
+    assert.equal(app.state.rendered, 0);
+    assert.equal(app.pending(), null);
+  }
+});
+
+test("an aborted pending source request never triggers another report read", async () => {
+  const timer = clock();
+  const storage = new Map([["bmc-dashboard-cropster-source-job-v1", JSON.stringify({jobId, weekStart: week, startedAt: timer.Date.now()})]]);
+  const app = runtime(views[0], async (_address, options) => new Promise((_resolve, reject) => {
+    options.signal.addEventListener("abort", () => reject(new DOMException("Stopped", "AbortError")), {once: true});
+  }), timer, "", storage);
+  const completion = app.load(false);
+  assert.equal(app.calls.length, 1);
+  app.abort();
+  await completion;
   assert.equal(app.calls.length, 1);
   assert.equal(app.state.rendered, 0);
   assert.equal(app.pending().jobId, jobId);

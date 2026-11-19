@@ -386,3 +386,22 @@ test("a failed background job retains its verified sections and terminal status"
     assert.equal(log.sources.find(source => source.id === "lab-recipes").status, "failed");
   });
 });
+
+test("a failed sync check does not retry the reader or block the other report feeds", async () => {
+  for (const path of ["/api/weekly-report", "/api/warehouse", "/api/roastery-lab"]) {
+    await harness(async ({ state, request }) => {
+      const report = await request(path + "?refresh=1&sourceSyncCheckUnavailable=1&sourceSyncJob=" + state.jobId + "&sourceSyncWeek=" + week());
+      assert.equal(report.status, 200, path);
+      assert.equal(state.starts, 0, path);
+      assert.equal(state.polls, 0, path);
+      assert.ok(state.addresses.some(url => url.hostname === "bmc-stockroom.misty-jelly-1931.chatgpt.site"), path);
+      assert.ok(state.addresses.some(url => url.hostname !== readerHost && url.hostname !== "bmc-stockroom.misty-jelly-1931.chatgpt.site"), path);
+      assert.doesNotMatch(report.body.sourceSync.message, /All card sources updated/);
+      const before = state.addresses.length;
+      state.revoked = true;
+      const denied = await request(path + "?refresh=1&sourceSyncCheckUnavailable=1");
+      assert.equal(denied.status, 401, path);
+      assert.ok(state.addresses.slice(before).every(url => url.hostname === "bmc-stockroom.misty-jelly-1931.chatgpt.site"));
+    });
+  }
+});

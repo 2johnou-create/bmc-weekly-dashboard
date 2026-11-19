@@ -37,24 +37,35 @@ function sourceSnapshot(address) {
   throw new Error("Unexpected synthetic source path");
 }
 
-function simulatedBrowser({ failPrevious = false, fastWeek = false } = {}) {
-  const visits = [];
+function simulatedBrowser({ failPrevious = false, fastWeek = false, inventoryFailures = 0, extraInventory = false } = {}) {
+  const visits = [], waits = [], navigations = [];
   const context = { async newPage() {
     let address;
     return {
       setDefaultTimeout() {}, setDefaultNavigationTimeout() {}, on() {}, close: async () => {},
-      async goto(value) {
+      async goto(value, options) {
+        navigations.push({ address: value, ...options });
         visits.push(value); address = value;
         if (failPrevious && new URL(value).searchParams.get("dateFrom") === "2026-01-26") throw new ReaderError("CROPSTER_AUTH_REQUIRED");
       },
       url: () => address,
-      waitForFunction: async () => {},
+      waitForFunction: async (_predicate, kind, options) => {
+        waits.push({ kind, ...options });
+        if (kind === "prices" && inventoryFailures-- > 0) { const error = new Error("Synthetic timeout with private text"); error.name = "TimeoutError"; throw error; }
+      },
       locator: selector => ({ isVisible: async () => false, count: async () => selector.includes("-status-") ? 1 : 0, check: async () => {} }),
       getByRole: () => ({ count: async () => 0 }),
-      evaluate: async () => new URL(address).pathname === "/apps/roast/schedule/calendar/week" && fastWeek ? { ...weekSnapshot(), url: address } : structuredClone(sourceSnapshot(address)),
+      evaluate: async () => {
+        const snapshot = new URL(address).pathname === "/apps/roast/schedule/calendar/week" && fastWeek ? { ...weekSnapshot(), url: address } : structuredClone(sourceSnapshot(address));
+        if (extraInventory && new URL(address).pathname === "/app/inventory/overview") {
+          snapshot.text = "1-25 of 2 items";
+          snapshot.tables[1].rows.push(["", "[PG-0902]", "Example second coffee", "Marrickville", "20 kg", "A$12 / kg"]);
+        }
+        return snapshot;
+      },
     };
   } };
-  return { visits, browser: { isConnected: () => true, newContext: async () => context, close: async () => {} } };
+  return { visits, waits, navigations, browser: { isConnected: () => true, newContext: async () => context, close: async () => {} } };
 }
 
 test("real orchestration publishes coherent weekly data before retrospective and Lab source visits", async () => {
@@ -119,5 +130,38 @@ test("the verified weekly path uses two week views and keeps independent sources
   const before = started("weekly_production_before"), after = started("weekly_production_after");
   for (const stage of ["inventory", "green_marrickville", "weekly_monday"]) assert.ok(started(stage) < before, stage);
   assert.ok(started("weekly_schedule_week") > before && started("weekly_schedule_verify_week") < after);
+  await reader.close();
+});
+
+test("one warm inventory retry enriches saved prices without freshening verified schedule weights", async () => {
+  let tick = 0;
+  const source = simulatedBrowser({ fastWeek: true, inventoryFailures: 1, extraInventory: true }), checkpoints = [];
+  const reader = createBrowserReader({ timeoutMs: 1800000, chromiumSandbox: false }, { now: () => new Date(Date.UTC(2026, 1, 5) + tick++), launch: async () => source.browser });
+  const result = await reader.read("2026-02-02", { scope: "all", onCapture: snapshot => checkpoints.push(snapshot) });
+  assert.equal(checkpoints[0].production.scheduledValue, null);
+  assert.equal(checkpoints[0].lab.inventory, undefined);
+  assert.equal(checkpoints[1].production.scheduledValue, 230);
+  assert.equal(result.lab.inventory.rows.length, 2);
+  assert.equal(checkpoints[1].production.scheduledKg, checkpoints[0].production.scheduledKg);
+  assert.equal(checkpoints[1].production.roastedKg, checkpoints[0].production.roastedKg);
+  assert.equal(checkpoints[1].productionObservedAt, checkpoints[0].productionObservedAt);
+  assert.ok(Date.parse(checkpoints[1].labObservedAt.inventory) > Date.parse(checkpoints[0].productionObservedAt));
+  assert.equal(checkpoints[1].warnings.includes("INVENTORY_UNAVAILABLE"), false);
+  assert.equal(checkpoints[1].warnings.includes("SCHEDULED_COST_UNAVAILABLE"), false);
+  assert.equal(source.visits.filter(address => new URL(address).pathname === "/app/inventory/overview").length, 2);
+  assert.ok(source.waits.filter(wait => wait.kind === "prices").every(wait => wait.timeout === 120000));
+  assert.ok(source.navigations.every(navigation => navigation.timeout <= 45000));
+  await reader.close();
+});
+
+test("a second unavailable inventory leaves a verified weekly checkpoint and does not retry forever", async () => {
+  const source = simulatedBrowser({ fastWeek: true, inventoryFailures: 2 }), checkpoints = [];
+  const reader = createBrowserReader({ timeoutMs: 1800000, chromiumSandbox: false }, { now: () => new Date("2026-02-05T00:00:00Z"), launch: async () => source.browser });
+  const result = await reader.read("2026-02-02", { onCapture: snapshot => checkpoints.push(snapshot) });
+  assert.equal(checkpoints.length, 1);
+  assert.equal(result.production.scheduledKg, 16.25);
+  assert.equal(result.production.scheduledValue, null);
+  assert.ok(result.warnings.includes("INVENTORY_UNAVAILABLE"));
+  assert.equal(source.visits.filter(address => new URL(address).pathname === "/app/inventory/overview").length, 2);
   await reader.close();
 });

@@ -103,10 +103,10 @@ async function finishSourceSync(env, session, cropsterResult, week, jobId, now) 
   return task;
 }
 
-async function roasteryReport(env, { fresh = false, jobId = null, syncWebsite = fresh } = {}) {
+async function roasteryReport(env, { fresh = false, jobId = null, syncWebsite = fresh || Boolean(jobId) } = {}) {
   const now = new Date();
   const week = dashboardWeek(undefined, now);
-  const cropster = await readCurrentCropster({ env, weekStart: week.start, followingWeekStart: addDays(week.start, 7), now, fresh: syncWebsite || Boolean(jobId), jobId });
+  const cropster = await readCurrentCropster({ env, weekStart: week.start, followingWeekStart: addDays(week.start, 7), now, fresh: syncWebsite, jobId });
   const [data, coffeeC, purchases] = await Promise.all([
     readRoasteryLab(env.DB, now), readCoffeeC({ now, fresh }), readPurchases({ now, fresh }),
   ]);
@@ -139,6 +139,7 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     const fresh = url.searchParams.get("refresh") === "1";
+    const skipWebsiteSync = url.searchParams.get("sourceSyncCheckUnavailable") === "1";
     try {
       if (documents.has(url.pathname) && ["GET", "HEAD"].includes(request.method)) {
         const document = documents.get(url.pathname);
@@ -181,8 +182,11 @@ export default {
         if (input.status === "running" && ["complete", "failed"].includes(previous?.jobStatus)) return json({ ok: true, status: previous.status });
         // New checkpoint deliveries are cross-checked against the reader's actual
         // job. A later checkpoint wins over an older delivery still in flight.
-        const verified = input.status === undefined ? { status: "complete", result: input.result } :
-          await verifyCropsterJob({ env, weekStart: week.start, jobId: input.jobId });
+        let verified;
+        try { verified = input.status === undefined ? { status: "complete", result: input.result } :
+          await verifyCropsterJob({ env, weekStart: week.start, jobId: input.jobId }); }
+        catch (error) { throw new HttpError("The Cropster job could not be verified (" +
+          (/^READER_[A-Z0-9_]{1,40}$/.test(error.safeCode || "") ? error.safeCode : "READER_UNAVAILABLE") + ").", 503); }
         const readings = await ingestCropsterSync({ env, weekStart: week.start, jobId: input.jobId, input: verified.result, status: verified.status, now });
         if (!readings.refresh.accepted) throw new HttpError("The source observation could not be saved.", 503);
         if (verified.status !== "complete") {
@@ -299,7 +303,7 @@ export default {
         catch { throw new HttpError("Choose this week or an earlier Monday."); }
         const sourceSyncJob = requestedSyncJob(url, week.start);
         try {
-          return json(await collectWeeklyReport({ weekStart: week.start, stockroomCookie: session.stockroomCookie, env, fresh, sourceSyncJob }));
+          return json(await collectWeeklyReport({ weekStart: week.start, stockroomCookie: session.stockroomCookie, env, fresh, sourceSyncJob, syncWebsite: !skipWebsiteSync }));
         } catch (error) {
           if ([401, 403].includes(error?.status)) throw new HttpError("Your Stockroom session has ended. Sign in again.", 401);
           throw new HttpError("Stockroom could not verify your access. Try Refresh.", 503);
@@ -318,7 +322,7 @@ export default {
         const session = await readSession(request, env);
         if (!session) throw new HttpError("Sign in with your Stock Take App password.", 401);
         try {
-          return json(await collectWarehouse({ env, stockroomCookie: session.stockroomCookie, fresh, sourceSyncJob: requestedSyncJob(url, dashboardWeek().start) }));
+          return json(await collectWarehouse({ env, stockroomCookie: session.stockroomCookie, fresh, sourceSyncJob: requestedSyncJob(url, dashboardWeek().start), syncWebsite: !skipWebsiteSync }));
         } catch (error) {
           if ([401, 403].includes(error?.status)) throw new HttpError("Your Stockroom session has ended. Sign in again.", 401);
           throw error;
@@ -360,7 +364,7 @@ export default {
         await activeSession(request, env);
         if (action === "settings") return json(await saveLabSettings(env.DB, await jsonInput(request, labSettingsBody)));
         if (action === "cropster") await saveLabCropster(env.DB, await jsonInput(request, labCropsterBody));
-        return json(await roasteryReport(env, { fresh: fresh || action === "cropster", syncWebsite: fresh, jobId: requestedSyncJob(url, dashboardWeek().start) }));
+        return json(await roasteryReport(env, { fresh: fresh || action === "cropster", syncWebsite: !skipWebsiteSync && (fresh || Boolean(url.searchParams.get("sourceSyncJob"))), jobId: requestedSyncJob(url, dashboardWeek().start) }));
       }
       return json({ error: "Not found." }, 404);
     } catch (error) {

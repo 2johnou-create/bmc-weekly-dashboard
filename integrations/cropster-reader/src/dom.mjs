@@ -42,6 +42,8 @@ export function viewDiagnostics({ kind, expectedPath }) {
     expectedBody, expectedHeaders,
     pager: /Show\s+\d+\s*-\s*\d+\s+of\s+\d+|\d+\s*-\s*\d+\s+of\s+\d+\s+items/.test(body),
     tableCount: Math.min(document.querySelectorAll("table").length, 30),
+    loadingCount: Math.min(document.querySelectorAll('[role="progressbar"],[aria-busy="true"],.loading,.spinner').length, 30),
+    errorPanelCount: Math.min(document.querySelectorAll('[role="alert"],.error-message,.error-panel').length, 30),
     emptySchedule: ["No coffees scheduled", "No profiles scheduled", "No green lots scheduled"].every(marker => body.includes(marker)),
     challenge: Boolean(document.querySelector('iframe[src*="recaptcha"],iframe[src*="hcaptcha"]')) || /checking your browser|verify you are human/i.test(body),
     accessDenied: /access denied|you have been blocked|not authorized|forbidden/i.test(body),

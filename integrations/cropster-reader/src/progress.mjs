@@ -1,4 +1,4 @@
-const stagePattern = /^(?:capture|authenticate|browser_launch|browser_context|cleanup|inventory|previous_output|previous_cost|lab_loss|lab_blend_(?:liberty|rhythm)|lab_profile_group_\d{1,2}|lab_profile_input_\d{1,2}|lab_consumption_month_[0-2]|weekly_production_(?:before|after)|weekly_schedule(?:_verify)?_(?:[0-4]|week)|weekly_roasted_cost|green_marrickville|weekly_monday)$/;
+const stagePattern = /^(?:capture|authenticate|browser_launch|browser_context|cleanup|inventory(?:_retry)?|previous_output|previous_cost|lab_loss|lab_blend_(?:liberty|rhythm)|lab_profile_group_\d{1,2}|lab_profile_input_\d{1,2}|lab_consumption_month_[0-2]|weekly_production_(?:before|after)|weekly_schedule(?:_verify)?_(?:[0-4]|week)|weekly_roasted_cost|green_marrickville|weekly_monday)$/;
 const states = new Set(["running", "complete", "failed", "retry"]);
 const phases = new Set(["open", "navigate", "ready", "filters", "pagination", "parse", "close", "deadline"]);
 
@@ -13,7 +13,9 @@ export function safeProgress(input, now = () => new Date()) {
     }
     if (["login", "expected", "other"].includes(input.diagnostics.urlClass)) flags.urlClass = input.diagnostics.urlClass;
     if (["loading", "interactive", "complete"].includes(input.diagnostics.readyState)) flags.readyState = input.diagnostics.readyState;
-    if (Number.isInteger(input.diagnostics.tableCount) && input.diagnostics.tableCount >= 0 && input.diagnostics.tableCount <= 30) flags.tableCount = input.diagnostics.tableCount;
+    for (const key of ["tableCount", "loadingCount", "errorPanelCount", "pageErrorCount", "failedScriptCount"]) {
+      if (Number.isInteger(input.diagnostics[key]) && input.diagnostics[key] >= 0 && input.diagnostics[key] <= 30) flags[key] = input.diagnostics[key];
+    }
     if (Object.keys(flags).length) event.diagnostics = flags;
   }
   return event;

@@ -28,11 +28,11 @@ async function readPacking(weekStart, stockroomCookie, fetcher) {
   return mapPacking(source, weekStart);
 }
 
-export async function collectWarehouse({ env = {}, stockroomCookie, now = new Date(), fetcher = fetch, fresh = false, sourceSyncJob = null, cropsterResult = null }) {
+export async function collectWarehouse({ env = {}, stockroomCookie, now = new Date(), fetcher = fetch, fresh = false, sourceSyncJob = null, cropsterResult = null, syncWebsite = true }) {
   // The weekly report verifies Stockroom access before any supplemental source is read.
   let planningRead;
   const planningSource = () => planningRead ||= readPurchases({ now, fetcher, fresh });
-  const weekly = await collectWeeklyReport({ env, stockroomCookie, now, fetcher, fresh, sourceSyncJob, cropsterResult, planningSource });
+  const weekly = await collectWeeklyReport({ env, stockroomCookie, now, fetcher, fresh, sourceSyncJob, cropsterResult, planningSource, syncWebsite });
   const weekStart = weekly.week.start;
   const [lab, coffeeC, purchases, packing, notes, weather] = await Promise.allSettled([
     readRoasteryLab(env.DB, now),
