@@ -78,7 +78,7 @@ const statusRequest = id => new Request("https://reader.test/v1/sync/" + id, { h
 
 test("asynchronous sync starts immediately, coalesces, exposes only its authorised status, and runs a new job after completion", async () => {
   let resolve, calls = 0;
-  const handler = createHandler({ token, now, reader: { read(week, options) { calls++; assert.equal(options.scope, "all"); return new Promise(done => { resolve = done; }); } } });
+  const handler = createHandler({ token, now, reader: { read(week, options) { calls++; assert.equal(options.scope, "all"); return new Promise(done => { resolve = result => { options.refreshControl.take(); options.refreshControl.sealIfIdle(); done(result); }; }); } } });
   const firstResponse = await handler(syncRequest());
   assert.equal(firstResponse.status, 202);
   const first = await firstResponse.json();

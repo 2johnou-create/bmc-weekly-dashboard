@@ -26,19 +26,21 @@ function parameters() {
 test("calendar tiles bind exact profile IDs and lots only after full date, batch and weight reconciliation", () => {
   const parsed = parseScheduleWeek(weekSnapshot(), range);
   assert.equal(parsed.profileAssignments.complete, true);
-  assert.equal(parsed.profileAssignments.rows.length, 3);
-  assert.deepEqual(parsed.profileAssignments.rows[0], { date: "2026-02-02", machineId: "M1", profileName: "Component A", profileUrl: profileUrl("ProfileA"), greenKg: 10, lotIds: ["PG-0901"], lotNames: [{ lotId: "PG-0901", name: "Example A" }] });
+  assert.equal(parsed.profileAssignments.rows.length, 4);
+  assert.deepEqual(parsed.profileAssignments.rows[0], { date: "2026-02-02", machineId: "M1", profileName: "Component A", profileUrl: profileUrl("ProfileA"), greenKg: 5, lotIds: ["PG-0901"], lotNames: [{ lotId: "PG-0901", name: "Example A" }], status: "synced" });
   for (const mutate of [
     s => { delete s.calendarWeek.rows[0].tiles; },
     s => { s.calendarWeek.rows[0].tiles[0].pop(); },
-    s => { s.calendarWeek.rows[0].tiles[0][0] = "Unknown profile 10 kg\n[PG-0901] Example A"; },
+    s => { s.calendarWeek.rows[0].tiles[0][0] = "Unknown profile 5 kg\n[PG-0901] Example A"; },
     s => { s.calendarWeek.rows[0].tiles[0][0] = "Component A 11 kg\n[PG-0901] Example A"; },
     s => { s.calendarWeek.rows[0].tiles[0][0] = "Component A 10 kg\n[PG-0999] Other lot"; },
     s => { s.tables[1].rows[0][1] = "3 x 10 kg"; },
     s => { s.tables[1].rowLinks[0] = []; },
   ]) {
     const snapshot = weekSnapshot(); mutate(snapshot);
-    const result = parseScheduleWeek(snapshot, range);
+    let result;
+    try { result = parseScheduleWeek(snapshot, range); }
+    catch (error) { assert.match(error.code, /^CROPSTER_(?:BATCH_STATUS_UNVERIFIED|SCHEDULE_AMBIGUOUS)$/); continue; }
     assert.ok(result, "Verified production totals may remain available");
     assert.equal(result.profileAssignments, null, "Unproven ownership must not become a template-price fallback");
   }

@@ -187,7 +187,7 @@ test("the capture route enforces the dashboard origin, Stockroom authentication 
     const details = await (await worker.fetch(new Request(origin + "/api/dashboard", { headers: { Cookie: cookie } }), env)).json();
     assert.equal(report.metrics.production.roastedKg, input.roastedKg);
     assert.equal(report.metrics.production.asOf, record.asOf);
-    assert.deepEqual(report.metrics.production, details.metrics.production);
+    assert.deepEqual(report.metrics.production, { ...details.metrics.production, scheduledGreenKg: null, scheduledBatchCount: null });
     assert.deepEqual(report.metrics.green, details.metrics.green);
     assert.equal(report.metrics.green.kg, null);
     assert.equal(details.metrics.roasted.kg, input.roastedKg);

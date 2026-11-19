@@ -40,6 +40,16 @@ export const dashboardCropsterMonday = sqliteTable("dashboard_cropster_monday", 
   recordedAt: integer("recorded_at").notNull(),
 });
 
+export const dashboardCropsterScheduledBatches = sqliteTable("dashboard_cropster_scheduled_batches", {
+  weekStart: text("week_start").primaryKey(),
+  greenKg: real("green_kg").notNull(),
+  batches: integer("batches").notNull(),
+  recordedAt: integer("recorded_at").notNull(),
+}, table => [
+  check("dashboard_cropster_scheduled_batches_week", sql`strftime('%w', ${table.weekStart}) = '1'`),
+  check("dashboard_cropster_scheduled_batches_amounts", sql`${table.greenKg} >= 0 AND ${table.greenKg} <= 1000000 AND ${table.batches} >= 0 AND ${table.batches} <= 100000 AND ${table.batches} = CAST(${table.batches} AS INTEGER) AND ((${table.greenKg} = 0 AND ${table.batches} = 0) OR (${table.greenKg} > 0 AND ${table.batches} > 0)) AND ${table.recordedAt} >= 0`),
+]);
+
 export const dashboardCropsterGreenStock = sqliteTable("dashboard_cropster_green_stock", {
   location: text("location").primaryKey(),
   kg: real("kg").notNull(),

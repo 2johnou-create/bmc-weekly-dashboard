@@ -11,11 +11,11 @@ export function weekSnapshot() {
     scheduleMachines: { M1: true },
     calendarWeek: {
       dates: Array.from({ length: 7 }, (_, index) => addDays(range.weekStart, index)),
-      rows: [{ machineId: "M1", cellCount: 8, summary: "Example machine\n3 Batches, 40 kg", batchCounts: [2, 1, 0, 0, 0, 0, 0], emptyCells: [false, false, true, true, true, true, true], tiles: [["Component A 10 kg\n[PG-0901] Example A", "Component A 10 kg\n[PG-0901] Example A"], ["Component B 20 kg\n[PG-0902] Example B"], [], [], [], [], []] }],
+      rows: [{ machineId: "M1", cellCount: 8, summary: "Example machine\n4 Batches, 40 kg", batchCounts: [2, 2, 0, 0, 0, 0, 0], emptyCells: [false, false, true, true, true, true, true], tiles: [["Component A 5 kg\n[PG-0901] Example A", "Component A 15 kg\n[PG-0901] Example A"], ["Component B 15 kg\n[PG-0902] Example B", "Component B 5 kg\n[PG-0902] Example B"], [], [], [], [], []], states: [["synced", "roasted"], ["synced", "roasted"], [], [], [], [], []] }],
     },
     tables: [
-      table(["Profile", "Type", "2-8 To roast", "2-8 Total", "2-8 Estimated output", "Total scheduled"], [["Example blend", "Post-roast blend", "20 kg\nComponent A: 5 kg\nComponent B: 15 kg", "40 kg\nComponent A: 20 kg\nComponent B: 20 kg", "33 kg\nComponent A: 17 kg\nComponent B: 16 kg", "400 kg"]]),
-      { ...table(["Profile", "# of batches", "2-8 To roast", "2-8 Used", "2-8 Total", "Total scheduled"], [["Component A (10)", "2 x 10 kg", "5 kg", "15 kg", "20 kg", ""], ["Component B (20)", "1 x 20 kg", "15 kg", "5 kg", "20 kg", ""]]), rowLinks: [[{ text: "Component A (10)", href: "https://c-sar.cropster.com/apps/roast/profiles/ProfileA" }], [{ text: "Component B (20)", href: "https://c-sar.cropster.com/apps/roast/profiles/ProfileB" }]] },
+      table(["Profile", "Type", "2-8 To roast", "2-8 Total", "2-8 Estimated output", "Total # of batches", "Total scheduled"], [["Example blend", "Post-roast blend", "20 kg\nComponent A: 5 kg\nComponent B: 15 kg", "40 kg\nComponent A: 20 kg\nComponent B: 20 kg", "33 kg\nComponent A: 17 kg\nComponent B: 16 kg", "4", "400 kg"]]),
+      { ...table(["Profile", "# of batches", "2-8 To roast", "2-8 Used", "2-8 Total", "Total scheduled"], [["Component A (10)", "1 x 5 kg\n1 x 15 kg", "5 kg", "15 kg", "20 kg", ""], ["Component B (20)", "1 x 15 kg\n1 x 5 kg", "15 kg", "5 kg", "20 kg", ""]]), rowLinks: [[{ text: "Component A (10)", href: "https://c-sar.cropster.com/apps/roast/profiles/ProfileA" }], [{ text: "Component B (20)", href: "https://c-sar.cropster.com/apps/roast/profiles/ProfileB" }]] },
       table(["Lot", "2-8 To roast", "2-8 Total"], [["[PG-0901] Example A", "5 kg", "20 kg"], ["[PG-0902] Example B", "15 kg", "20 kg"]]),
     ],
   };

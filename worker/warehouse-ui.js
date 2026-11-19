@@ -632,14 +632,21 @@ export const warehousePage = String.raw`<!doctype html>
         source({ asOf: notes.updatedAt, status: notes.status }, "Saved meeting notes", "/")
       );
     }
+    function scheduledBatchValues(production) {
+      return Number.isFinite(production?.scheduledGreenKg) && production.scheduledGreenKg >= 0 &&
+        Number.isSafeInteger(production?.scheduledBatchCount) && production.scheduledBatchCount >= 0 &&
+        (production.scheduledGreenKg === 0) === (production.scheduledBatchCount === 0)
+        ? {greenKg: production.scheduledGreenKg, batches: production.scheduledBatchCount} : null;
+    }
     function overviewPanel() {
       const { demand = {}, production = {}, green = {}, stock = {}, wholesale = {} } = weeklyMetrics();
+      const scheduled = scheduledBatchValues(production);
       return [
         section(
           "This week",
           pair([["Demand", kg(demand.kg)], ["Roasted", kg(production.roastedKg)]]),
           metrics([
-            ["Scheduled output estimate", kg(production.scheduledKg)],
+            ["Scheduled to roast", scheduled ? kg(scheduled.greenKg) + " green · " + num(scheduled.batches) + " pending batches" : "Unavailable"],
             ["Production green cost", money(production.value)],
             ["Marrickville green stock", kg(green.kg)],
             ["Green stock value", money(green.value)],
@@ -668,12 +675,15 @@ export const warehousePage = String.raw`<!doctype html>
     }
     function roastingPanel() {
       const { demand = {}, production = {} } = weeklyMetrics();
+      const scheduled = scheduledBatchValues(production);
       return [
         section(
           "Cropster production",
-          pair([["Roasted output", kg(production.roastedKg)], ["Scheduled estimate", kg(production.scheduledKg)]]),
+          pair([["Roasted output", kg(production.roastedKg)], ["Scheduled to roast (green)", kg(scheduled?.greenKg)]]),
           metrics([
-            ["Roasted + scheduled", kg(production.totalKg)],
+            ["Pending scheduled batches", num(scheduled?.batches)],
+            ["Expected roasted output this week", kg(production.totalKg)],
+            ["Remaining roasted output · estimate", kg(production.scheduledKg)],
             ["Green cost", money(production.value)],
             ["Roasted green cost", money(production.roastedValue)],
             ["Scheduled cost estimate", money(production.scheduledValue)],
@@ -681,6 +691,8 @@ export const warehousePage = String.raw`<!doctype html>
             ["Green cost change", change(production.valueChangePercent)]
           ]),
           source(production, "Cropster saved reading", "https://c-sar.cropster.com"),
+          note("Roasted output: Cropster Production Report. Scheduled green and count: pending Scheduled batches, Monday to Friday, excluding roasted batches. The expected output adds the remaining roast-output estimate, not raw green input."),
+          source(production, "Cropster Scheduled batches", "https://c-sar.cropster.com/apps/roast/schedule/calendar/week"),
           metricNote(production),
           disclosure("Previous week", metrics([["Roasted output", kg(production.previousRoastedKg)], ["Scheduled estimate", kg(production.previousScheduledKg)], ["Combined weight", kg(production.previousKg)], ["Green cost", money(production.previousValue)]]))
         ),
@@ -984,7 +996,7 @@ export const warehousePage = String.raw`<!doctype html>
       const pending = wholesale.provisional ? wholesale.scheduledPendingOrders : wholesale.pending;
       const nextDate = next ? new Intl.DateTimeFormat("en-AU", { timeZone: "Australia/Sydney", day: "numeric", month: "short" }).format(new Date(next.date + "T12:00:00Z")) : "";
       const values = {
-        roasting: [kg(production.roastedKg) + " roasted", Number.isFinite(production.scheduledKg) ? "+ " + kg(production.scheduledKg) + " scheduled" : "Scheduled unavailable"],
+        roasting: [kg(production.roastedKg) + " roasted", Number.isFinite(production.scheduledGreenKg) ? kg(production.scheduledGreenKg) + " green scheduled" : "Scheduled green unavailable"],
         green: [green.location === "Marrickville" ? kg(green.kg) : "Reading unavailable"],
         packing: [Number.isFinite(packing.kgPerHour) ? num(packing.kgPerHour) + " kg/h" : Number.isFinite(packing.packedKg) ? kg(packing.packedKg) + " packed" : "Reading unavailable"],
         dispatch: [completedClientCount(wholesale) === null ? "Completed clients unavailable" : num(completedClientCount(wholesale)) + " clients completed" + (wholesale.completedClientsStatus === "partial" ? "*" : ""),

@@ -3,6 +3,7 @@ import { createHash, timingSafeEqual, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { ReaderError, safeFailure } from "./errors.mjs";
 import { weekRange } from "./dates.mjs";
+import { createRefreshControl } from "./refresh-control.mjs";
 import { createBrowserReader } from "./browser.mjs";
 import { callbackConfiguration, deliverCapture } from "./callback.mjs";
 import { safeProgress } from "./progress.mjs";
@@ -76,10 +77,12 @@ export function createHandler({ reader, token, now = () => new Date(), log = () 
     }
   };
   const run = (weekStart, scope, onProgress, onCapture) => {
+    let preceding = null;
+    if (inFlight && !inFlight.refreshControl.isAccepting()) { preceding = inFlight.promise; inFlight = null; }
     if (inFlight && (inFlight.weekStart !== weekStart || inFlight.scope !== scope)) throw new ReaderError("CROPSTER_READER_BUSY");
     if (!inFlight) {
-      const job = { weekStart, scope, promise: null, listeners: new Set(), captureListeners: new Set(), progress: null, result: null };
-      job.promise = Promise.resolve().then(() => reader.read(weekStart, { scope, onProgress: input => {
+      const job = { weekStart, scope, promise: null, listeners: new Set(), captureListeners: new Set(), progress: null, result: null, refreshControl: createRefreshControl() };
+      job.promise = Promise.resolve(preceding).catch(() => {}).then(() => reader.read(weekStart, { scope, refreshControl: job.refreshControl, onProgress: input => {
         const progress = safeProgress(input, now);
         if (!progress) return;
         job.progress = progress;
@@ -87,7 +90,11 @@ export function createHandler({ reader, token, now = () => new Date(), log = () 
       }, onCapture: async result => {
         job.result = structuredClone(result);
         for (const listener of job.captureListeners) await listener(structuredClone(job.result));
-      } })).finally(() => {
+      } })).then(result => {
+        if (job.refreshControl.hasPending()) throw new ReaderError("CROPSTER_REFRESH_PENDING");
+        return result;
+      }).finally(() => {
+        job.refreshControl.close();
         if (inFlight === job) inFlight = null;
       });
       inFlight = job;
@@ -104,6 +111,7 @@ export function createHandler({ reader, token, now = () => new Date(), log = () 
     ...(job.checkpointDelivery ? { checkpointDelivery: job.checkpointDelivery } : {}),
     ...(job.progress ? { progress: job.progress } : {}),
     ...(job.failures?.length ? { failures: job.failures } : {}),
+    ...(job.status === "running" ? { weeklyRefreshPending: job.refreshControl.hasPending() } : {}),
   });
   return async request => {
     const pathname = new URL(request.url).pathname;
@@ -126,8 +134,8 @@ export function createHandler({ reader, token, now = () => new Date(), log = () 
       const range = weekRange(input.weekStart, now());
       if (pathname === "/v1/sync") {
         cleanJobs();
-        const existing = [...jobs.values()].find(job => job.weekStart === range.weekStart && job.status === "running");
-        if (existing) return json(jobResponse(existing), 202);
+        const existing = [...jobs.values()].find(job => job.weekStart === range.weekStart && job.status === "running" && job.refreshControl.isAccepting());
+        if (existing && existing.refreshControl.request()) return json(jobResponse(existing), 202);
         cleanJobs(true);
         if (jobs.size >= MAX_JOBS) throw new ReaderError("CROPSTER_READER_BUSY");
         let job;
@@ -145,7 +153,7 @@ export function createHandler({ reader, token, now = () => new Date(), log = () 
           job.checkpointDelivery = delivery;
           log({ event: "reader_checkpoint", jobId: job.id, status: "running", delivery });
         });
-        job = { id: randomUUID(), weekStart: range.weekStart, status: "running", createdAt: now().getTime(), ...(inFlight?.progress ? { progress: inFlight.progress } : {}), ...(inFlight?.result ? { result: structuredClone(inFlight.result) } : {}) };
+        job = { id: randomUUID(), weekStart: range.weekStart, status: "running", createdAt: now().getTime(), refreshControl: inFlight.refreshControl, ...(inFlight?.progress ? { progress: inFlight.progress } : {}), ...(inFlight?.result ? { result: structuredClone(inFlight.result) } : {}) };
         jobs.set(job.id, job);
         // Attach failure handling immediately; no rejected background promise can
         // leak raw browser errors or terminate the process.

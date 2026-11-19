@@ -59,6 +59,11 @@ export function viewDiagnostics({ kind, expectedPath }) {
 
 export function captureDocument() {
   const text = element => (element?.innerText || "").replace(/\r/g, "").trim();
+  const state = tile => {
+    const classes = tile.closest?.(".calendar__item")?.classList;
+    const found = ["unpublished", "scheduled", "synced", "roasted", "inconsistent"].filter(value => classes?.contains("calendar__item--" + value));
+    return found.length === 1 ? found[0] : null;
+  };
   const headings = Array.from(document.querySelectorAll("h1,h2,h3,h4,h5,h6"));
   return {
     url: location.href,
@@ -75,6 +80,10 @@ export function captureDocument() {
     },
     scheduleStatuses: Object.fromEntries(Array.from(document.querySelectorAll('input[type="checkbox"][id*="-status-"]')).map(input => [input.id.split("-status-").at(-1), input.checked])),
     scheduleMachines: Object.fromEntries(Array.from(document.querySelectorAll('input[type="checkbox"][id*="-machine-"]')).map(input => [input.id.split("-machine-").at(-1), input.checked])),
+    calendarDay: {
+      tiles: Array.from(document.querySelectorAll(".calendar__item__main")).map(text),
+      states: Array.from(document.querySelectorAll(".calendar__item__main")).map(state),
+    },
     calendarWeek: {
       dates: Array.from(document.querySelectorAll('.calendar--week__row--header .calendar--week__header a[href*="/calendar/day?date="]')).map(link => {
         try { return new URL(link.href).searchParams.get("date"); } catch { return null; }
@@ -88,6 +97,7 @@ export function captureDocument() {
           batchCounts: days.map(cell => cell.querySelectorAll(".calendar__item__main").length),
           emptyCells: days.map(cell => text(cell) === ""),
           tiles: days.map(cell => Array.from(cell.querySelectorAll(".calendar__item__main")).map(text)),
+          states: days.map(cell => Array.from(cell.querySelectorAll(".calendar__item__main")).map(state)),
         };
       }),
     },

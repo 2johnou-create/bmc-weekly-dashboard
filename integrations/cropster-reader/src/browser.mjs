@@ -4,6 +4,7 @@ import { captureDocument, renderedViewReady, viewDiagnostics } from "./dom.mjs";
 import { createLimiter, settlesWithin } from "./runtime-limits.mjs";
 import { browserFailureCode, safeProgress } from "./progress.mjs";
 import { cloneCheckpoint, emitCheckpoint } from "./checkpoint.mjs";
+import { createRefreshControl } from "./refresh-control.mjs";
 import {
   CROPSTER_ORIGIN, aggregateScheduleRead, parseInventory, parseLegacyInventory, inventoryPrices, parseMarrickvilleStock,
   parseRoastedCost, parseRoastedOutput, parseScheduleDay, sameProduction, parseMonthlyUse, parseLoss,
@@ -43,6 +44,12 @@ async function allRequired(tasks) {
   const failed = results.find(result => result.status === "rejected");
   if (failed) throw failed.reason;
   return results.map(result => result.value);
+}
+
+async function sequential(items, read) {
+  const results = [];
+  for (let index = 0; index < items.length; index++) results.push(await read(items[index], index));
+  return results;
 }
 
 // This is the deployed application's browser runtime. Only fixed website views
@@ -137,7 +144,7 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
     } catch { throw new ReaderError("CROPSTER_AUTH_REQUIRED"); }
   }
 
-  async function read(weekStart, { scope = "weekly", onProgress, onCapture } = {}) {
+  async function read(weekStart, { scope = "weekly", onProgress, onCapture, refreshControl = createRefreshControl() } = {}) {
     if (!["weekly", "all"].includes(scope)) throw new ReaderError("INVALID_REQUEST", 400);
     const startedAt = now();
     const range = weekRange(weekStart, startedAt);
@@ -147,6 +154,7 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
     const limit = createLimiter(PAGE_LIMIT);
     const jobPages = new Set();
     const pageSignals = new WeakMap();
+    let servicePriorityRefresh = async () => {};
     let timedOut = false, abortError = null, rejectAbort;
     const emit = (stage, state, phase, code, diagnostics) => {
       const progress = safeProgress({ stage, state, phase, ...(code ? { code } : {}), ...(diagnostics ? { diagnostics } : {}) }, now);
@@ -234,7 +242,9 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
       }
       throw error;
     };
-    const view = (path, kind, parse, stage) => limit(async () => {
+    const view = async (path, kind, parse, stage) => {
+      if (/^(?:lab_|previous_)/.test(stage)) await servicePriorityRefresh();
+      return limit(async () => {
       let page, phase = "open";
       emit(stage, "running", phase);
       try {
@@ -272,7 +282,8 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
         emit(stage, "failed", phase, code, await diagnose(page, kind, path));
         throw error instanceof ReaderError ? error : new ReaderError(code);
       } finally { if (page) await closePage(page); }
-    });
+      });
+    };
     const modernInventory = (stage = "inventory") => limit(async () => {
       let page, phase = "open";
       emit(stage, "running", phase);
@@ -354,14 +365,23 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
       finally { await closePage(login); }
       const lab = {}, labObservedAt = {}, labWarnings = [], labSources = [];
       let rawLoss = null, recipeCapture = null, freshDefinitions = null, previous = null, previousProductionObservedAt = null, scheduleAssignments = null;
+      let priorityFailure = null;
       const previousSources = [];
       const optionalLab = async (run, warning) => {
         try { return await run(); }
         catch (error) {
-          if (error instanceof ReaderError && ["CROPSTER_AUTH_REQUIRED", "CROPSTER_TIMEOUT"].includes(error.code)) throw error;
+          if (priorityFailure || error instanceof ReaderError && ["CROPSTER_AUTH_REQUIRED", "CROPSTER_TIMEOUT"].includes(error.code)) throw error;
           labWarnings.push(warning);
           return null;
         }
+      };
+      const recipeWarnings = () => {
+        for (const code of ["CURRENT_RECIPE_COFFEE_AMBIGUOUS", "CURRENT_RECIPE_PRICE_UNVERIFIED", "CURRENT_RECIPE_DEFAULT_PROFILE_FALLBACK"]) {
+          const index = labWarnings.indexOf(code); if (index >= 0) labWarnings.splice(index, 1);
+        }
+        if (lab.recipes?.rows.some(recipe => recipe.components.some(component => component.coffee === null))) labWarnings.push("CURRENT_RECIPE_COFFEE_AMBIGUOUS");
+        if (lab.recipes?.rows.some(recipe => recipe.components.some(component => component.pricingBasis === "unverified"))) labWarnings.push("CURRENT_RECIPE_PRICE_UNVERIFIED");
+        if (lab.recipes?.rows.some(recipe => recipe.components.some(component => component.pricingBasis === "default-profile"))) labWarnings.push("CURRENT_RECIPE_DEFAULT_PROFILE_FALLBACK");
       };
       const captureLab = async publish => { if (scope === "all") {
         const months = completedMonths(startedAt);
@@ -375,29 +395,29 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
         const readRecipes = async () => {
           const ids = configuration.profileIds || {};
           if (![ids.libertyBlend, ids.rhythmBlend, ids.ohGroup, ids.decafGroup].every(id => typeof id === "string" && /^[A-Za-z0-9_-]{1,80}$/.test(id))) throw new ReaderError("CROPSTER_RECIPE_UNCONFIGURED");
-          const blends = await allRequired([[ids.libertyBlend, "Liberty"], [ids.rhythmBlend, "Rhythm"]].map(([id, signature]) => {
+          const blends = await sequential([[ids.libertyBlend, "Liberty"], [ids.rhythmBlend, "Rhythm"]], ([id, signature]) => {
             const path = "/app/roast/blend-profiles/" + id;
             labSources.push(CROPSTER_ORIGIN + path);
             return view(path, "blend", snapshot => parseBlend(snapshot, id, signature), "lab_blend_" + signature.toLowerCase());
-          }));
+          });
           freshDefinitions = { rows: blends };
           if (rawLoss) {
             lab.loss = blendLoss(rawLoss, freshDefinitions);
             await publish();
           }
           const groupIds = [...new Set([...blends.flatMap(blend => blend.components.map(component => component.profileGroupId)), ids.ohGroup, ids.decafGroup])];
-          const groups = await allRequired(groupIds.map((id, index) => {
+          const groups = await sequential(groupIds, (id, index) => {
             const path = "/app/roast/profile-groups/" + id;
             labSources.push(CROPSTER_ORIGIN + path);
             return view(path, "group", snapshot => parseProfileGroup(snapshot, id), "lab_profile_group_" + index);
-          }));
+          });
           const profileUrls = [...new Set(groups.flatMap(group => group.profileUrls))];
           if (profileUrls.length > 80) throw new ReaderError("CROPSTER_RECIPE_UNAVAILABLE");
-          const profileInputs = new Map(await allRequired(profileUrls.map(async (url, index) => {
+          const profileInputs = new Map(await sequential(profileUrls, async (url, index) => {
             labSources.push(url);
             const input = await view(new URL(url).pathname, "profile", parseProfileInputs, "lab_profile_input_" + index);
             return [url, input];
-          })));
+          }));
           return { blends, groups, profileInputs, decafGroupId: ids.decafGroup, ohGroupId: ids.ohGroup };
         };
         await optionalLab(async () => {
@@ -416,7 +436,7 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
           }, "PREVIOUS_PRODUCTION_UNAVAILABLE");
         await publish();
         await optionalLab(async () => {
-            const captured = await allRequired(months.map((month, index) => view(allLocationPath("inventory", month), "production", snapshot => parseMonthlyUse(snapshot, month), "lab_consumption_month_" + index)));
+            const captured = await sequential(months, (month, index) => view(allLocationPath("inventory", month), "production", snapshot => parseMonthlyUse(snapshot, month), "lab_consumption_month_" + index));
             lab.use = { months: captured };
             labObservedAt.use = now().toISOString();
           }, "LAB_USE_UNAVAILABLE");
@@ -432,113 +452,122 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
             labObservedAt.recipes = now().toISOString();
             if (!lab.inventory) throw new ReaderError("CROPSTER_INVENTORY_UNAVAILABLE");
             lab.recipes = assembleRecipes({ ...recipeCapture, inventory: lab.inventory, asOf: sydneyDate(now()), use: lab.use, scheduleAssignments });
-            if (lab.recipes.rows.some(recipe => recipe.components.some(component => component.coffee === null))) labWarnings.push("CURRENT_RECIPE_COFFEE_AMBIGUOUS");
-            if (lab.recipes.rows.some(recipe => recipe.components.some(component => component.pricingBasis === "unverified"))) labWarnings.push("CURRENT_RECIPE_PRICE_UNVERIFIED");
-            if (lab.recipes.rows.some(recipe => recipe.components.some(component => component.pricingBasis === "default-profile"))) labWarnings.push("CURRENT_RECIPE_DEFAULT_PROFILE_FALLBACK");
+            recipeWarnings();
           }, "LAB_RECIPES_UNAVAILABLE");
         if (!lab.recipes) delete labObservedAt.recipes;
         await publish();
       } };
-      const prerequisiteWarnings = [];
-      let greenObservedAt = null, mondayObservedAt = null, inventoryObservedAt = null;
-      const prerequisite = async (run, warning) => {
-        try { return await run(); }
-        catch (error) {
-          if (error instanceof ReaderError && ["CROPSTER_AUTH_REQUIRED", "CROPSTER_TIMEOUT", "CROPSTER_CLEANUP_TIMEOUT"].includes(error.code)) throw error;
-          prerequisiteWarnings.push(warning);
-          return null;
-        }
-      };
+      let observation = null, inventoryRecord = null, schedules = null, weeklyWarnings = [];
       const mondayRange = { ...range, periodEnd: range.weekStart };
       const mondayQuery = new URLSearchParams({ dateFrom: weekStart, dateTo: weekStart, locations: "lK0G1" });
       const mondayPath = `/apps/roast/production-report/profile-group?${mondayQuery}`;
-      // These independent point-in-time sources retain their own observation
-      // timestamps and do not lengthen the production/schedule coherence window.
-      let [inventoryRecord, green, monday] = await allRequired([
-        prerequisite(async () => { const record = await inventory(); inventoryObservedAt = now().toISOString(); return record; }, "INVENTORY_UNAVAILABLE"),
-        prerequisite(async () => { const record = await view(sourcePaths.green, "stock", snapshot => parseMarrickvilleStock(snapshot, sydneyDate(now())), "green_marrickville"); greenObservedAt = now().toISOString(); return record; }, "GREEN_STOCK_UNAVAILABLE"),
-        prerequisite(async () => { const record = await view(mondayPath, "production", snapshot => parseRoastedOutput(snapshot, mondayRange), "weekly_monday"); mondayObservedAt = now().toISOString(); return record; }, "MONDAY_ROASTED_UNAVAILABLE"),
-      ]);
-      for (let attempt = 0; attempt < 2; attempt++) {
-        try {
-          const before = await view(sourcePaths.production, "production", snapshot => parseRoastedOutput(snapshot, range), "weekly_production_before");
-          const warnings = [...prerequisiteWarnings];
-          const optional = async (run, warning) => {
-            try { return await run(); }
-            catch (error) {
-              if (error instanceof ReaderError && ["CROPSTER_CHANGED_DURING_READ", "CROPSTER_AUTH_REQUIRED", "CROPSTER_TIMEOUT"].includes(error.code)) throw error;
-              warnings.push(warning);
-              return null;
-            }
-          };
-          const [schedules, roastedValue] = await allRequired([
-            readSchedules(),
-            optional(() => view(sourcePaths.cost, "production", snapshot => parseRoastedCost(snapshot, range, before.greenKg), "weekly_roasted_cost"), "ROASTED_COST_UNAVAILABLE"),
-          ]);
-          const verifiedSchedules = await readSchedules(true, schedules.kind === "days");
-          if (!sameScheduleReads(schedules, verifiedSchedules)) throw new ReaderError("CROPSTER_CHANGED_DURING_READ");
-          const after = await view(sourcePaths.production, "production", snapshot => parseRoastedOutput(snapshot, range), "weekly_production_after");
-          if (!sameProduction(before, after)) throw new ReaderError("CROPSTER_CHANGED_DURING_READ");
-          scheduleAssignments = schedules.kind === "week" ? schedules.week.profileAssignments : null;
-          weekRange(weekStart, now());
-          const scheduled = aggregateScheduleRead(schedules, inventoryRecord ? inventoryPrices(inventoryRecord) : null, range);
-          if (scheduled.scheduledValue === null && !warnings.includes("SCHEDULED_COST_UNAVAILABLE")) warnings.push("SCHEDULED_COST_UNAVAILABLE");
-          if (roastedValue === null && !warnings.includes("ROASTED_COST_UNAVAILABLE")) warnings.push("ROASTED_COST_UNAVAILABLE");
-          if (scope === "all") {
-            if (inventoryRecord) { lab.inventory = inventoryRecord; labObservedAt.inventory = inventoryObservedAt; }
+      const publish = async () => {
+        remaining();
+        observation.warnings = [...new Set([...weeklyWarnings, ...labWarnings])];
+        if (previous) { observation.previousProduction = previous; observation.previousProductionObservedAt = previousProductionObservedAt; }
+        emit("capture", "running", "parse", "CHECKPOINT_READY");
+        return emitCheckpoint(observation, onCapture, now);
+      };
+      const rebuildRecipes = () => {
+        if (!recipeCapture || !lab.inventory || !lab.recipes) return;
+        lab.recipes = assembleRecipes({ ...recipeCapture, inventory: lab.inventory, asOf: sydneyDate(now()), use: lab.use, scheduleAssignments });
+        recipeWarnings();
+        // Percent/template reads retain their real older observation time. A new
+        // assignment or price never freshens that independent source timestamp.
+      };
+      const captureWeekly = async () => {
+        refreshControl.take(); // Earlier clicks are covered by this new capture.
+        const warnings = [];
+        const optional = async (run, warning) => {
+          try { return await run(); }
+          catch (error) {
+            if (error instanceof ReaderError && ["CROPSTER_CHANGED_DURING_READ", "CROPSTER_AUTH_REQUIRED", "CROPSTER_TIMEOUT", "CROPSTER_CLEANUP_TIMEOUT"].includes(error.code)) throw error;
+            warnings.push(warning); return null;
           }
-          const observation = {
-            schemaVersion: "1.0", sourceSystem: "cropster-website", location: "Marrickville",
-            weekStart, periodEnd: range.periodEnd, ...captureTimestamps(now),
-            mondayRoastedKg: monday?.roastedKg ?? null, mondayObservedAt, greenObservedAt,
-            production: { roastedKg: after.roastedKg, scheduledKg: scheduled.scheduledKg, roastedValue, scheduledValue: scheduled.scheduledValue },
-            green,
-            ...(scope === "all" ? { lab, labObservedAt } : {}),
-            ...(previous ? { previousProduction: previous, previousProductionObservedAt } : {}),
-            sources: { ...Object.fromEntries(Object.entries(sourcePaths).map(([key, value]) => [key, Array.isArray(value) ? value.map(path => CROPSTER_ORIGIN + path) : CROPSTER_ORIGIN + value])), schedule: [...scheduleSources], monday: CROPSTER_ORIGIN + mondayPath, ...(scope === "all" ? { lab: labSources, previousProduction: previousSources } : {}) },
-            warnings,
-          };
-          const publish = async () => {
-            remaining();
-            observation.warnings = [...new Set([...warnings, ...labWarnings])];
-            if (previous) { observation.previousProduction = previous; observation.previousProductionObservedAt = previousProductionObservedAt; }
-            emit("capture", "running", "parse", "CHECKPOINT_READY");
-            return emitCheckpoint(observation, onCapture, now);
-          };
-          // Publish the verified weekly result before starting any retrospective
-          // or Lab views. Later checkpoints add fresh sections without changing
-          // the weekly/individual source observation times.
-          await publish();
-          if (!inventoryRecord) {
-            // A modern app shell can load before its inventory table on a small
-            // host. Retry once with warm assets after preserving weekly weights.
-            const recovered = await optional(() => inventory("inventory_retry"), "INVENTORY_UNAVAILABLE");
-            if (recovered) {
-              inventoryRecord = recovered;
-              inventoryObservedAt = now().toISOString();
-              if (scope === "all") { lab.inventory = recovered; labObservedAt.inventory = inventoryObservedAt; }
-              const priced = aggregateScheduleRead(schedules, inventoryPrices(recovered), range);
-              observation.production.scheduledValue = priced.scheduledValue;
-              // productionObservedAt intentionally remains the older verified
-              // weight time; newly observed prices do not freshen old weights.
-              for (const warning of ["INVENTORY_UNAVAILABLE", ...(priced.scheduledValue !== null ? ["SCHEDULED_COST_UNAVAILABLE"] : [])]) {
-                const index = warnings.indexOf(warning);
-                if (index >= 0) warnings.splice(index, 1);
+        };
+        let inventoryObservedAt = null, greenObservedAt = null, mondayObservedAt = null;
+        // Independent reads precede the production coherence window.
+        const [freshInventory, green, monday] = await allRequired([
+          optional(async () => { const record = await inventory(); inventoryObservedAt = now().toISOString(); return record; }, "INVENTORY_UNAVAILABLE"),
+          optional(async () => { const record = await view(sourcePaths.green, "stock", snapshot => parseMarrickvilleStock(snapshot, sydneyDate(now())), "green_marrickville"); greenObservedAt = now().toISOString(); return record; }, "GREEN_STOCK_UNAVAILABLE"),
+          optional(async () => { const record = await view(mondayPath, "production", snapshot => parseRoastedOutput(snapshot, mondayRange), "weekly_monday"); mondayObservedAt = now().toISOString(); return record; }, "MONDAY_ROASTED_UNAVAILABLE"),
+        ]);
+        if (freshInventory) inventoryRecord = freshInventory;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            const before = await view(sourcePaths.production, "production", snapshot => parseRoastedOutput(snapshot, range), "weekly_production_before");
+            const [reading, roastedValue] = await allRequired([
+              readSchedules(),
+              optional(() => view(sourcePaths.cost, "production", snapshot => parseRoastedCost(snapshot, range, before.greenKg), "weekly_roasted_cost"), "ROASTED_COST_UNAVAILABLE"),
+            ]);
+            const verifiedSchedules = await readSchedules(true, reading.kind === "days");
+            if (!sameScheduleReads(reading, verifiedSchedules)) throw new ReaderError("CROPSTER_CHANGED_DURING_READ");
+            const after = await view(sourcePaths.production, "production", snapshot => parseRoastedOutput(snapshot, range), "weekly_production_after");
+            if (!sameProduction(before, after)) throw new ReaderError("CROPSTER_CHANGED_DURING_READ");
+            weekRange(weekStart, now());
+            schedules = reading;
+            scheduleAssignments = reading.kind === "week" ? reading.week.profileAssignments : null;
+            const scheduled = aggregateScheduleRead(reading, freshInventory ? inventoryPrices(freshInventory) : null, range);
+            if (scheduled.scheduledValue === null) warnings.push("SCHEDULED_COST_UNAVAILABLE");
+            if (roastedValue === null) warnings.push("ROASTED_COST_UNAVAILABLE");
+            if (scope === "all" && freshInventory) { lab.inventory = freshInventory; labObservedAt.inventory = inventoryObservedAt; }
+            const timestamps = captureTimestamps(now);
+            const pendingReadings = reading.kind === "week" ? [reading.week] : reading.days;
+            const scheduledBatches = { greenKg: Math.round(pendingReadings.reduce((sum, row) => sum + row.greenKg, 0) * 100) / 100,
+              batches: pendingReadings.reduce((sum, row) => sum + row.pendingBatchCount, 0) };
+            observation = {
+              ...observation, schemaVersion: "1.0", sourceSystem: "cropster-website", location: "Marrickville",
+              weekStart, periodEnd: range.periodEnd, ...timestamps, scheduledBatches,
+              mondayRoastedKg: monday?.roastedKg ?? observation?.mondayRoastedKg ?? null,
+              mondayObservedAt: mondayObservedAt ?? observation?.mondayObservedAt ?? null,
+              greenObservedAt: greenObservedAt ?? observation?.greenObservedAt ?? null,
+              production: { roastedKg: after.roastedKg, scheduledKg: scheduled.scheduledKg, roastedValue, scheduledValue: scheduled.scheduledValue },
+              green: green ?? observation?.green ?? null,
+              ...(scope === "all" ? { lab, labObservedAt } : {}),
+              sources: { ...Object.fromEntries(Object.entries(sourcePaths).map(([key, value]) => [key, Array.isArray(value) ? value.map(path => CROPSTER_ORIGIN + path) : CROPSTER_ORIGIN + value])), schedule: [...scheduleSources], monday: CROPSTER_ORIGIN + mondayPath, ...(scope === "all" ? { lab: labSources, previousProduction: previousSources } : {}) },
+            };
+            weeklyWarnings = [...new Set(warnings)].filter(warning => roastedValue === null || warning !== "ROASTED_COST_UNAVAILABLE");
+            rebuildRecipes();
+            await publish();
+            if (!freshInventory) {
+              const recovered = await optional(() => inventory("inventory_retry"), "INVENTORY_UNAVAILABLE");
+              if (recovered) {
+                inventoryRecord = recovered;
+                if (scope === "all") { lab.inventory = recovered; labObservedAt.inventory = now().toISOString(); }
+                observation.production.scheduledValue = aggregateScheduleRead(schedules, inventoryPrices(recovered), range).scheduledValue;
+                weeklyWarnings = weeklyWarnings.filter(warning => warning !== "INVENTORY_UNAVAILABLE" && (observation.production.scheduledValue === null || warning !== "SCHEDULED_COST_UNAVAILABLE"));
+                rebuildRecipes();
+                await publish();
               }
-              await publish();
             }
+            return;
+          } catch (error) {
+            if (error instanceof ReaderError && error.code === "CROPSTER_CHANGED_DURING_READ" && attempt === 0 && deadline - now().getTime() > 18000) {
+              emit("capture", "retry", "parse", error.code); continue;
+            }
+            throw error;
           }
-          await captureLab(publish);
-          return cloneCheckpoint(observation, now);
-        } catch (error) {
-          if (error instanceof ReaderError && error.code === "CROPSTER_CHANGED_DURING_READ" && attempt === 0 && deadline - now().getTime() > 18000) {
-            emit("capture", "retry", "parse", error.code);
-            continue;
-          }
-          throw error;
         }
-      }
-      throw new ReaderError("CROPSTER_CHANGED_DURING_READ");
+        throw new ReaderError("CROPSTER_CHANGED_DURING_READ");
+      };
+      let servicing = false;
+      servicePriorityRefresh = async () => {
+        if (!observation || servicing) return;
+        while (refreshControl.hasPending()) {
+          servicing = true;
+          emit("weekly_refresh", "running", "open");
+          try { await captureWeekly(); emit("weekly_refresh", "complete", "parse"); }
+          catch (error) { priorityFailure = error; throw error; }
+          finally { servicing = false; }
+        }
+      };
+      await captureWeekly();
+      await servicePriorityRefresh();
+      await captureLab(publish);
+      // No await separates the final idle check and seal. A later POST is a new
+      // job queued behind cleanup, rather than joining a sealed observation.
+      do { await servicePriorityRefresh(); } while (!refreshControl.sealIfIdle());
+      return cloneCheckpoint(observation, now);
     } catch (error) {
       if (timedOut || now().getTime() >= deadline) throw new ReaderError("CROPSTER_TIMEOUT", 504);
       if (error instanceof ReaderError) throw error;
@@ -554,7 +583,7 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
     } catch (error) {
       emit("capture", "failed", timedOut ? "deadline" : "parse", browserFailureCode(error));
       throw error;
-    } finally { clearTimeout(timeout); }
+    } finally { clearTimeout(timeout); refreshControl.close(); }
   }
 
   return { read, close: async () => { closed = true; await reset(); } };

@@ -278,17 +278,21 @@ export const weeklyPage = String.raw`<!doctype html>
           <span id="productionChange" class="comparison production-comparison"></span>
           <span id="productionPair" class="card-pair">
             <span><span class="metric-label">Roasted</span><span id="roastedKg" class="metric-secondary">—</span></span>
-            <span><span class="metric-label">Scheduled · estimate</span><span id="scheduledKg" class="metric-secondary">—</span></span>
+            <span><span class="metric-label">Scheduled to roast</span><span id="scheduledKg" class="metric-secondary">—</span><span id="scheduledBatchCount" class="metric-label" hidden></span></span>
           </span>
           <span id="productionFlag" class="status-flag" hidden></span>
         </summary>
         <div class="card-body">
           <dl class="breakdown" id="productionDetails" hidden>
             <div><dt>Roasted</dt><dd id="roastedDetailKg">—</dd></div>
-            <div id="scheduledDetailRow"><dt>Scheduled output estimate</dt><dd id="scheduledDetailKg">—</dd></div>
+            <div id="scheduledGreenRow"><dt>Scheduled to roast (green)</dt><dd id="scheduledGreenDetailKg">—</dd></div>
+            <div id="scheduledBatchRow"><dt>Pending scheduled batches</dt><dd id="scheduledBatchDetailCount">—</dd></div>
+            <div id="scheduledDetailRow"><dt>Remaining roasted output · estimate</dt><dd id="scheduledDetailKg">—</dd></div>
             <div><dt>Roasted green cost</dt><dd id="roastedValue">—</dd></div>
             <div id="scheduledValueRow"><dt>Scheduled green cost estimate</dt><dd id="scheduledValue">—</dd></div>
           </dl>
+          <p id="scheduledSourceNote" class="detail-note">Roasted is actual output from Cropster Production Report. Scheduled to roast is pending green input from Cropster Scheduled batches, Monday to Friday, excluding roasted batches. Expected roasted output uses the remaining roast-output estimate; raw green kilograms are not added directly to roasted kilograms.</p>
+          <a id="cropsterScheduleLink" class="cropster-link" href="https://c-sar.cropster.com/apps/roast/schedule/calendar/week" target="_blank" rel="noopener noreferrer">Open Cropster Scheduled batches</a>
           <h2 id="productionPreviousLabel">Previous week</h2>
           <dl class="breakdown">
             <div id="previousCombinedRow"><dt>Combined production</dt><dd id="previousProductionKg">—</dd></div>
@@ -766,6 +770,12 @@ export const weeklyPage = String.raw`<!doctype html>
       set('demandMondayRoast', weight(demand.mondayRoastedKg, detailKg));
       showText('demandCarryNote', demand.carryForwardNote || 'Roasted coffee on hand from the weekly tally less Monday’s actual roasted output in Cropster.');
     }
+    function scheduledBatchValues(production) {
+      return Number.isFinite(production?.scheduledGreenKg) && production.scheduledGreenKg >= 0 &&
+        Number.isSafeInteger(production?.scheduledBatchCount) && production.scheduledBatchCount >= 0 &&
+        (production.scheduledGreenKg === 0) === (production.scheduledBatchCount === 0)
+        ? {greenKg: production.scheduledGreenKg, batches: production.scheduledBatchCount} : null;
+    }
     function renderProduction(production, week, previousRange) {
       const historical = !week.isCurrent;
       const hasTotal = !historical && Number.isFinite(production.totalKg);
@@ -774,11 +784,19 @@ export const weeklyPage = String.raw`<!doctype html>
       set('productionCardTitle', historical ? 'Roasted Monday to Friday' : 'Roasted & scheduled');
       weightHeadline('productionKg', hasTotal ? production.totalKg : production.roastedKg);
       set('productionValue', Number.isFinite(value) ? (historical ? format(value, detailCurrency) : money(value)) : '$ unavailable');
-      const outputLabel = hasTotal ? 'Roasted + scheduled estimate' : hasRoasted ? 'Recorded roast output' : 'Production weight';
+      const outputLabel = hasTotal ? 'Expected roasted output this week' : hasRoasted ? 'Recorded roast output' : 'Production weight';
       set('productionTotalLabel', historical ? 'Completed roasts and green cost' : outputLabel);
       el('productionPair').hidden = historical;
       set('roastedKg', weight(production.roastedKg));
-      set('scheduledKg', weight(production.scheduledKg));
+      const scheduled = scheduledBatchValues(production);
+      set('scheduledKg', scheduled ? weight(scheduled.greenKg) + ' green' : 'Unavailable');
+      showText('scheduledBatchCount', scheduled ? amount.format(scheduled.batches) + (scheduled.batches === 1 ? ' pending batch' : ' pending batches') : '');
+      set('scheduledGreenDetailKg', weight(scheduled?.greenKg, detailKg));
+      set('scheduledBatchDetailCount', format(scheduled?.batches, amount));
+      el('scheduledGreenRow').hidden = historical;
+      el('scheduledBatchRow').hidden = historical;
+      el('scheduledSourceNote').hidden = historical;
+      el('cropsterScheduleLink').hidden = historical;
       const weightChange = hasTotal ? comparison(production.changePercent, 'Weight') : comparison(production.roastedChangePercent, 'Roasted kg');
       const valueChange = comparison(production.valueChangePercent, 'value');
       const fallback = hasTotal || hasRoasted ? 'Previous week comparison unavailable' : 'Production comparison unavailable';

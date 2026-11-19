@@ -28,13 +28,30 @@ function schedule(day, { pending = "20 kg", total = "40 kg", estimated = "34 kg"
   const date = `${day.slice(5, 7)}/${day.slice(8, 10)}/${day.slice(0, 4)}`;
   const toRoast = date + " To roast", totalHeader = date + " Total";
   const dayLabel = new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", day: "numeric", month: "long", year: "numeric" }).format(new Date(day + "T12:00:00Z"));
+  const lots = lotRows || [["[PG-0901] Example A", pending ? pending.split("\n")[0] : "", "40 kg"]];
+  const calendarDay = { tiles: [], states: [] };
+  lots.forEach((row, index) => {
+    const left = kilograms(row[1]) ?? 0, whole = kilograms(row[2]) ?? 0;
+    const profile = total.split("\n")[index + 1]?.split(":")[0] || "Example";
+    for (const [kg, state] of [[left, "synced"], [whole - left, "roasted"]]) if (kg > 0) {
+      calendarDay.tiles.push(`${profile} ${kg} kg\n${row[0]}`); calendarDay.states.push(state);
+    }
+  });
   return {
     url: "https://c-sar.cropster.com/apps/roast/schedule/calendar/day?date=" + day,
     text: `${dayLabel}, in Marrickville Scheduled coffees Summary per green lot`,
     scheduleStatuses: { unpublished: true, scheduled: true, synced: true, roasted: true, inconsistent: true },
+    scheduleMachines: { M1: true }, calendarDay,
     tables: [
-      table(["", "Profile", "Type", toRoast, totalHeader, date + " Estimated output", "Total scheduled"], [["", "Example", type, pending, total, estimated, "1,000 kg"]]),
-      table(["Lot", toRoast, totalHeader], lotRows || [["[PG-0901] Example A", pending ? pending.split("\n")[0] : "", "40 kg"]]),
+      table(["", "Profile", "Type", toRoast, totalHeader, date + " Estimated output", "Total # of batches", "Total scheduled"], [["", "Example", type, pending, total, estimated, String(calendarDay.tiles.length), "1,000 kg"]]),
+      table(["Lot", toRoast, totalHeader], lots),
+      table(["Profile", "# of batches", toRoast, date + " Used", totalHeader], lots.map((row, index) => {
+        const profile = total.split("\n")[index + 1]?.split(":")[0] || "Example";
+        const relevant = calendarDay.tiles.map((tile, tileIndex) => ({ tile, state: calendarDay.states[tileIndex] })).filter(item => item.tile.split("\n")[1] === row[0]);
+        const counts = relevant.map(item => "1 x " + item.tile.split("\n")[0].match(/([\d.]+ kg)$/)[1]).join("\n");
+        const whole = kilograms(row[2]), left = kilograms(row[1]) ?? 0;
+        return [profile, counts, row[1], `${whole - left} kg`, row[2]];
+      })),
     ],
   };
 }
@@ -104,6 +121,7 @@ test("partly completed post-roast blends apply each component's own output ratio
   assert.equal(parseScheduleDay(snapshot, "2026-02-06", range).roastedKg, 24.5);
   snapshot.tables[0].rows[0][3] = "10 kg\nComponent A: 10 kg";
   snapshot.tables[1].rows[1][1] = "";
+  snapshot.calendarDay.states = snapshot.calendarDay.tiles.map((text, index) => text.includes("PG-0902") ? "roasted" : snapshot.calendarDay.states[index]);
   assert.equal(parseScheduleDay(snapshot, "2026-02-06", range).roastedKg, 8.5);
 });
 
@@ -116,6 +134,15 @@ test("ambiguous schedule components, missing output and unmatched lot inputs fai
   assert.throws(() => parseScheduleDay(post, "2026-02-06", range), /CROPSTER_SCHEDULE_AMBIGUOUS/);
   const filtered = schedule("2026-02-06"); filtered.scheduleStatuses.synced = false;
   assert.throws(() => parseScheduleDay(filtered, "2026-02-06", range), /CROPSTER_SCOPE_UNVERIFIED/);
+});
+
+test("a positive remaining blend with missing component detail cannot silently become zero output", () => {
+  const snapshot = schedule("2026-02-06", {
+    pending: "20 kg", total: "40 kg\nComponent A: 20 kg\nComponent B: 20 kg",
+    estimated: "33 kg\nComponent A: 17 kg\nComponent B: 16 kg", type: "Post-roast blend",
+    lotRows: [["[PG-0901] Example A", "5 kg", "20 kg"], ["[PG-0902] Example B", "15 kg", "20 kg"]],
+  });
+  assert.throws(() => parseScheduleDay(snapshot, "2026-02-06", range), /CROPSTER_SCHEDULE_AMBIGUOUS/);
 });
 
 test("five complete weekdays include Friday, exclude Saturday, and preserve a real zero", () => {
@@ -134,8 +161,9 @@ test("five complete weekdays include Friday, exclude Saturday, and preserve a re
 test("the explicit empty-schedule layout is zero only after verifying date, location and every status filter", () => {
   const empty = schedule("2026-02-05");
   empty.tables = [];
+  empty.calendarDay = { tiles: [], states: [] };
   empty.text = "5 February 2026, in Marrickville Scheduled coffees No coffees scheduled Summary per profile No profiles scheduled Summary per green lot No green lots scheduled";
-  assert.deepEqual(parseScheduleDay(empty, "2026-02-05", range), { day: "2026-02-05", greenKg: 0, roastedKg: 0, lotKg: new Map() });
+  assert.deepEqual(parseScheduleDay(empty, "2026-02-05", range), { day: "2026-02-05", greenKg: 0, roastedKg: 0, lotKg: new Map(), pendingBatchCount: 0 });
   for (const marker of ["No coffees scheduled", "No profiles scheduled", "No green lots scheduled"]) {
     assert.throws(() => parseScheduleDay({ ...empty, text: empty.text.replace(marker, "") }, "2026-02-05", range), /CROPSTER_TABLE_UNRECOGNISED/);
   }

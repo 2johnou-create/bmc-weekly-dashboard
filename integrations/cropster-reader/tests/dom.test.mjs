@@ -137,7 +137,7 @@ test("rendered weekly capture scopes dates, machines and batch counts to calenda
   const counts = [2, 1, 0, 0, 0, 0, 0];
   const tileText = "Example profile 10 kg\n[PG-0901] Example coffee";
   const header = { innerText: "Example machine\n3 Batches, 30 kg", querySelector: () => ({ getAttribute: () => "M1" }) };
-  const cells = counts.map(count => ({ innerText: count ? "Scheduled batch" : "", querySelectorAll: () => Array.from({ length: count }, () => ({ innerText: tileText })) }));
+  const cells = counts.map(count => ({ innerText: count ? "Scheduled batch" : "", querySelectorAll: () => Array.from({ length: count }, () => ({ innerText: tileText, closest: () => ({ classList: { contains: name => name === "calendar__item--synced" } }) })) }));
   try {
     globalThis.document = {
       title: "Synthetic schedule", body: { innerText: "2-8 February 2026, in Marrickville" },
@@ -149,7 +149,7 @@ test("rendered weekly capture scopes dates, machines and batch counts to calenda
     const captured = captureDocument();
     assert.deepEqual(captured.scheduleMachines, { M1: true });
     assert.deepEqual(captured.calendarWeek.dates, Array.from({ length: 7 }, (_, index) => `2026-02-0${index + 2}`));
-    assert.deepEqual(captured.calendarWeek.rows, [{ machineId: "M1", cellCount: 8, summary: header.innerText, batchCounts: counts, emptyCells: [false, false, true, true, true, true, true], tiles: [[tileText, tileText], [tileText], [], [], [], [], []] }]);
+    assert.deepEqual(captured.calendarWeek.rows, [{ machineId: "M1", cellCount: 8, summary: header.innerText, batchCounts: counts, emptyCells: [false, false, true, true, true, true, true], tiles: [[tileText, tileText], [tileText], [], [], [], [], []], states: [["synced", "synced"], ["synced"], [], [], [], [], []] }]);
   } finally { globalThis.document = originalDocument; globalThis.location = originalLocation; }
 });
 

@@ -6,6 +6,7 @@ import { ReaderError } from "../src/errors.mjs";
 import { cloneCheckpoint } from "../src/checkpoint.mjs";
 import { weekSnapshot } from "./week-schedule.fixture.mjs";
 import { legacyInventorySnapshot } from "./legacy-inventory.fixture.mjs";
+import { createRefreshControl } from "../src/refresh-control.mjs";
 
 const origin = "https://c-sar.cropster.com";
 const table = (headers, rows, footers = []) => ({ headers, rows, footers, pagination: `Show 1 - ${rows.length} of ${rows.length}` });
@@ -15,7 +16,7 @@ function sourceSnapshot(address) {
   if (url.pathname === "/apps/roast/schedule/calendar/day") {
     const day = url.searchParams.get("date");
     const label = new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", day: "numeric", month: "long", year: "numeric" }).format(new Date(day + "T12:00:00Z"));
-    return { url: address, text: `${label}, in Marrickville No coffees scheduled No profiles scheduled No green lots scheduled`, tables: [], scheduleStatuses: { unpublished: true, scheduled: true, synced: true, roasted: true, inconsistent: true } };
+    return { url: address, text: `${label}, in Marrickville No coffees scheduled No profiles scheduled No green lots scheduled`, tables: [], scheduleStatuses: { unpublished: true, scheduled: true, synced: true, roasted: true, inconsistent: true }, scheduleMachines: { M1: true }, calendarDay: { tiles: [], states: [] } };
   }
   if (url.pathname === "/app/inventory/overview") return {
     url: address, text: "1-25 of 1 items", activeFilters: ["Filters: Status Available Reset filters"],
@@ -38,7 +39,7 @@ function sourceSnapshot(address) {
   throw new Error("Unexpected synthetic source path");
 }
 
-function simulatedBrowser({ failPrevious = false, fastWeek = false, inventoryFailures = 0, extraInventory = false, legacyInventory = false, invalidLegacyScope = false } = {}) {
+function simulatedBrowser({ failPrevious = false, fastWeek = false, inventoryFailures = 0, extraInventory = false, legacyInventory = false, invalidLegacyScope = false, onVisit, transformWeek } = {}) {
   const visits = [], waits = [], navigations = [];
   const context = { async newPage() {
     let address;
@@ -47,6 +48,7 @@ function simulatedBrowser({ failPrevious = false, fastWeek = false, inventoryFai
       async goto(value, options) {
         navigations.push({ address: value, ...options });
         visits.push(value); address = value;
+        if (onVisit) onVisit(value);
         if (failPrevious && new URL(value).searchParams.get("dateFrom") === "2026-01-26") throw new ReaderError("CROPSTER_AUTH_REQUIRED");
       },
       url: () => address,
@@ -63,6 +65,7 @@ function simulatedBrowser({ failPrevious = false, fastWeek = false, inventoryFai
           return snapshot;
         }
         const snapshot = new URL(address).pathname === "/apps/roast/schedule/calendar/week" && fastWeek ? { ...weekSnapshot(), url: address } : structuredClone(sourceSnapshot(address));
+        if (transformWeek && new URL(address).pathname === "/apps/roast/schedule/calendar/week") transformWeek(snapshot);
         if (extraInventory && new URL(address).pathname === "/app/inventory/overview") {
           snapshot.text = "1-25 of 2 items";
           snapshot.tables[1].rows.push(["", "[PG-0902]", "Example second coffee", "Marrickville", "20 kg", "A$12 / kg"]);
@@ -130,6 +133,8 @@ test("the verified weekly path uses two week views and keeps independent sources
   const reader = createBrowserReader({ timeoutMs: 10000, chromiumSandbox: false }, { now: () => new Date("2026-02-05T00:00:00Z"), launch: async () => source.browser });
   const result = await reader.read("2026-02-02", { onProgress: stage => stages.push(stage) });
   assert.equal(result.production.scheduledKg, 16.25);
+  assert.deepEqual(result.scheduledBatches, { greenKg: 20, batches: 2 });
+  assert.equal(result.schedulePlan, undefined);
   assert.equal(source.visits.filter(address => new URL(address).pathname.endsWith("/calendar/week")).length, 2);
   assert.equal(source.visits.filter(address => new URL(address).pathname.endsWith("/calendar/day")).length, 0);
   const started = stage => stages.findIndex(item => item.stage === stage && item.state === "running");
@@ -190,5 +195,62 @@ test("unproven legacy scope falls back to the bounded modern inventory reader", 
   const result = await reader.read("2026-02-02", { scope: "all" });
   assert.equal(result.lab.inventory.rows.length, 2);
   assert.equal(source.visits.filter(address => new URL(address).pathname === "/app/inventory/overview").length, 1);
+  await reader.close();
+});
+
+test("an explicit joined refresh rechecks edited schedules at the next Lab view boundary and coalesces repeat clicks", async () => {
+  const control = createRefreshControl(), checkpoints = [], stages = [];
+  let changed = false, tick = 0;
+  const source = simulatedBrowser({ fastWeek: true, legacyInventory: true,
+    onVisit(address) {
+      if (!changed && new URL(address).searchParams.get("dateFrom") === "2026-01-26") {
+        changed = true;
+        for (let index = 0; index < 5; index++) control.request();
+      }
+    },
+    transformWeek(snapshot) {
+      if (!changed) return;
+      snapshot.tables[0].rows[0][2] = "10 kg\nComponent A: 5 kg\nComponent B: 5 kg";
+      snapshot.tables[1].rows[1][2] = "5 kg";
+      snapshot.tables[1].rows[1][3] = "15 kg";
+      snapshot.tables[2].rows[1][1] = "5 kg";
+      snapshot.calendarWeek.rows[0].states[1] = ["roasted", "synced"];
+    },
+  });
+  const reader = createBrowserReader({ timeoutMs: 1800000, chromiumSandbox: false }, { now: () => new Date(Date.UTC(2026, 1, 5) + tick++), launch: async () => source.browser });
+  const result = await reader.read("2026-02-02", { scope: "all", refreshControl: control, onProgress: stage => stages.push(stage), onCapture: capture => checkpoints.push(capture) });
+  assert.equal(checkpoints[0].production.scheduledKg, 16.25);
+  assert.equal(checkpoints[1].production.scheduledKg, 8.25);
+  assert.deepEqual(checkpoints[1].scheduledBatches, { greenKg: 10, batches: 2 });
+  assert.equal(result.production.scheduledKg, 8.25);
+  assert.ok(Date.parse(checkpoints[1].productionObservedAt) > Date.parse(checkpoints[0].productionObservedAt));
+  assert.ok(Date.parse(checkpoints[1].greenObservedAt) > Date.parse(checkpoints[0].greenObservedAt));
+  assert.equal(stages.filter(stage => stage.stage === "weekly_refresh" && stage.state === "complete").length, 1);
+  const priorityComplete = stages.findIndex(stage => stage.stage === "weekly_refresh" && stage.state === "complete");
+  assert.ok(stages.findIndex(stage => stage.stage === "previous_cost" && stage.state === "running") > priorityComplete);
+  assert.equal(source.visits.filter(address => new URL(address).pathname.endsWith("/calendar/week")).length, 4);
+  assert.equal(control.hasPending(), false);
+  assert.equal(control.isAccepting(), false);
+  await reader.close();
+});
+
+test("an explicit request at the final checkpoint cannot be lost before job completion", async () => {
+  const control = createRefreshControl(), checkpoints = [];
+  let requested = false, tick = 0;
+  const source = simulatedBrowser({ fastWeek: true, legacyInventory: true });
+  const reader = createBrowserReader({ timeoutMs: 1800000, chromiumSandbox: false }, { now: () => new Date(Date.UTC(2026, 1, 5) + tick++), launch: async () => source.browser });
+  await reader.read("2026-02-02", { scope: "all", refreshControl: control, onCapture: capture => {
+    checkpoints.push(capture);
+    if (capture.lab?.loss && !requested) { requested = true; control.request(); }
+  } });
+  assert.equal(requested, true);
+  assert.equal(source.visits.filter(address => new URL(address).pathname.endsWith("/calendar/week")).length, 4);
+  assert.equal(checkpoints.at(-1).lab.use.months.length, 3, "A priority refresh must retain verified Lab sections");
+  const beforeRecheck = checkpoints.find(capture => capture.lab?.loss);
+  assert.equal(checkpoints.at(-1).labObservedAt.use, beforeRecheck.labObservedAt.use);
+  assert.equal(checkpoints.at(-1).labObservedAt.loss, beforeRecheck.labObservedAt.loss);
+  assert.ok(Date.parse(checkpoints.at(-1).productionObservedAt) > Date.parse(beforeRecheck.productionObservedAt));
+  assert.equal(control.hasPending(), false);
+  assert.equal(control.isAccepting(), false);
   await reader.close();
 });

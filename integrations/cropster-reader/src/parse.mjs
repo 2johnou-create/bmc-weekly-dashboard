@@ -119,6 +119,7 @@ function remainingOutput(remaining, total, estimated, type) {
     if (/post-roast blend/i.test(type)) throw new ReaderError("CROPSTER_SCHEDULE_AMBIGUOUS");
     return estimated.total * remaining.total / total.total;
   }
+  if (remaining.components.size === 0) throw new ReaderError("CROPSTER_SCHEDULE_AMBIGUOUS");
   if (remaining.components.size > total.components.size || total.components.size !== estimated.components.size
     || [...total.components.keys()].some(name => !estimated.components.has(name))) throw new ReaderError("CROPSTER_SCHEDULE_AMBIGUOUS");
   let output = 0;
@@ -135,6 +136,7 @@ export function parseScheduleDay(snapshot, day, range) {
   const url = sourceUrl(snapshot, "/apps/roast/schedule/calendar/day");
   if (url.searchParams.get("date") !== day) throw new ReaderError("CROPSTER_SCOPE_UNVERIFIED");
   if (!["unpublished", "scheduled", "synced", "roasted", "inconsistent"].every(status => snapshot.scheduleStatuses?.[status] === true)) throw new ReaderError("CROPSTER_SCOPE_UNVERIFIED");
+  if (!snapshot.scheduleMachines || !Object.keys(snapshot.scheduleMachines).length || !Object.values(snapshot.scheduleMachines).every(value => value === true)) throw new ReaderError("CROPSTER_SCOPE_UNVERIFIED");
   const sourceDay = new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", day: "numeric", month: "long", year: "numeric" })
     .format(new Date(day + "T12:00:00Z"));
   if (!compact(snapshot.text).includes(sourceDay + ", in Marrickville")
@@ -142,18 +144,36 @@ export function parseScheduleDay(snapshot, day, range) {
   const text = compact(snapshot.text);
   const empty = ["No coffees scheduled", "No profiles scheduled", "No green lots scheduled"].every(marker => text.includes(marker));
   if (empty && Array.isArray(snapshot.tables) && snapshot.tables.length === 0) {
-    return { day, greenKg: 0, roastedKg: 0, lotKg: new Map() };
+    if (snapshot.calendarDay?.tiles?.length !== 0 || snapshot.calendarDay?.states?.length !== 0) throw new ReaderError("CROPSTER_BATCH_STATUS_UNVERIFIED");
+    return { day, greenKg: 0, roastedKg: 0, lotKg: new Map(), pendingBatchCount: 0 };
   }
   const displayedDay = `${Number(day.slice(5, 7))}/${Number(day.slice(8, 10))}/${day.slice(0, 4)}`;
   const remainingHeader = `${displayedDay} to roast`, totalHeader = `${displayedDay} total`, outputHeader = `${displayedDay} estimated output`;
-  return { day, ...parsePendingTables(snapshot, remainingHeader, totalHeader, outputHeader) };
+  const batches = batchRows(snapshot.calendarDay?.tiles, snapshot.calendarDay?.states);
+  const pending = parsePendingTables(snapshot, remainingHeader, totalHeader, outputHeader, batches);
+  return { day, ...pending };
 }
 
-function parsePendingTables(snapshot, remainingHeader, totalHeader, outputHeader) {
+function batchRows(tiles, states) {
+  if (!Array.isArray(tiles) || !Array.isArray(states) || tiles.length !== states.length) throw new ReaderError("CROPSTER_BATCH_STATUS_UNVERIFIED");
+  return tiles.map((tile, index) => {
+    const status = states[index];
+    if (!["unpublished", "scheduled", "synced", "roasted"].includes(status)) throw new ReaderError("CROPSTER_BATCH_STATUS_UNVERIFIED");
+    const lines = trim(tile).split(/\n+/).map(compact).filter(Boolean);
+    const weight = lines.shift()?.match(new RegExp("^(.+)\\s+(" + numeric + ")\\s*kg$"));
+    const kg = weight ? number(weight[2]) : null;
+    const ids = lines.map(line => line.match(/^\[(PG-\d+)\]\s+.+$/)?.[1]);
+    if (!(kg > 0) || !ids.length || ids.some(id => !id) || new Set(ids).size !== ids.length) throw new ReaderError("CROPSTER_SCHEDULE_AMBIGUOUS");
+    return { kg, status, lotIds: ids, profileName: weight[1] };
+  });
+}
+
+function parsePendingTables(snapshot, remainingHeader, totalHeader, outputHeader, batches) {
   const coffees = tableWith(snapshot, ["profile", "type", remainingHeader, totalHeader, outputHeader]);
   const lots = tableWith(snapshot, ["lot", remainingHeader, totalHeader]);
   if (!completeTable(snapshot, coffees) || !completeTable(snapshot, lots)) throw new ReaderError("CROPSTER_TABLE_INCOMPLETE");
   let greenKg = 0, roastedKg = 0;
+  const componentKg = new Map();
   for (const row of coffees.rows) {
     const remainingCell = trim(row[coffees.index(remainingHeader)]);
     if (!remainingCell) continue; // Cropster's blank To-roast cell means that schedule is fully completed.
@@ -161,6 +181,7 @@ function parsePendingTables(snapshot, remainingHeader, totalHeader, outputHeader
     if (remaining.total === 0) continue;
     const total = quantityBreakdown(row[coffees.index(totalHeader)]);
     const estimated = quantityBreakdown(row[coffees.index(outputHeader)]);
+    if (/post-roast blend/i.test(trim(row[coffees.index("type")]))) for (const [name, kg] of remaining.components) componentKg.set(name, (componentKg.get(name) || 0) + kg);
     greenKg += remaining.total;
     roastedKg += remainingOutput(remaining, total, estimated, trim(row[coffees.index("type")]));
   }
@@ -174,7 +195,28 @@ function parsePendingTables(snapshot, remainingHeader, totalHeader, outputHeader
     lotKg.set(id, (lotKg.get(id) || 0) + kg);
   }
   if (!close(greenKg, sum([...lotKg.values()]))) throw new ReaderError("CROPSTER_SCHEDULE_AMBIGUOUS");
-  return { greenKg, roastedKg, lotKg };
+  const batchGreenKg = sum(batches.filter(row => row.status !== "roasted").map(row => row.kg));
+  const totalGreenKg = sum(batches.map(row => row.kg));
+  const summaryTotal = coffees.rows.map(row => kilograms(row[coffees.index(totalHeader)]));
+  // A repeating schedule's coffee-level Total # of batches is a lifetime
+  // count. The profile summary is scoped by the same dated period headers.
+  const profiles = tableWith(snapshot, ["profile", "# of batches", remainingHeader, totalHeader]);
+  if (!completeTable(snapshot, profiles)) throw new ReaderError("CROPSTER_TABLE_INCOMPLETE");
+  const profileTotal = profiles.rows.map(row => kilograms(row[profiles.index(totalHeader)]));
+  const summaryCounts = profiles.rows.map(row => {
+    const counts = trim(row[profiles.index("# of batches")]).split(/\n+/).map(line => compact(line).match(new RegExp("^(\\d+)\\s*x\\s*" + numeric + "\\s*kg$"))?.[1]);
+    return counts.some(count => count === undefined) ? null : sum(counts.map(Number));
+  });
+  if (summaryCounts.some(count => !Number.isSafeInteger(count)) || sum(summaryCounts) !== batches.length
+    || profileTotal.some(kg => kg === null) || !close(sum(profileTotal), totalGreenKg)
+    || summaryTotal.some(kg => kg === null) || !close(sum(summaryTotal), totalGreenKg) || !close(greenKg, batchGreenKg)) throw new ReaderError("CROPSTER_SCHEDULE_AMBIGUOUS");
+  const pending = batches.filter(row => row.status !== "roasted"), known = new Map();
+  for (const [name, kg] of componentKg) if (!close(kg, sum(pending.filter(row => row.profileName === name).map(row => row.kg)))) throw new ReaderError("CROPSTER_SCHEDULE_AMBIGUOUS");
+  for (const row of pending) if (row.lotIds.length === 1) known.set(row.lotIds[0], (known.get(row.lotIds[0]) || 0) + row.kg);
+  const multi = pending.filter(row => row.lotIds.length > 1);
+  for (const [id, kg] of known) if (!lotKg.has(id) || kg > lotKg.get(id) + 0.06) throw new ReaderError("CROPSTER_SCHEDULE_AMBIGUOUS");
+  for (const [id, kg] of lotKg) if (kg - (known.get(id) || 0) > 0.06 && !multi.some(row => row.lotIds.includes(id))) throw new ReaderError("CROPSTER_SCHEDULE_AMBIGUOUS");
+  return { greenKg: batchGreenKg, roastedKg, lotKg, pendingBatchCount: pending.length };
 }
 
 export function parseScheduleWeek(snapshot, range) {
@@ -203,7 +245,14 @@ export function parseScheduleWeek(snapshot, range) {
     if ([5, 6].some(index => row.batchCounts[index] !== 0 || row.emptyCells[index] !== true)) return null;
   }
   const prefix = `${from}-${through}`;
-  const pending = parsePendingTables(snapshot, `${prefix} to roast`, `${prefix} total`, `${prefix} estimated output`);
+  const batches = grid.rows.flatMap(machine => {
+    if (!Array.isArray(machine.tiles) || !Array.isArray(machine.states) || machine.tiles.length !== 7 || machine.states.length !== 7) throw new ReaderError("CROPSTER_BATCH_STATUS_UNVERIFIED");
+    return machine.tiles.flatMap((tiles, day) => {
+      if (tiles.length !== machine.batchCounts[day]) throw new ReaderError("CROPSTER_BATCH_STATUS_UNVERIFIED");
+      return batchRows(tiles, machine.states[day]);
+    });
+  });
+  const pending = parsePendingTables(snapshot, `${prefix} to roast`, `${prefix} total`, `${prefix} estimated output`, batches);
   let profileAssignments = null;
   try { profileAssignments = parseCalendarAssignments(snapshot, range, prefix); }
   catch (error) { if (!(error instanceof ReaderError)) throw error; }
@@ -231,7 +280,7 @@ function parseCalendarAssignments(snapshot, range, prefix) {
     for (let day = 0; day < 7; day++) {
       const tiles = machine.tiles[day];
       if (!Array.isArray(tiles) || tiles.length !== machine.batchCounts[day]) throw new ReaderError("CROPSTER_RECIPE_UNAVAILABLE");
-      for (const tile of tiles) {
+      for (const [tileIndex, tile] of tiles.entries()) {
         if (day > 4 || typeof tile !== "string" || tile.length > 3000) throw new ReaderError("CROPSTER_RECIPE_UNAVAILABLE");
         const lines = trim(tile).split(/\n+/).map(compact).filter(Boolean);
         const first = lines.shift()?.match(new RegExp("^(.+)\\s+(" + numeric + ")\\s*kg$"));
@@ -247,7 +296,7 @@ function parseCalendarAssignments(snapshot, range, prefix) {
         lotIds.forEach(id => observedLots.add(id));
         profile.observedKg += greenKg;
         profile.observedCount++;
-        const row = { date: addDays(range.weekStart, day), machineId: machine.machineId, profileName, profileUrl: profile.profileUrl, greenKg, lotIds, lotNames };
+        const row = { date: addDays(range.weekStart, day), machineId: machine.machineId, profileName, profileUrl: profile.profileUrl, greenKg, lotIds, lotNames, status: machine.states[day][tileIndex] };
         rows.push(row);
         if (lotIds.length === 1) knownLotKg.set(lotIds[0], (knownLotKg.get(lotIds[0]) || 0) + greenKg);
         else multi.push(row);
@@ -277,7 +326,7 @@ export function sameScheduleReads(first, second) {
   if (first.kind !== second.kind) return false;
   if (first.kind === "days") return sameSchedules(first.days, second.days);
   if (first.kind !== "week" || first.week.weekStart !== second.week.weekStart || first.week.periodEnd !== second.week.periodEnd) return false;
-  const assigned = week => week.profileAssignments?.complete ? JSON.stringify(week.profileAssignments.rows.map(row => [row.date, row.machineId, row.profileUrl, row.greenKg, [...row.lotIds].sort()]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))) : null;
+  const assigned = week => week.profileAssignments?.complete ? JSON.stringify(week.profileAssignments.rows.map(row => [row.date, row.machineId, row.profileUrl, row.greenKg, [...row.lotIds].sort(), row.status]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))) : null;
   return sameSchedules([{ ...first.week, day: first.week.weekStart }], [{ ...second.week, day: second.week.weekStart }]) && assigned(first.week) === assigned(second.week);
 }
 
@@ -583,7 +632,7 @@ export function sameSchedules(first, second) {
   if (first.length !== second.length) return false;
   return first.every((day, index) => {
     const other = second[index];
-    return day.day === other.day && close(day.greenKg, other.greenKg, 0.00001) && close(day.roastedKg, other.roastedKg, 0.00001)
+    return day.day === other.day && day.pendingBatchCount === other.pendingBatchCount && close(day.greenKg, other.greenKg, 0.00001) && close(day.roastedKg, other.roastedKg, 0.00001)
       && day.lotKg.size === other.lotKg.size && [...day.lotKg].every(([id, kg]) => close(kg, other.lotKg.get(id), 0.00001));
   });
 }

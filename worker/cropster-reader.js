@@ -2,6 +2,7 @@ import { addDays, validDate } from "./metrics.js";
 import { readCropsterReadings, saveCropsterGreenStock } from "./cropster.js";
 import { saveCropsterMonday } from "./cropster-monday.js";
 import { saveLabCropster } from "./roastery-lab.js";
+import { readCropsterScheduledBatches, saveCropsterScheduledBatches, validateCropsterScheduledBatches } from "./cropster-scheduled-batches.js";
 
 const DEADLINE_MS = 12_000;
 const MAX_BODY = 350_000;
@@ -54,6 +55,7 @@ export function validateCropsterObservation(input, weekStart, now = new Date(), 
     if (!Number.isFinite(time) || time > observedAt || time < observedAt - MAX_SECTION_AGE) throw new Error("Invalid section capture time.");
     times[field] = new Date(time);
   }
+  const scheduledBatches = validateCropsterScheduledBatches(input.scheduledBatches, weekStart, times.productionObservedAt);
   let previousProduction = null;
   if (input.previousProduction != null) {
     const value = input.previousProduction;
@@ -65,7 +67,7 @@ export function validateCropsterObservation(input, weekStart, now = new Date(), 
   return { observedAt: new Date(observedAt), ...times, production: {
     roastedKg: production.roastedKg, scheduledKg: production.scheduledKg,
     roastedValue: production.roastedValue, scheduledValue: production.scheduledValue,
-  }, green, previousProduction, mondayRoastedKg: boundedAmount(input.mondayRoastedKg, 1_000_000) ? input.mondayRoastedKg : null,
+  }, green, scheduledBatches, previousProduction, mondayRoastedKg: boundedAmount(input.mondayRoastedKg, 1_000_000) ? input.mondayRoastedKg : null,
   lab: isObject(input.lab) ? input.lab : {}, labCapturedAt: isObject(input.labObservedAt) ? input.labObservedAt : {} };
 }
 
@@ -184,6 +186,11 @@ async function captureAndSave({ config, env, weekStart, now, fetcher, jobId, sup
   } catch {
     // Other independently captured sections can still be newer and valid.
   }
+  let scheduledBatchesFetched = false;
+  if (observation.scheduledBatches && productionAccepted) {
+    try { scheduledBatchesFetched = await saveCropsterScheduledBatches(env.DB, observation.scheduledBatches, weekStart, observation.productionObservedAt); }
+    catch { /* Scheduled batches can only accompany the retained production capture. */ }
+  }
   let greenFetched = false, mondayFetched = false;
   if (observation.green) {
     try { await saveCropsterGreenStock(env.DB, observation.green, observation.greenObservedAt); greenFetched = true; }
@@ -214,7 +221,7 @@ async function captureAndSave({ config, env, weekStart, now, fetcher, jobId, sup
     status: state.status === "running" ? "pending" : state.status === "failed" || !productionAccepted ? "failed" : "refreshed",
     readerStatus: state.status,
     accepted: productionAccepted || greenFetched || mondayFetched || Object.values(labParts).some(part => part.status === "updated"),
-    fetched: productionFetched, greenFetched, mondayFetched, labParts,
+    fetched: productionFetched, greenFetched, mondayFetched, scheduledBatchesFetched, labParts,
     previousFetched: productionFetched && observation.previousProduction !== null,
     previousAsOf: productionFetched && observation.previousProduction ? observation.previousProductionObservedAt.toISOString() : null,
     jobId: state.jobId, weekStart, productionCapturedAt: observation.productionObservedAt.toISOString(),
@@ -270,7 +277,13 @@ export async function ingestCropsterSync({ env, weekStart, jobId, input, status 
 }
 
 async function readBackCropster({ env, weekStart, followingWeekStart, now, refresh, configured }) {
-  const readings = await readCropsterReadings({ db: env.DB, weekStart, followingWeekStart, now });
+  const [readings, scheduledBatches] = await Promise.all([
+    readCropsterReadings({ db: env.DB, weekStart, followingWeekStart, now }),
+    readCropsterScheduledBatches(env.DB, weekStart),
+  ]);
+  const matchedScheduled = scheduledBatches?.asOf === readings.production.asOf ? scheduledBatches : null;
+  readings.production.scheduledGreenKg = matchedScheduled?.greenKg ?? null;
+  readings.production.scheduledBatchCount = matchedScheduled?.batches ?? null;
   if (refresh.fetched && (!Number.isFinite(readings.production.roastedKg) ||
     !Number.isFinite(readings.production.scheduledKg) ||
     Date.parse(readings.production.asOf) < Date.parse(refresh.productionCapturedAt) || !readings.production.asOf)) {
