@@ -5,6 +5,7 @@ import { ReaderError, safeFailure } from "./errors.mjs";
 import { weekRange } from "./dates.mjs";
 import { createBrowserReader } from "./browser.mjs";
 import { callbackConfiguration, deliverCapture } from "./callback.mjs";
+import { safeProgress } from "./progress.mjs";
 
 const MAX_BODY = 512;
 const json = (body, status = 200, extra = {}) => Response.json(body, {
@@ -73,15 +74,21 @@ export function createHandler({ reader, token, now = () => new Date(), log = () 
       jobs.delete(oldest[0]);
     }
   };
-  const run = (weekStart, scope) => {
+  const run = (weekStart, scope, onProgress) => {
     if (inFlight && (inFlight.weekStart !== weekStart || inFlight.scope !== scope)) throw new ReaderError("CROPSTER_READER_BUSY");
     if (!inFlight) {
-      const job = { weekStart, scope, promise: null };
-      job.promise = Promise.resolve().then(() => reader.read(weekStart, { scope })).finally(() => {
+      const job = { weekStart, scope, promise: null, listeners: new Set(), progress: null };
+      job.promise = Promise.resolve().then(() => reader.read(weekStart, { scope, onProgress: input => {
+        const progress = safeProgress(input, now);
+        if (!progress) return;
+        job.progress = progress;
+        for (const listener of job.listeners) { try { listener(progress); } catch { /* Diagnostics cannot interrupt a source read. */ } }
+      } })).finally(() => {
         if (inFlight === job) inFlight = null;
       });
       inFlight = job;
     }
+    if (typeof onProgress === "function") inFlight.listeners.add(onProgress);
     return inFlight.promise;
   };
   const jobResponse = job => ({
@@ -89,6 +96,8 @@ export function createHandler({ reader, token, now = () => new Date(), log = () 
     ...(job.status === "complete" ? { result: job.result } : {}),
     ...(job.status === "failed" ? { error: job.error } : {}),
     ...(job.delivery ? { delivery: job.delivery } : {}),
+    ...(job.progress ? { progress: job.progress } : {}),
+    ...(job.failures?.length ? { failures: job.failures } : {}),
   });
   return async request => {
     const pathname = new URL(request.url).pathname;
@@ -115,8 +124,14 @@ export function createHandler({ reader, token, now = () => new Date(), log = () 
         if (existing) return json(jobResponse(existing), 202);
         cleanJobs(true);
         if (jobs.size >= MAX_JOBS) throw new ReaderError("CROPSTER_READER_BUSY");
-        const promise = run(range.weekStart, "all");
-        const job = { id: randomUUID(), weekStart: range.weekStart, status: "running", createdAt: now().getTime() };
+        let job;
+        const promise = run(range.weekStart, "all", progress => {
+          if (!job || job.status !== "running") return;
+          job.progress = progress;
+          if (progress.state === "failed") job.failures = [...(job.failures || []), progress].slice(-8);
+          log({ event: "reader_stage", jobId: job.id, ...progress });
+        });
+        job = { id: randomUUID(), weekStart: range.weekStart, status: "running", createdAt: now().getTime(), ...(inFlight?.progress ? { progress: inFlight.progress } : {}) };
         jobs.set(job.id, job);
         // Attach failure handling immediately; no rejected background promise can
         // leak raw browser errors or terminate the process.

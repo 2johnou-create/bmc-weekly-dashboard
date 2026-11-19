@@ -46,7 +46,10 @@ export function validateCropsterObservation(input, weekStart, now = new Date()) 
   // Only validated scalar fields cross into storage. Reader warnings and page text are not HTML.
   const times = {};
   for (const field of ["productionObservedAt", "greenObservedAt", "mondayObservedAt", "previousProductionObservedAt"]) {
-    const time = input[field] === undefined ? observedAt : Date.parse(input[field]);
+    const optionalSection = field === "greenObservedAt" && input.green == null ||
+      field === "mondayObservedAt" && input.mondayRoastedKg == null ||
+      field === "previousProductionObservedAt" && input.previousProduction == null;
+    const time = input[field] === undefined || optionalSection && input[field] === null ? observedAt : Date.parse(input[field]);
     if (!Number.isFinite(time) || time > observedAt || time < observedAt - 210_000) throw new Error("Invalid section capture time.");
     times[field] = new Date(time);
   }

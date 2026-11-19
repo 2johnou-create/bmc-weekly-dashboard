@@ -1,6 +1,8 @@
 import { ReaderError } from "./errors.mjs";
 import { addDays, completedMonths, sydneyDate, weekRange } from "./dates.mjs";
-import { captureDocument } from "./dom.mjs";
+import { captureDocument, renderedViewReady } from "./dom.mjs";
+import { createLimiter, settlesWithin } from "./runtime-limits.mjs";
+import { browserFailureCode, safeProgress } from "./progress.mjs";
 import {
   CROPSTER_ORIGIN, aggregateSchedule, parseInventory, inventoryPrices, parseMarrickvilleStock,
   parseRoastedCost, parseRoastedOutput, parseScheduleDay, sameProduction, parseMonthlyUse, parseLoss,
@@ -9,6 +11,11 @@ import {
 
 const PAGE_LIMIT = 2;
 const SOURCE_TIMEOUT = 14000;
+
+export function captureTimestamps(now = () => new Date()) {
+  const capturedAt = now().toISOString();
+  return { observedAt: capturedAt, productionObservedAt: capturedAt };
+}
 
 function paths(range) {
   const query = new URLSearchParams({ dateFrom: range.weekStart, dateTo: range.periodEnd, locations: "lK0G1" });
@@ -21,17 +28,6 @@ function paths(range) {
   };
 }
 
-function createLimit(maximum) {
-  let active = 0;
-  const waiting = [];
-  return async run => {
-    if (active >= maximum) await new Promise(resolve => waiting.push(resolve));
-    active++;
-    try { return await run(); }
-    finally { active--; waiting.shift()?.(); }
-  };
-}
-
 async function allRequired(tasks) {
   const results = await Promise.allSettled(tasks);
   const failed = results.find(result => result.status === "rejected");
@@ -41,30 +37,42 @@ async function allRequired(tasks) {
 
 // This is the deployed application's browser runtime. Only fixed website views
 // and the login form are used. There is no exposed browser-control endpoint.
-export function createBrowserReader(configuration, { now = () => new Date(), launch } = {}) {
-  let browser = null, context = null, closed = false;
+export function createBrowserReader(configuration, { now = () => new Date(), launch, cleanupTimeoutMs = 2000 } = {}) {
+  let browser = null, context = null, closed = false, generation = 0, contextPromise = null, pendingBrowser = null;
   const launchBrowser = launch || (async options => (await import("playwright")).chromium.launch(options));
 
-  async function reset() {
-    const old = browser;
+  async function reset(expectedGeneration = generation) {
+    if (expectedGeneration !== generation) return;
+    generation++;
+    const old = [...new Set([browser, pendingBrowser].filter(Boolean))];
     context = null;
     browser = null;
-    if (old) await old.close().catch(() => {});
+    pendingBrowser = null;
+    contextPromise = null;
+    await Promise.all(old.map(instance => settlesWithin(() => instance.close(), cleanupTimeoutMs)));
   }
 
-  async function getContext() {
+  async function getContext(emit) {
     if (closed) throw new ReaderError("CROPSTER_UNAVAILABLE");
-    if (!browser?.isConnected()) {
-      browser = await launchBrowser({
-        headless: true,
-        chromiumSandbox: configuration.chromiumSandbox,
-        args: ["--disable-dev-shm-usage"],
-      });
-      context = await browser.newContext({
-        locale: "en-US", timezoneId: "Australia/Sydney", acceptDownloads: false,
-        serviceWorkers: "block", viewport: { width: 1440, height: 1000 },
-      });
-      await context.route("**/*", route => {
+    if (browser && !browser.isConnected()) await reset();
+    if (browser?.isConnected() && context) return context;
+    if (!contextPromise) {
+      const expected = generation;
+      const initialise = async () => {
+        emit("browser_launch", "running", "open");
+        const candidate = await launchBrowser({ headless: true, chromiumSandbox: configuration.chromiumSandbox, args: ["--disable-dev-shm-usage"] });
+        if (closed || expected !== generation) {
+          void settlesWithin(() => candidate.close(), cleanupTimeoutMs);
+          throw new ReaderError("CROPSTER_UNAVAILABLE");
+        }
+        pendingBrowser = candidate;
+        emit("browser_launch", "complete", "open");
+        emit("browser_context", "running", "open");
+        const candidateContext = await candidate.newContext({
+          locale: "en-US", timezoneId: "Australia/Sydney", acceptDownloads: false,
+          serviceWorkers: "block", viewport: { width: 1440, height: 1000 },
+        });
+        await candidateContext.route("**/*", route => {
         const request = route.request();
         if (["image", "font", "media"].includes(request.resourceType())) return route.abort();
         // Main documents cannot navigate to arbitrary hosts. The application's
@@ -74,9 +82,28 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
           catch { return route.abort(); }
         }
         return route.continue();
+        });
+        if (closed || expected !== generation) {
+          void settlesWithin(() => candidate.close(), cleanupTimeoutMs);
+          throw new ReaderError("CROPSTER_UNAVAILABLE");
+        }
+        browser = candidate;
+        context = candidateContext;
+        pendingBrowser = null;
+        emit("browser_context", "complete", "open");
+        return candidateContext;
+      };
+      contextPromise = initialise().catch(error => {
+        if (expected === generation) {
+          contextPromise = null;
+          const failed = pendingBrowser;
+          pendingBrowser = null;
+          if (failed) void settlesWithin(() => failed.close(), cleanupTimeoutMs);
+        }
+        throw error;
       });
     }
-    return context;
+    return contextPromise;
   }
 
   async function signIn(page, firstUrl, timeout) {
@@ -106,52 +133,63 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
     } catch { throw new ReaderError("CROPSTER_AUTH_REQUIRED"); }
   }
 
-  async function read(weekStart, { scope = "weekly" } = {}) {
+  async function read(weekStart, { scope = "weekly", onProgress } = {}) {
     if (!["weekly", "all"].includes(scope)) throw new ReaderError("INVALID_REQUEST", 400);
     const startedAt = now();
     const range = weekRange(weekStart, startedAt);
     const sourcePaths = paths(range);
     const deadline = startedAt.getTime() + configuration.timeoutMs;
-    const limit = createLimit(PAGE_LIMIT);
+    let jobGeneration = generation;
+    const limit = createLimiter(PAGE_LIMIT);
     const jobPages = new Set();
-    let timedOut = false;
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      for (const page of jobPages) void page.close().catch(() => {});
-    }, configuration.timeoutMs);
+    let timedOut = false, abortError = null, rejectAbort;
+    const emit = (stage, state, phase, code) => {
+      const progress = safeProgress({ stage, state, phase, ...(code ? { code } : {}) }, now);
+      if (progress && typeof onProgress === "function") { try { onProgress(progress); } catch { /* Diagnostics never stop a capture. */ } }
+    };
+    const aborted = new Promise((_, reject) => { rejectAbort = reject; });
+    const abortJob = error => {
+      if (abortError) return;
+      abortError = error;
+      timedOut = error.code === "CROPSTER_TIMEOUT";
+      emit("capture", "failed", timedOut ? "deadline" : "close", error.code);
+      limit.cancel(error);
+      rejectAbort(error);
+      for (const page of jobPages) void settlesWithin(() => page.close(), cleanupTimeoutMs);
+      void reset(jobGeneration);
+    };
+    const timeout = setTimeout(() => abortJob(new ReaderError("CROPSTER_TIMEOUT", 504)), configuration.timeoutMs);
     const remaining = () => {
       const left = deadline - now().getTime();
+      if (abortError) throw abortError;
       if (closed) throw new ReaderError("CROPSTER_UNAVAILABLE");
       if (timedOut || left <= 0) throw new ReaderError("CROPSTER_TIMEOUT", 504);
       return Math.min(left, SOURCE_TIMEOUT);
     };
     const newPage = async () => {
       remaining();
-      const page = await (await getContext()).newPage();
+      const activeContext = await getContext(emit);
+      remaining();
+      jobGeneration = generation;
+      const page = await activeContext.newPage();
+      jobPages.add(page);
+      if (abortError) { void settlesWithin(() => page.close(), cleanupTimeoutMs); throw abortError; }
       page.setDefaultTimeout(remaining());
       page.setDefaultNavigationTimeout(remaining());
       page.on("popup", popup => void popup.close().catch(() => {}));
       page.on("dialog", dialog => void dialog.dismiss().catch(() => {}));
-      jobPages.add(page);
       return page;
     };
     const closePage = async page => {
+      const settled = await settlesWithin(() => page.close(), cleanupTimeoutMs);
       jobPages.delete(page);
-      await page.close().catch(() => {});
+      if (!settled && !abortError) {
+        emit("cleanup", "failed", "close", "CROPSTER_CLEANUP_TIMEOUT");
+        abortJob(new ReaderError("CROPSTER_CLEANUP_TIMEOUT"));
+      }
     };
     const waitForView = async (page, kind) => {
-      await page.waitForFunction(kind => {
-        const body = document.body?.innerText || "";
-        if (document.querySelector('input[type="password"]')) return true;
-        const headings = Array.from(document.querySelectorAll("table thead")).map(item => item.innerText).join(" ");
-        if (kind === "blend") return /Blend components/.test(body) && /% of blend/.test(headings) && Boolean(document.querySelector('table tbody a[href*="/profile-groups/"]'));
-        if (kind === "group") return /Associated profiles/.test(body) && /Green inventory/.test(body) && Boolean(document.querySelector('a[href*="/apps/roast/profiles/"]'));
-        if (kind === "profile") return /Components\s*\/\s*Green lots/i.test(body) && /Blend %/.test(headings) && /Green weight/.test(headings) && Boolean(document.querySelector('table tbody a[href*="/lots/"]'));
-        if (kind === "prices") return /ID-Tag/.test(headings) && /Price/.test(headings) && /\d+\s*-\s*\d+\s+of\s+\d+\s+items/.test(body);
-        if (kind === "stock") return /Values refer to inventory on/.test(body) && /Location/.test(headings) && /Total value/.test(headings) && /Show\s+\d+\s*-\s*\d+\s+of\s+\d+/.test(body);
-        if (kind === "schedule") return /Scheduled coffees/.test(body) && /Summary per green lot/.test(body) && /To roast/.test(headings) && /Show\s+\d+\s*-\s*\d+\s+of\s+\d+/.test(body);
-        return /Production report/.test(body) && /Amount of green/.test(headings) && /Show\s+\d+\s*-\s*\d+\s+of\s+\d+/.test(body);
-      }, kind, { timeout: remaining() });
+      await page.waitForFunction(renderedViewReady, kind, { timeout: remaining() });
       if (new URL(page.url()).pathname === "/app/login") throw new ReaderError("CROPSTER_AUTH_REQUIRED");
     };
     const expandLegacy = async page => {
@@ -175,25 +213,43 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
       }
       throw error;
     };
-    const view = (path, kind, parse) => limit(async () => {
-      const page = await newPage();
+    const view = (path, kind, parse, stage) => limit(async () => {
+      let page, phase = "open";
+      emit(stage, "running", phase);
       try {
+        page = await newPage();
+        phase = "navigate"; emit(stage, "running", phase);
         await page.goto(CROPSTER_ORIGIN + path, { waitUntil: "domcontentloaded", timeout: remaining() });
+        phase = "ready"; emit(stage, "running", phase);
         await waitForView(page, kind);
+        phase = "filters"; emit(stage, "running", phase);
         if (kind === "schedule") for (const status of ["unpublished", "scheduled", "synced", "roasted", "inconsistent"]) {
           const checkbox = page.locator('input[type="checkbox"][id$="-status-' + status + '"]');
           if (await checkbox.count() !== 1) throw new ReaderError("CROPSTER_SCOPE_UNVERIFIED");
           await checkbox.check({ timeout: remaining() });
         }
+        phase = "pagination"; emit(stage, "running", phase);
         if (["production", "stock", "schedule"].includes(kind)) await expandLegacy(page);
-        return await snapshotUntilParsed(page, parse);
-      } finally { await closePage(page); }
+        phase = "parse"; emit(stage, "running", phase);
+        const result = await snapshotUntilParsed(page, parse);
+        emit(stage, "complete", phase);
+        return result;
+      } catch (error) {
+        const code = browserFailureCode(error);
+        emit(stage, "failed", phase, code);
+        throw error instanceof ReaderError ? error : new ReaderError(code);
+      } finally { if (page) await closePage(page); }
     });
     const inventory = () => limit(async () => {
-      const page = await newPage();
+      let page, phase = "open";
+      emit("inventory", "running", phase);
       try {
+        page = await newPage();
+        phase = "navigate"; emit("inventory", "running", phase);
         await page.goto(CROPSTER_ORIGIN + sourcePaths.prices, { waitUntil: "domcontentloaded", timeout: remaining() });
+        phase = "ready"; emit("inventory", "running", phase);
         await waitForView(page, "prices");
+        phase = "pagination"; emit("inventory", "running", phase);
         const snapshots = [];
         let previousFirst = null;
         for (let pageNumber = 1; pageNumber <= 20; pageNumber++) {
@@ -208,16 +264,33 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
           snapshots.push(snapshot);
           const coverage = snapshot.text.match(/(\d+)\s*-\s*(\d+)\s+of\s+(\d+)\s+items/i);
           if (!coverage) throw new ReaderError("CROPSTER_TABLE_INCOMPLETE");
-          if (Number(coverage[2]) >= Number(coverage[3])) return parseInventory(snapshots, sydneyDate(now()));
+          if (Number(coverage[2]) >= Number(coverage[3])) {
+            phase = "parse"; emit("inventory", "running", phase);
+            const result = parseInventory(snapshots, sydneyDate(now()));
+            emit("inventory", "complete", phase);
+            return result;
+          }
           previousFirst = await page.locator("table tbody tr").filter({ hasText: /\[PG-\d+\]/ }).first().innerText();
         }
         throw new ReaderError("CROPSTER_TABLE_INCOMPLETE");
-      } finally { await closePage(page); }
+      } catch (error) {
+        const code = browserFailureCode(error);
+        emit("inventory", "failed", phase, code);
+        throw error instanceof ReaderError ? error : new ReaderError(code);
+      } finally { if (page) await closePage(page); }
     });
 
-    try {
+    const capture = async () => { try {
+      emit("authenticate", "running", "open");
       const login = await newPage();
-      try { await signIn(login, CROPSTER_ORIGIN + sourcePaths.production, remaining()); }
+      try {
+        emit("authenticate", "running", "navigate");
+        await signIn(login, CROPSTER_ORIGIN + sourcePaths.production, remaining());
+        emit("authenticate", "complete", "ready");
+      } catch (error) {
+        emit("authenticate", "failed", "ready", browserFailureCode(error));
+        throw error;
+      }
       finally { await closePage(login); }
       const lab = {}, labObservedAt = {}, labWarnings = [], labSources = [];
       let rawLoss = null, recipeCapture = null, freshDefinitions = null, previous = null, previousProductionObservedAt = null;
@@ -245,20 +318,20 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
           const blends = await allRequired([[ids.libertyBlend, "Liberty"], [ids.rhythmBlend, "Rhythm"]].map(([id, signature]) => {
             const path = "/app/roast/blend-profiles/" + id;
             labSources.push(CROPSTER_ORIGIN + path);
-            return view(path, "blend", snapshot => parseBlend(snapshot, id, signature));
+            return view(path, "blend", snapshot => parseBlend(snapshot, id, signature), "lab_blend_" + signature.toLowerCase());
           }));
           freshDefinitions = { rows: blends };
           const groupIds = [...new Set([...blends.flatMap(blend => blend.components.map(component => component.profileGroupId)), ids.ohGroup, ids.decafGroup])];
-          const groups = await allRequired(groupIds.map(id => {
+          const groups = await allRequired(groupIds.map((id, index) => {
             const path = "/app/roast/profile-groups/" + id;
             labSources.push(CROPSTER_ORIGIN + path);
-            return view(path, "group", snapshot => parseProfileGroup(snapshot, id));
+            return view(path, "group", snapshot => parseProfileGroup(snapshot, id), "lab_profile_group_" + index);
           }));
           const profileUrls = [...new Set(groups.flatMap(group => group.profileUrls))];
           if (profileUrls.length > 80) throw new ReaderError("CROPSTER_RECIPE_UNAVAILABLE");
-          const profileInputs = new Map(await allRequired(profileUrls.map(async url => {
+          const profileInputs = new Map(await allRequired(profileUrls.map(async (url, index) => {
             labSources.push(url);
-            const input = await view(new URL(url).pathname, "profile", parseProfileInputs);
+            const input = await view(new URL(url).pathname, "profile", parseProfileInputs, "lab_profile_input_" + index);
             return [url, input];
           })));
           return { blends, groups, profileInputs, decafGroupId: ids.decafGroup, ohGroupId: ids.ohGroup };
@@ -270,21 +343,21 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
             const outputPath = `/apps/roast/production-report/profile-group?${query}`;
             const costPath = `/apps/roast/production-report/inventory?${query}`;
             previousSources.push(CROPSTER_ORIGIN + outputPath, CROPSTER_ORIGIN + costPath);
-            const outputCapture = await view(outputPath, "production", snapshot => ({ snapshot, output: parseRoastedOutput(snapshot, previousRange) }));
+            const outputCapture = await view(outputPath, "production", snapshot => ({ snapshot, output: parseRoastedOutput(snapshot, previousRange) }), "previous_output");
             const costSnapshot = await view(costPath, "production", snapshot => {
               parseRoastedCost(snapshot, previousRange, outputCapture.output.greenKg);
               return snapshot;
-            });
+            }, "previous_cost");
             previous = previousProduction(outputCapture.snapshot, costSnapshot, previousRange);
             previousProductionObservedAt = now().toISOString();
           }, "PREVIOUS_PRODUCTION_UNAVAILABLE"),
           optionalLab(async () => {
-            const captured = await allRequired(months.map(month => view(allLocationPath("inventory", month), "production", snapshot => parseMonthlyUse(snapshot, month))));
+            const captured = await allRequired(months.map((month, index) => view(allLocationPath("inventory", month), "production", snapshot => parseMonthlyUse(snapshot, month), "lab_consumption_month_" + index)));
             lab.use = { months: captured };
             labObservedAt.use = now().toISOString();
           }, "LAB_USE_UNAVAILABLE"),
           optionalLab(async () => {
-            rawLoss = await view(allLocationPath("profile-group", period), "production", snapshot => parseLoss(snapshot, period));
+            rawLoss = await view(allLocationPath("profile-group", period), "production", snapshot => parseLoss(snapshot, period), "lab_loss");
             labObservedAt.loss = now().toISOString();
           }, "LAB_LOSS_UNAVAILABLE"),
           optionalLab(async () => {
@@ -295,7 +368,7 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
       }
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
-          const before = await view(sourcePaths.production, "production", snapshot => parseRoastedOutput(snapshot, range));
+          const before = await view(sourcePaths.production, "production", snapshot => parseRoastedOutput(snapshot, range), "weekly_production_before");
           const warnings = [...labWarnings];
           let greenObservedAt = null, mondayObservedAt = null, inventoryObservedAt = null;
           const optional = async (run, warning) => {
@@ -310,15 +383,15 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
           const mondayQuery = new URLSearchParams({ dateFrom: weekStart, dateTo: weekStart, locations: "lK0G1" });
           const mondayPath = `/apps/roast/production-report/profile-group?${mondayQuery}`;
           const [days, roastedValue, inventoryRecord, green, monday] = await allRequired([
-            allRequired(sourcePaths.schedule.map((path, index) => view(path, "schedule", snapshot => parseScheduleDay(snapshot, addDays(range.weekStart, index), range)))),
-            optional(() => view(sourcePaths.cost, "production", snapshot => parseRoastedCost(snapshot, range, before.greenKg)), "ROASTED_COST_UNAVAILABLE"),
+            allRequired(sourcePaths.schedule.map((path, index) => view(path, "schedule", snapshot => parseScheduleDay(snapshot, addDays(range.weekStart, index), range), "weekly_schedule_" + index))),
+            optional(() => view(sourcePaths.cost, "production", snapshot => parseRoastedCost(snapshot, range, before.greenKg), "weekly_roasted_cost"), "ROASTED_COST_UNAVAILABLE"),
             optional(async () => { const record = await inventory(); inventoryObservedAt = now().toISOString(); return record; }, "INVENTORY_UNAVAILABLE"),
-            optional(async () => { const record = await view(sourcePaths.green, "stock", snapshot => parseMarrickvilleStock(snapshot, sydneyDate(now()))); greenObservedAt = now().toISOString(); return record; }, "GREEN_STOCK_UNAVAILABLE"),
-            optional(async () => { const record = await view(mondayPath, "production", snapshot => parseRoastedOutput(snapshot, mondayRange)); mondayObservedAt = now().toISOString(); return record; }, "MONDAY_ROASTED_UNAVAILABLE"),
+            optional(async () => { const record = await view(sourcePaths.green, "stock", snapshot => parseMarrickvilleStock(snapshot, sydneyDate(now())), "green_marrickville"); greenObservedAt = now().toISOString(); return record; }, "GREEN_STOCK_UNAVAILABLE"),
+            optional(async () => { const record = await view(mondayPath, "production", snapshot => parseRoastedOutput(snapshot, mondayRange), "weekly_monday"); mondayObservedAt = now().toISOString(); return record; }, "MONDAY_ROASTED_UNAVAILABLE"),
           ]);
-          const verifiedDays = await allRequired(sourcePaths.schedule.map((path, index) => view(path, "schedule", snapshot => parseScheduleDay(snapshot, addDays(range.weekStart, index), range))));
+          const verifiedDays = await allRequired(sourcePaths.schedule.map((path, index) => view(path, "schedule", snapshot => parseScheduleDay(snapshot, addDays(range.weekStart, index), range), "weekly_schedule_verify_" + index)));
           if (!sameSchedules(days, verifiedDays)) throw new ReaderError("CROPSTER_CHANGED_DURING_READ");
-          const after = await view(sourcePaths.production, "production", snapshot => parseRoastedOutput(snapshot, range));
+          const after = await view(sourcePaths.production, "production", snapshot => parseRoastedOutput(snapshot, range), "weekly_production_after");
           if (!sameProduction(before, after)) throw new ReaderError("CROPSTER_CHANGED_DURING_READ");
           weekRange(weekStart, now());
           const scheduled = aggregateSchedule(days, inventoryRecord ? inventoryPrices(inventoryRecord) : null, range);
@@ -339,8 +412,7 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
           }
           return {
             schemaVersion: "1.0", sourceSystem: "cropster-website", location: "Marrickville",
-            weekStart, periodEnd: range.periodEnd, observedAt: now().toISOString(),
-            productionObservedAt: now().toISOString(),
+            weekStart, periodEnd: range.periodEnd, ...captureTimestamps(now),
             mondayRoastedKg: monday?.roastedKg ?? null, mondayObservedAt, greenObservedAt,
             production: { roastedKg: after.roastedKg, scheduledKg: scheduled.scheduledKg, roastedValue, scheduledValue: scheduled.scheduledValue },
             green,
@@ -350,7 +422,10 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
             warnings,
           };
         } catch (error) {
-          if (error instanceof ReaderError && error.code === "CROPSTER_CHANGED_DURING_READ" && attempt === 0 && deadline - now().getTime() > 18000) continue;
+          if (error instanceof ReaderError && error.code === "CROPSTER_CHANGED_DURING_READ" && attempt === 0 && deadline - now().getTime() > 18000) {
+            emit("capture", "retry", "parse", error.code);
+            continue;
+          }
           throw error;
         }
       }
@@ -360,10 +435,17 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
       if (error instanceof ReaderError) throw error;
       throw new ReaderError("CROPSTER_UNAVAILABLE");
     } finally {
-      clearTimeout(timeout);
       await Promise.allSettled([...jobPages].map(closePage));
-      if (timedOut) await reset();
-    }
+      if (abortError) await reset(jobGeneration);
+    } };
+    try {
+      const result = await Promise.race([capture(), aborted]);
+      emit("capture", "complete", "parse");
+      return result;
+    } catch (error) {
+      emit("capture", "failed", timedOut ? "deadline" : "parse", browserFailureCode(error));
+      throw error;
+    } finally { clearTimeout(timeout); }
   }
 
   return { read, close: async () => { closed = true; await reset(); } };

@@ -1,6 +1,7 @@
-/** Read-only Warehouse expenses bridge. The spreadsheet and range are fixed. */
+/** Read-only Warehouse expenses bridge. The spreadsheet and bounded range are fixed. */
 const EXPENSES_SPREADSHEET = '1rhkE1pU7kKoBSX1j9V_OpeAyGNzWIpCgcYxWYvwmpik';
-const EXPENSES_RANGE = "'Sheet1'!A1:W36";
+const EXPENSES_RANGE = "'Sheet1'!A1:DZ36";
+const EXPENSES_COLUMNS = 130;
 
 function bridgeJson_(value) {
   return ContentService.createTextOutput(JSON.stringify(value)).setMimeType(ContentService.MimeType.JSON);
@@ -50,30 +51,47 @@ function doPost(event) {
   }
 }
 
-function expenseGrid_(renderOption) {
-  const response = Sheets.Spreadsheets.Values.batchGet(EXPENSES_SPREADSHEET, {
-    ranges: [EXPENSES_RANGE],
-    majorDimension: 'ROWS',
-    valueRenderOption: renderOption,
-    dateTimeRenderOption: 'SERIAL_NUMBER',
-  });
-  const grid = response.valueRanges && response.valueRanges[0] && response.valueRanges[0].values || [];
-  // Fix the response shape to the reviewed A1:W36 range, including blank cells.
-  return Array.from({ length: 36 }, function (_, row) {
-    return Array.from({ length: 23 }, function (_, column) {
-      const value = grid[row] && grid[row][column];
-      return value === undefined || value === null ? '' : value;
-    });
-  });
+function expenseCellValue_(cell) {
+  const value = cell && cell.effectiveValue;
+  if (!value) return '';
+  if (Object.prototype.hasOwnProperty.call(value, 'numberValue')) return value.numberValue;
+  if (Object.prototype.hasOwnProperty.call(value, 'stringValue')) return value.stringValue;
+  if (Object.prototype.hasOwnProperty.call(value, 'boolValue')) return value.boolValue ? 'TRUE' : 'FALSE';
+  // A source formula error must remain an error, never a missing/zero amount.
+  if (value.errorValue) return cell.formattedValue || '#' + (value.errorValue.type || 'ERROR');
+  return '';
 }
 
 function readExpenses_() {
+  // One API response supplies displayed date headers and effective amounts from
+  // the same source snapshot. Copying/appending weekly columns cannot mix two reads.
+  const response = Sheets.Spreadsheets.get(EXPENSES_SPREADSHEET, {
+    ranges: [EXPENSES_RANGE],
+    fields: 'sheets(properties(title),data(startRow,startColumn,rowData(values(formattedValue,effectiveValue))))',
+  });
+  const sheets = response.sheets || [];
+  if (sheets.length !== 1 || !sheets[0].properties || sheets[0].properties.title !== 'Sheet1') throw new Error('The expense source is invalid.');
+  const data = sheets[0].data || [];
+  if (data.length !== 1 || (data[0].startRow || 0) !== 0 || (data[0].startColumn || 0) !== 0) throw new Error('The expense range is invalid.');
+  const rows = data[0].rowData || [];
+  if (rows.length > 36 || rows.some(function (row) { return (row.values || []).length > EXPENSES_COLUMNS; })) throw new Error('The expense range is too large.');
+  const numericValues = Array.from({ length: 36 }, function (_, row) {
+    return Array.from({ length: EXPENSES_COLUMNS }, function (_, column) {
+      return expenseCellValue_(rows[row] && rows[row].values && rows[row].values[column]);
+    });
+  });
+  const values = Array.from({ length: 36 }, function (_, row) {
+    return Array.from({ length: EXPENSES_COLUMNS }, function (_, column) {
+      const cell = rows[row] && rows[row].values && rows[row].values[column];
+      return cell && typeof cell.formattedValue === 'string' ? cell.formattedValue : numericValues[row][column];
+    });
+  });
   return {
     ok: true,
     sheetName: 'Sheet1',
-    range: 'A1:W36',
-    values: expenseGrid_('FORMATTED_VALUE'),
-    numericValues: expenseGrid_('UNFORMATTED_VALUE'),
+    range: 'A1:DZ36',
+    values: values,
+    numericValues: numericValues,
     asOf: new Date().toISOString(),
   };
 }

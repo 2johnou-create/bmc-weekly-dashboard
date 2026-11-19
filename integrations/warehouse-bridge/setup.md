@@ -1,6 +1,6 @@
 # Warehouse Expenses connection
 
-This read-only bridge connects the private Warehouse expenses sheet to the dashboard. It reads the fixed spreadsheet `1rhkE1pU7kKoBSX1j9V_OpeAyGNzWIpCgcYxWYvwmpik` and range `Sheet1!A1:W36`.
+This read-only bridge connects the private Warehouse expenses sheet to the dashboard. It reads the fixed spreadsheet `1rhkE1pU7kKoBSX1j9V_OpeAyGNzWIpCgcYxWYvwmpik` and bounded range `Sheet1!A1:DZ36` (130 columns). Appended weekly columns within that range are selected automatically by their displayed Monday date. Existing saved `A1:W36` readings remain supported. The source must continue to keep expense labels in column B, items in rows 3–35 and the total in row 36.
 
 The manifest requests only `spreadsheets.readonly`. The deploying Google account must already have access to that spreadsheet. The code fixes the source and range, and the endpoint requires the server-held `BRIDGE_TOKEN`. Keep that token in Script Properties and hosting secrets.
 
@@ -23,6 +23,8 @@ Keep the existing deployment URL when updating the bridge. This bridge has no em
 
 ## Data contract
 
-The dashboard server makes an HTTPS JSON POST with `action: "expenses"` and adds the private token. The response returns `sheetName`, `range`, `asOf`, and two 36-row by 23-column grids with formatted and numeric values. Displayed Monday headers choose the reporting week, so malformed underlying date serials cannot change the selected week.
+The dashboard server makes an HTTPS JSON POST with `action: "expenses"` and adds the private token. A single `Sheets.Spreadsheets.get` response supplies each cell’s `formattedValue` and `effectiveValue`, keeping headers and amounts in one snapshot. The bridge returns `sheetName`, `range`, `asOf`, and two padded 36-row by 130-column grids. Empty cells stay empty, explicit numeric zero stays zero, and formula errors remain errors.
+
+Displayed Monday headers choose the reporting week, so malformed underlying date serials cannot change the selected week. Full year dates such as `4/1/2027` disambiguate year transitions; a yearless header is used only when the source has one unambiguous explicit year. A week beyond DZ or missing a unique verified header remains unavailable rather than reusing another week. The worker preserves its 128 KB response bound and reports correct source cells after column Z, such as `AA36`.
 
 The monthly Green Buy forecast uses the separate live Roasting Forward Planning workbook, second tab `ORDER PLAN`, column I. That public feed does not require this private bridge.

@@ -109,7 +109,8 @@ test("a failed website read retains the original saved values and capture time w
 
 test("a missing green observation retains its own original date while production updates", async () => {
   const db = localDatabase(":memory:"); await seed(db);
-  const reading = fixture(); reading.green = null;
+  const reading = fixture(); reading.green = null; reading.greenObservedAt = null;
+  reading.mondayRoastedKg = null; reading.mondayObservedAt = null;
   try {
     const result = await readCurrentCropster(options(db, async () => Response.json(reply(reading))));
     assert.equal(result.production.scheduledKg, 40);

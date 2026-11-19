@@ -32,6 +32,8 @@ Delivery requires a successful JSON `{ok:true}` acknowledgement. There are at mo
 
 The job deadline defaults to 180 seconds. The dashboard should use short HTTP requests to start/poll, show progress and then reload its cards after a completed job is validated and persisted. There is no completed-result TTL cache hiding a new manual refresh.
 
+Job status can include `progress:{stage,state,phase,at,code?}` and up to eight recent `failures` with the same shape. Stages are fixed report labels and bounded indices; phases identify navigation, readiness, pagination, parsing or cleanup. The corresponding `reader_stage` logs contain no page text, URLs, credentials or operational quantities. A capture deadline rejects independently of a hung browser operation. Queued work is cancelled, page/browser cleanup is bounded, and late operations from an older browser generation cannot replace a newer session.
+
 For compatibility, `POST /v1/weekly` accepts `{weekStart,scope?:"weekly"|"all"}` and waits for a capture. Prefer the job protocol for full captures. Only the current Sydney Monday is accepted. Historical dashboard archives are independent and must not be replaced with a current reading.
 
 `GET /health` is public and returns process health only. It does not sign in, run a browser, disclose source data or prove that a source capture succeeded.
@@ -56,6 +58,8 @@ The dashboard must validate every field and the reporting week before saving. Pe
 Weekly production reads Monday–Friday at Marrickville. Five dated daily schedules include unpublished, published and synced outstanding batches. All schedule status filters are explicitly enabled and verified. Completed schedule rows have blank `To roast` cells and add no pending output. The all-time `Total scheduled` figure is never used.
 
 Partly completed schedules use remaining green weight relative to the same period's total and estimated output. Post-roast blends apply the ratio separately to each component; a component cannot borrow another component's roast loss. Remaining input must reconcile with the daily lot summary. Scheduled value uses those exact lot inputs and their current Cropster AUD/kg prices. Green input is never displayed as roasted output.
+
+An empty day can use Cropster's table-free layout. Zero is accepted only when the exact requested day/Marrickville and all five checked status filters are verified, there are no tables, and all three explicit panels say “No coffees scheduled”, “No profiles scheduled” and “No green lots scheduled”. A partial empty layout, wrong scope or unchecked status is not zero.
 
 The reader checks completed kilograms, green kilograms and batch count immediately before/after the weekly capture, and rechecks all five daily pending summaries for plan edits during the read. A changing production/schedule report or mismatched cost-report green weight triggers one bounded retry, then a safe failure instead of a mixed-time total. Historical Lab reports are read first, so the weekly cycle runs at the end of a full job.
 

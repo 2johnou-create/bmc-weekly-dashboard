@@ -131,6 +131,21 @@ test("five complete weekdays include Friday, exclude Saturday, and preserve a re
   assert.deepEqual(aggregateSchedule(zero, null, range), { scheduledKg: 0, scheduledValue: 0 });
 });
 
+test("the explicit empty-schedule layout is zero only after verifying date, location and every status filter", () => {
+  const empty = schedule("2026-02-05");
+  empty.tables = [];
+  empty.text = "5 February 2026, in Marrickville Scheduled coffees No coffees scheduled Summary per profile No profiles scheduled Summary per green lot No green lots scheduled";
+  assert.deepEqual(parseScheduleDay(empty, "2026-02-05", range), { day: "2026-02-05", greenKg: 0, roastedKg: 0, lotKg: new Map() });
+  for (const marker of ["No coffees scheduled", "No profiles scheduled", "No green lots scheduled"]) {
+    assert.throws(() => parseScheduleDay({ ...empty, text: empty.text.replace(marker, "") }, "2026-02-05", range), /CROPSTER_TABLE_UNRECOGNISED/);
+  }
+  assert.throws(() => parseScheduleDay({ ...empty, text: empty.text.replace("Marrickville", "Other warehouse") }, "2026-02-05", range), /CROPSTER_SCOPE_UNVERIFIED/);
+  assert.throws(() => parseScheduleDay({ ...empty, text: empty.text.replace("5 February", "4 February") }, "2026-02-05", range), /CROPSTER_SCOPE_UNVERIFIED/);
+  assert.throws(() => parseScheduleDay({ ...empty, scheduleStatuses: { ...empty.scheduleStatuses, synced: false } }, "2026-02-05", range), /CROPSTER_SCOPE_UNVERIFIED/);
+  assert.throws(() => parseScheduleDay({ ...empty, scheduleStatuses: undefined }, "2026-02-05", range), /CROPSTER_SCOPE_UNVERIFIED/);
+  assert.throws(() => parseScheduleDay({ ...empty, tables: [{ headers: [], rows: [] }] }, "2026-02-05", range), /CROPSTER_TABLE_UNRECOGNISED/);
+});
+
 function inventoryPage(start, end, total, rows) {
   return {
     url: "https://c-sar.cropster.com/app/inventory/overview",

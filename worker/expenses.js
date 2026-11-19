@@ -5,6 +5,9 @@ import { mondayOf, sydneyDate } from "./metrics.js";
 const SOURCE_URL = "https://docs.google.com/spreadsheets/d/1rhkE1pU7kKoBSX1j9V_OpeAyGNzWIpCgcYxWYvwmpik/edit#gid=0";
 const MAX_AMOUNT = 100_000_000;
 const MAX_PAYLOAD_BYTES = 128_000;
+const MAX_COLUMNS = 130;
+const LEGACY_RANGE = 'A1:W36';
+const CURRENT_RANGE = 'A1:DZ36';
 const STALE_MS = 24 * 60 * 60 * 1000;
 const controlCharacters = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/;
 
@@ -30,10 +33,29 @@ function empty(weekStart, note, sourceCell = null) {
   };
 }
 
-function grid(value) {
-  return Array.isArray(value) && value.length === 36 && value.every(row => Array.isArray(row) && row.length <= 23
+function grid(value, maximumColumns = MAX_COLUMNS) {
+  return Array.isArray(value) && value.length === 36 && value.every(row => Array.isArray(row) && row.length <= maximumColumns
     && row.every(cell => cell === null || typeof cell === "number" && Number.isFinite(cell)
       || typeof cell === "string" && cell.length <= 512 && !controlCharacters.test(cell)));
+}
+
+function validRange(value) {
+  return value === undefined || value === LEGACY_RANGE || value === CURRENT_RANGE;
+}
+
+function sourceRange(source) {
+  if (source.range !== undefined) return source.range;
+  return [...source.values, ...(source.numericValues ?? [])].some(row => row.length > 23) ? CURRENT_RANGE : LEGACY_RANGE;
+}
+
+function columnLabel(index) {
+  let number = index + 1, label = '';
+  while (number > 0) {
+    number--;
+    label = String.fromCharCode(65 + number % 26) + label;
+    number = Math.floor(number / 26);
+  }
+  return label;
 }
 
 function headerParts(value) {
@@ -78,13 +100,14 @@ function amount(value) {
 export function parseExpenses(source, week) {
   const weekStart = monday(week);
   if (!weekStart) return empty(null, "Select a valid Monday for expenses.");
-  if (!source || !grid(source.values) || source.numericValues !== undefined && !grid(source.numericValues)
-    || source.sheetName !== undefined && source.sheetName !== "Sheet1" || source.range !== undefined && source.range !== "A1:W36") {
+  const width = source?.range === LEGACY_RANGE ? 23 : MAX_COLUMNS;
+  if (!source || !grid(source.values, width) || source.numericValues !== undefined && !grid(source.numericValues, width)
+    || source.sheetName !== undefined && source.sheetName !== "Sheet1" || !validRange(source.range)) {
     return empty(weekStart, "The expense sheet reading is incomplete or invalid.");
   }
   const column = columnForWeek(source.values[0], weekStart);
   if (column < 0) return empty(weekStart, "The expense sheet has no unique displayed date for the selected Monday.");
-  const sourceCell = `${String.fromCharCode(65 + column)}36`;
+  const sourceCell = `${columnLabel(column)}36`;
   try {
     const items = [];
     let sum = 0;
@@ -122,9 +145,9 @@ export function validateExpenseReading(input, now = new Date()) {
   if (input.weekStart > mondayOf(sydneyDate(now))) throw new HttpError("Choose this week or an earlier Monday for the expense reading.");
   const asOf = input.asOf === undefined ? now.toISOString() : timestamp(input.asOf);
   if (!asOf || Date.parse(asOf) > now.getTime() + 5 * 60_000) throw new HttpError("Enter a valid expense reading time.");
-  const payload = { weekStart: input.weekStart, values: input.values, asOf, sheetName: "Sheet1", range: "A1:W36" };
+  const payload = { weekStart: input.weekStart, values: input.values, asOf, sheetName: "Sheet1", range: sourceRange(input) };
   if (input.numericValues !== undefined) payload.numericValues = input.numericValues;
-  if (input.sheetName !== undefined && input.sheetName !== "Sheet1" || input.range !== undefined && input.range !== "A1:W36"
+  if (input.sheetName !== undefined && input.sheetName !== "Sheet1" || !validRange(input.range)
     || new TextEncoder().encode(JSON.stringify(payload)).length > MAX_PAYLOAD_BYTES
     || parseExpenses(payload, input.weekStart).status === "unavailable") throw new HttpError("The reading needs a matching Monday and a verified expense total.");
   return payload;

@@ -139,6 +139,11 @@ export function parseScheduleDay(snapshot, day, range) {
     .format(new Date(day + "T12:00:00Z"));
   if (!compact(snapshot.text).includes(sourceDay + ", in Marrickville")
     && !compact(snapshot.text).includes(sourceDay + " , in Marrickville")) throw new ReaderError("CROPSTER_SCOPE_UNVERIFIED");
+  const text = compact(snapshot.text);
+  const empty = ["No coffees scheduled", "No profiles scheduled", "No green lots scheduled"].every(marker => text.includes(marker));
+  if (empty && Array.isArray(snapshot.tables) && snapshot.tables.length === 0) {
+    return { day, greenKg: 0, roastedKg: 0, lotKg: new Map() };
+  }
   const displayedDay = `${Number(day.slice(5, 7))}/${Number(day.slice(8, 10))}/${day.slice(0, 4)}`;
   const remainingHeader = `${displayedDay} to roast`, totalHeader = `${displayedDay} total`, outputHeader = `${displayedDay} estimated output`;
   const coffees = tableWith(snapshot, ["profile", "type", remainingHeader, totalHeader, outputHeader]);

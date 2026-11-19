@@ -1,0 +1,15 @@
+const stagePattern = /^(?:capture|authenticate|browser_launch|browser_context|cleanup|inventory|previous_output|previous_cost|lab_loss|lab_blend_(?:liberty|rhythm)|lab_profile_group_\d{1,2}|lab_profile_input_\d{1,2}|lab_consumption_month_[0-2]|weekly_production_(?:before|after)|weekly_schedule(?:_verify)?_[0-4]|weekly_roasted_cost|green_marrickville|weekly_monday)$/;
+const states = new Set(["running", "complete", "failed", "retry"]);
+const phases = new Set(["open", "navigate", "ready", "filters", "pagination", "parse", "close", "deadline"]);
+
+export function safeProgress(input, now = () => new Date()) {
+  if (!input || !stagePattern.test(input.stage) || !states.has(input.state) || !phases.has(input.phase)) return null;
+  const event = { stage: input.stage, state: input.state, phase: input.phase, at: now().toISOString() };
+  if (typeof input.code === "string" && /^[A-Z][A-Z0-9_]{0,79}$/.test(input.code)) event.code = input.code;
+  return event;
+}
+
+export function browserFailureCode(error) {
+  if (error?.name === "ReaderError" && /^[A-Z][A-Z0-9_]{0,79}$/.test(error.code)) return error.code;
+  return error?.name === "TimeoutError" ? "CROPSTER_VIEW_TIMEOUT" : "CROPSTER_UNAVAILABLE";
+}

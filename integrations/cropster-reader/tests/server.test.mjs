@@ -125,3 +125,24 @@ test("async history has a bounded ten-job capacity and evicts oldest completed j
   assert.equal((await handler(statusRequest(ids[1]))).status, 200);
   assert.equal((await handler(statusRequest(ids[10]))).status, 200);
 });
+
+test("job diagnostics expose only fixed stage metadata and safe errors", async () => {
+  const logs = [];
+  let finish;
+  const handler = createHandler({ token, now, log: event => logs.push(event), reader: { async read(week, { onProgress }) {
+    onProgress({ stage: "https://secret.example.test/password", state: "failed", phase: "parse", code: "BAD" });
+    onProgress({ stage: "weekly_monday", state: "failed", phase: "parse", code: "CROPSTER_TABLE_INCOMPLETE", pageBody: "private figures and password", url: "https://private.test" });
+    await new Promise(resolve => { finish = resolve; });
+    throw new ReaderError("CROPSTER_TABLE_INCOMPLETE");
+  } } });
+  const job = await (await handler(syncRequest())).json();
+  await new Promise(resolve => setImmediate(resolve));
+  const state = await (await handler(statusRequest(job.jobId))).json();
+  assert.equal(state.progress.stage, "weekly_monday");
+  assert.equal(state.progress.code, "CROPSTER_TABLE_INCOMPLETE");
+  assert.equal(state.failures.length, 1);
+  assert.doesNotMatch(JSON.stringify([state, logs]), /secret\.example|private figures|password|private\.test|pageBody/);
+  finish();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal((await (await handler(statusRequest(job.jobId))).json()).status, "failed");
+});
