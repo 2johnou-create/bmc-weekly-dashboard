@@ -204,14 +204,81 @@ export function parseScheduleWeek(snapshot, range) {
   }
   const prefix = `${from}-${through}`;
   const pending = parsePendingTables(snapshot, `${prefix} to roast`, `${prefix} total`, `${prefix} estimated output`);
-  return { weekStart: range.weekStart, periodEnd: range.periodEnd, ...pending };
+  let profileAssignments = null;
+  try { profileAssignments = parseCalendarAssignments(snapshot, range, prefix); }
+  catch (error) { if (!(error instanceof ReaderError)) throw error; }
+  return { weekStart: range.weekStart, periodEnd: range.periodEnd, ...pending, profileAssignments };
+}
+
+function parseCalendarAssignments(snapshot, range, prefix) {
+  const summary = tableWith(snapshot, ["profile", "# of batches", `${prefix} used`, `${prefix} total`]);
+  const lots = tableWith(snapshot, ["lot", `${prefix} total`]);
+  if (!completeTable(snapshot, summary) || !completeTable(snapshot, lots)) throw new ReaderError("CROPSTER_TABLE_INCOMPLETE");
+  const label = value => compact(value).replace(/\s+\(\d+(?:\.\d+)?\)(?:\s*-\s*[^()]+)?$/, "");
+  const profiles = new Map();
+  for (let index = 0; index < summary.rows.length; index++) {
+    const row = summary.rows[index], name = label(row[summary.index("profile")]);
+    const found = links({ links: summary.rowLinks?.[index] || [] }, /^\/apps\/roast\/profiles\/[A-Za-z0-9_-]+$/);
+    const urls = new Set(found.filter(link => compact(link.text) === compact(row[summary.index("profile")])).map(link => new URL(link.href, CROPSTER_ORIGIN).href));
+    const kg = kilograms(row[summary.index(`${prefix} total`)]);
+    const batches = trim(row[summary.index("# of batches")]).split(/\n+/).map(line => compact(line).match(new RegExp("^(\\d+)\\s*x\\s*" + numeric + "\\s*kg$"))?.[1]);
+    if (!name || profiles.has(name) || urls.size !== 1 || kg === null || batches.some(count => count === undefined)) throw new ReaderError("CROPSTER_RECIPE_UNAVAILABLE");
+    profiles.set(name, { profileUrl: [...urls][0], kg, batchCount: sum(batches.map(Number)), observedKg: 0, observedCount: 0 });
+  }
+  const rows = [], knownLotKg = new Map(), multi = [], observedLots = new Set();
+  for (const machine of snapshot.calendarWeek.rows) {
+    if (!Array.isArray(machine.tiles) || machine.tiles.length !== 7) throw new ReaderError("CROPSTER_RECIPE_UNAVAILABLE");
+    for (let day = 0; day < 7; day++) {
+      const tiles = machine.tiles[day];
+      if (!Array.isArray(tiles) || tiles.length !== machine.batchCounts[day]) throw new ReaderError("CROPSTER_RECIPE_UNAVAILABLE");
+      for (const tile of tiles) {
+        if (day > 4 || typeof tile !== "string" || tile.length > 3000) throw new ReaderError("CROPSTER_RECIPE_UNAVAILABLE");
+        const lines = trim(tile).split(/\n+/).map(compact).filter(Boolean);
+        const first = lines.shift()?.match(new RegExp("^(.+)\\s+(" + numeric + ")\\s*kg$"));
+        const profileName = first?.[1], greenKg = first ? number(first[2]) : null, profile = profiles.get(profileName);
+        if (!profile || !(greenKg > 0) || !lines.length || lines.length > 20) throw new ReaderError("CROPSTER_RECIPE_UNAVAILABLE");
+        const lotNames = lines.map(line => {
+          const match = line.match(/^\[(PG-\d+)\]\s+(.+)$/);
+          if (!match || match[2].length > 160) throw new ReaderError("CROPSTER_RECIPE_UNAVAILABLE");
+          return { lotId: match[1], name: match[2] };
+        });
+        const lotIds = lotNames.map(lot => lot.lotId);
+        if (new Set(lotIds).size !== lotIds.length) throw new ReaderError("CROPSTER_RECIPE_UNAVAILABLE");
+        lotIds.forEach(id => observedLots.add(id));
+        profile.observedKg += greenKg;
+        profile.observedCount++;
+        const row = { date: addDays(range.weekStart, day), machineId: machine.machineId, profileName, profileUrl: profile.profileUrl, greenKg, lotIds, lotNames };
+        rows.push(row);
+        if (lotIds.length === 1) knownLotKg.set(lotIds[0], (knownLotKg.get(lotIds[0]) || 0) + greenKg);
+        else multi.push(row);
+      }
+    }
+  }
+  if (!rows.length || [...profiles.values()].some(profile => !close(profile.kg, profile.observedKg) || profile.batchCount !== profile.observedCount)) throw new ReaderError("CROPSTER_RECIPE_UNAVAILABLE");
+  const reportedLots = new Map();
+  for (const row of lots.rows) {
+    const id = trim(row[lots.index("lot")]).match(/^\[(PG-\d+)\](?:\s|$)/)?.[1], kg = kilograms(row[lots.index(`${prefix} total`)]);
+    if (!id || kg === null || reportedLots.has(id)) throw new ReaderError("CROPSTER_RECIPE_UNAVAILABLE");
+    reportedLots.set(id, kg);
+  }
+  if (reportedLots.size !== observedLots.size || [...observedLots].some(id => !reportedLots.has(id))
+    || !close(sum(rows.map(row => row.greenKg)), sum([...reportedLots.values()]))) throw new ReaderError("CROPSTER_RECIPE_UNAVAILABLE");
+  let residualKg = 0;
+  for (const [id, kg] of reportedLots) {
+    const residual = kg - (knownLotKg.get(id) || 0);
+    if (residual < -0.06 || residual > 0.06 && !multi.some(row => row.lotIds.includes(id))) throw new ReaderError("CROPSTER_RECIPE_UNAVAILABLE");
+    residualKg += residual;
+  }
+  if (!close(residualKg, sum(multi.map(row => row.greenKg)))) throw new ReaderError("CROPSTER_RECIPE_UNAVAILABLE");
+  return { complete: true, weekStart: range.weekStart, periodEnd: range.periodEnd, rows };
 }
 
 export function sameScheduleReads(first, second) {
   if (first.kind !== second.kind) return false;
   if (first.kind === "days") return sameSchedules(first.days, second.days);
   if (first.kind !== "week" || first.week.weekStart !== second.week.weekStart || first.week.periodEnd !== second.week.periodEnd) return false;
-  return sameSchedules([{ ...first.week, day: first.week.weekStart }], [{ ...second.week, day: second.week.weekStart }]);
+  const assigned = week => week.profileAssignments?.complete ? JSON.stringify(week.profileAssignments.rows.map(row => [row.date, row.machineId, row.profileUrl, row.greenKg, [...row.lotIds].sort()]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))) : null;
+  return sameSchedules([{ ...first.week, day: first.week.weekStart }], [{ ...second.week, day: second.week.weekStart }]) && assigned(first.week) === assigned(second.week);
 }
 
 export function parseInventory(snapshots, asOf) {
@@ -456,7 +523,44 @@ export function parseProfileGroup(snapshot, id) {
   const defaultName = text.match(/Default profile\s+(.+?)\s+Minimum stock level/)?.[1];
   const defaults = new Set(found.filter(link => compact(link.text) === defaultName).map(link => new URL(link.href, CROPSTER_ORIGIN).href));
   if (!profiles.length || profiles.length > 40 || defaults.size !== 1) throw new ReaderError("CROPSTER_RECIPE_UNAVAILABLE");
-  return { id, name: detailName(snapshot), profileUrls: profiles, defaultProfileUrl: [...defaults][0] };
+  const green = parseGroupGreenInventory(snapshot);
+  return { id, name: detailName(snapshot), profileUrls: profiles, defaultProfileUrl: [...defaults][0], lotIds: green.lotIds, lotNames: green.lotNames };
+}
+
+function parseGroupGreenInventory(snapshot) {
+  // The current profile-group UI renders this as a widget rather than an HTML
+  // table. Its bounded section includes zero-stock alternatives and terminates
+  // at the explicit View-green-lots link; template inputs are a separate source.
+  const sections = [...trim(snapshot.text).matchAll(/Green inventory\s*([\s\S]*?)View green lots/g)];
+  if (sections.length !== 1) throw new ReaderError("CROPSTER_RECIPE_UNAVAILABLE");
+  const section = sections[0][1], text = compact(section);
+  const totalText = text.match(new RegExp("^(" + numeric + ")\\s*kg(?:\\s|$)"))?.[1];
+  const totalKg = totalText === undefined ? null : number(totalText);
+  const related = links(snapshot, /^\/apps\/lots\/[A-Za-z0-9_-]+$/);
+  const rows = [...section.matchAll(/\[(PG-\d+)\]([^[]*)/g)].map(match => {
+    const lotId = match[1], tail = match[2];
+    const name = trim(tail.split(/[\t\n]/)[0]);
+    const weights = [...tail.matchAll(new RegExp("(" + numeric + ")\\s*kg\\b", "g"))];
+    const kg = weights.length === 1 ? number(weights[0][1]) : null;
+    if (!name || name.length > 160 || kg === null || !related.some(link => compact(link.text) === "[" + lotId + "]")) throw new ReaderError("CROPSTER_RECIPE_UNAVAILABLE");
+    return { lotId, name, kg };
+  });
+  if (totalKg === null || !rows.length || rows.length > 1200 || !close(totalKg, sum(rows.map(row => row.kg)))
+    || /Show more|Load more|\bNext\b|\bPrevious\b|\bPage\s+\d/i.test(text)) throw new ReaderError("CROPSTER_RECIPE_UNAVAILABLE");
+  const pagers = [...text.matchAll(/Show\s+(\d+)\s*-\s*(\d+)\s+of\s+(\d+)/gi)];
+  if (pagers.some(pager => Number(pager[1]) !== 1 || Number(pager[2]) !== rows.length || Number(pager[3]) !== rows.length)) throw new ReaderError("CROPSTER_TABLE_INCOMPLETE");
+  const groupTables = (snapshot.tables || []).filter(table => /^Green inventory$/i.test(trim(table.heading)));
+  const rowIds = new Set(rows.map(row => row.lotId));
+  if (groupTables.some(table => {
+    const tableIds = new Set(table.rows.flatMap(row => row.flatMap(cell => [...trim(cell).matchAll(/\[(PG-\d+)\]/g)].map(match => match[1]))));
+    return !completeTable(snapshot, table) || table.rows.length !== rows.length || tableIds.size !== rowIds.size || [...rowIds].some(id => !tableIds.has(id));
+  })) throw new ReaderError("CROPSTER_TABLE_INCOMPLETE");
+  const names = new Map();
+  for (const row of rows) {
+    if (names.has(row.lotId) && names.get(row.lotId) !== row.name) throw new ReaderError("CROPSTER_RECIPE_UNAVAILABLE");
+    names.set(row.lotId, row.name);
+  }
+  return { lotIds: [...names.keys()], lotNames: [...names].map(([lotId, name]) => ({ lotId, name })) };
 }
 
 export function parseProfileInputs(snapshot) {
@@ -484,32 +588,49 @@ export function sameSchedules(first, second) {
   });
 }
 
-export function assembleRecipes({ blends, groups, profileInputs, inventory, asOf, decafGroupId, ohGroupId, use }) {
+export function assembleRecipes({ blends, groups, profileInputs, inventory, asOf, decafGroupId, ohGroupId, use, scheduleAssignments }) {
   const groupById = new Map(groups.map(group => [group.id, group]));
   const lotNames = new Map();
   const alias = row => lotNames.set(JSON.stringify([row.lotId, row.name]), { lotId: row.lotId, name: row.name });
   for (const row of inventory.rows) alias(row);
+  for (const group of groups) for (const row of group.lotNames || []) alias(row);
+  const assignments = scheduleAssignments?.complete === true ? scheduleAssignments.rows : null;
+  for (const row of assignments || []) for (const lot of row.lotNames) alias(lot);
   for (const month of use?.months || []) for (const row of month.rows) alias(row);
-  const coffee = groupId => {
+  const prices = inventoryPrices(inventory);
+  const currentCoffee = groupId => {
     const group = groupById.get(groupId), input = group && profileInputs.get(group.defaultProfileUrl);
     if (!input) throw new ReaderError("CROPSTER_RECIPE_UNAVAILABLE");
-    const local = inventory.rows.filter(row => row.location === "Marrickville" && row.kg > 0 && input.lotIds.includes(row.lotId));
-    const eligible = local.length ? local : inventory.rows.filter(row => row.kg > 0 && input.lotIds.includes(row.lotId));
-    const names = new Set(eligible.map(row => row.name));
-    return names.size === 1 ? [...names][0] : null;
+    const observed = assignments?.filter(row => group.profileUrls.includes(row.profileUrl));
+    const latestDate = observed?.length ? observed.map(row => row.date).sort().at(-1) : null;
+    const latest = latestDate ? observed.filter(row => row.date === latestDate) : [];
+    const lotIds = [...new Set(latest.length ? latest.flatMap(row => row.lotIds) : assignments ? input.lotIds : [])].sort();
+    const profileUrls = new Set(latest.map(row => row.profileUrl));
+    const profileUrl = latest.length ? profileUrls.size === 1 ? [...profileUrls][0] : null : assignments ? group.defaultProfileUrl : null;
+    const basis = latest.length ? "current-week-schedule" : "default-profile";
+    const unknown = { coffee: null, currentPricePerKg: null, pricingBasis: "unverified", pricingDate: latestDate || (assignments ? asOf : null), pricingLotIds: lotIds, pricingProfileUrl: profileUrl };
+    if (!assignments || lotIds.length !== 1 || !profileUrl || latest.some(row => row.lotIds.length !== 1)) return unknown;
+    const local = inventory.rows.filter(row => row.location === "Marrickville" && row.kg > 0 && row.lotId === lotIds[0]);
+    const eligible = local.length ? local : inventory.rows.filter(row => row.kg > 0 && row.lotId === lotIds[0]);
+    const names = new Set(eligible.map(row => row.name)), price = prices.get(lotIds[0]);
+    const assignedNames = new Set(latest.flatMap(row => row.lotNames.map(lot => lot.name)));
+    if (names.size !== 1 || price == null || assignedNames.size > 1 || assignedNames.size === 1 && !assignedNames.has([...names][0])) return unknown;
+    return { ...unknown, coffee: [...names][0], currentPricePerKg: price, pricingBasis: basis };
   };
   const oh = groupById.get(ohGroupId);
   if (!oh || !groupById.has(decafGroupId)) throw new ReaderError("CROPSTER_RECIPE_UNAVAILABLE");
-  const rows = [...blends.map(blend => ({ ...blend, components: blend.components.map(component => ({ ...component, coffee: coffee(component.profileGroupId) })) })),
-    { name: oh.name, signature: "OH", components: [{ name: oh.name, percent: 100, profileGroupId: ohGroupId, coffee: coffee(ohGroupId) }] }];
+  const rows = [...blends.map(blend => ({ ...blend, components: blend.components.map(component => ({ ...component, ...currentCoffee(component.profileGroupId) })) })),
+    { name: oh.name, signature: "OH", components: [{ name: oh.name, percent: 100, profileGroupId: ohGroupId, ...currentCoffee(ohGroupId) }] }];
   const runoutProfiles = groups.map(group => {
-    const lotIds = [...new Set(group.profileUrls.flatMap(url => {
+    if (!Array.isArray(group.lotIds) || !group.lotIds.length) throw new ReaderError("CROPSTER_RECIPE_UNAVAILABLE");
+    const actualLotIds = (assignments || []).filter(row => group.profileUrls.includes(row.profileUrl)).flatMap(row => row.lotIds);
+    const lotIds = [...new Set([...group.lotIds, ...actualLotIds, ...group.profileUrls.flatMap(url => {
       const inputs = profileInputs.get(url);
       if (!inputs) throw new ReaderError("CROPSTER_RECIPE_UNAVAILABLE");
       return inputs.lotIds;
-    }))];
+    })])];
     if (lotIds.length > 1200) throw new ReaderError("CROPSTER_RECIPE_UNAVAILABLE");
-    return { id: group.id, name: group.name, lotIds, linksComplete: true, note: "Current Cropster website profile inputs only. Planned contract replacements and historical assignments require their separately verified provenance." };
+    return { id: group.id, name: group.name, lotIds, linksComplete: true, note: "Current Cropster website profile-group green inventory, verified current-week calendar assignments and template inputs only. Planned contract replacements and historical assignments require their separately verified provenance." };
   });
   if (lotNames.size > 2400) throw new ReaderError("CROPSTER_RECIPE_UNAVAILABLE");
   return { asOf, rows, runoutProfiles, runoutLotNames: [...lotNames.values()], decafProfileGroupId: decafGroupId };

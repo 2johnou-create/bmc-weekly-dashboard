@@ -87,6 +87,7 @@ export function captureDocument() {
           cellCount: cells.length, summary: text(cells[0]),
           batchCounts: days.map(cell => cell.querySelectorAll(".calendar__item__main").length),
           emptyCells: days.map(cell => text(cell) === ""),
+          tiles: days.map(cell => Array.from(cell.querySelectorAll(".calendar__item__main")).map(text)),
         };
       }),
     },

@@ -91,6 +91,7 @@ export const roasteryLabPage = String.raw`<!doctype html>
     .table th, .table td { padding: .44rem .45rem .44rem 0; border-bottom: 1px solid var(--line); vertical-align: top; }
     .table thead th { font-size: .76rem; line-height: 1.25; color: var(--muted); }
     .table tbody th { font-weight: 650; overflow-wrap: anywhere; }
+    .price-provenance { display: block; margin-top: .2rem; color: var(--muted); font-size: .8rem; font-weight: 400; line-height: 1.35; }
     .table th:not(:first-child), .table td { text-align: right; font-variant-numeric: tabular-nums; }
     .table td { white-space: nowrap; }
     .table th:last-child, .table td:last-child { padding-inline-end: 0; }
@@ -730,6 +731,11 @@ export const roasteryLabPage = String.raw`<!doctype html>
     function openItems(container) {
       return new Set([...container.querySelectorAll('details[open] > summary')].map(summary => summary.textContent));
     }
+    function priceNameWithProvenance(label, provenance) {
+      const cell = node('span', label);
+      if (provenance) cell.append(node('small', provenance, 'price-provenance'));
+      return cell;
+    }
     function renderPrices(prices = {}) {
       const highlights = prices.highlights || [];
       const other = prices.others || [];
@@ -740,7 +746,7 @@ export const roasteryLabPage = String.raw`<!doctype html>
       const lossFrom = dateText(prices.lossFrom);
       const lossAsOf = dateText(prices.lossAsOf);
       const lossWindow = lossFrom && lossAsOf ? lossFrom + ' to ' + lossAsOf : lossAsOf && 'through ' + lossAsOf;
-      const dates = [priceAsOf && 'Green prices as of ' + priceAsOf + '.', lossWindow && 'Roast loss ' + lossWindow + '.'].filter(Boolean).join(' ');
+      const dates = [priceAsOf && 'Inventory prices as of ' + priceAsOf + '.', lossWindow && 'Roast loss ' + lossWindow + '.'].filter(Boolean).join(' ');
       el('priceDates').textContent = dates;
       el('priceDates').hidden = !dates;
       el('lossNote').textContent = prices.lossNote || '';
@@ -752,6 +758,7 @@ export const roasteryLabPage = String.raw`<!doctype html>
         const highlight = node('span', undefined, 'leader');
         const loss = Number.isFinite(item.lossPercent) ? percent(item.lossPercent) + ' loss' : 'Loss ' + missing;
         highlight.append(node('span', name, 'leader-name'), figure, node('span', loss, 'leader-loss caption'));
+        if (item.pricingNote && item.pricingNote !== 'Current-week schedule price') highlight.append(node('span', item.pricingNote, 'leader-loss caption'));
         lead.push(highlight);
         const blend = node('details');
         blend.open = open.has(name);
@@ -767,7 +774,7 @@ export const roasteryLabPage = String.raw`<!doctype html>
           }
           table.createTBody().append(...item.components.map(component => {
             const label = component.coffee && component.coffee !== component.name ? component.name + ' (' + component.coffee + ')' : component.name;
-            return makeTableRow(label, percent(component.percent), format(component.pricePerKg, currency));
+            return makeTableRow(priceNameWithProvenance(label, component.pricingNote || 'Saved recipe price; current-week lot not verified.'), percent(component.percent), format(component.pricePerKg, currency));
           }));
           blend.append(table);
         } else {
@@ -782,7 +789,7 @@ export const roasteryLabPage = String.raw`<!doctype html>
       el('blendHighlights').replaceChildren(...lead);
       el('blendDetails').replaceChildren(...details);
       el('otherPriceRows').replaceChildren(...other.map(item => makeTableRow(
-        item.name, format(item.pricePerKg, currency), percent(item.lossPercent))));
+        priceNameWithProvenance(item.name, item.pricingNote), format(item.pricePerKg, currency), percent(item.lossPercent))));
       el('otherPrices').hidden = !other.length;
       el('otherPricesEmpty').hidden = Boolean(other.length);
     }

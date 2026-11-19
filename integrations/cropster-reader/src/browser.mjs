@@ -261,7 +261,7 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
         catch (error) {
           if (!(error instanceof ReaderError) || error.code === "CROPSTER_CHANGED_DURING_READ") throw error;
           phase = "pagination"; emit(stage, "running", phase);
-          if (["production", "stock", "schedule", "legacyPrices"].includes(kind)) await expandLegacy(page);
+          if (["production", "stock", "schedule", "legacyPrices", "group"].includes(kind)) await expandLegacy(page);
           phase = "parse"; emit(stage, "running", phase);
           result = await snapshotUntilParsed(page, parse);
         }
@@ -353,7 +353,7 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
       }
       finally { await closePage(login); }
       const lab = {}, labObservedAt = {}, labWarnings = [], labSources = [];
-      let rawLoss = null, recipeCapture = null, freshDefinitions = null, previous = null, previousProductionObservedAt = null;
+      let rawLoss = null, recipeCapture = null, freshDefinitions = null, previous = null, previousProductionObservedAt = null, scheduleAssignments = null;
       const previousSources = [];
       const optionalLab = async (run, warning) => {
         try { return await run(); }
@@ -431,8 +431,10 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
             recipeCapture = await readRecipes();
             labObservedAt.recipes = now().toISOString();
             if (!lab.inventory) throw new ReaderError("CROPSTER_INVENTORY_UNAVAILABLE");
-            lab.recipes = assembleRecipes({ ...recipeCapture, inventory: lab.inventory, asOf: sydneyDate(now()), use: lab.use });
+            lab.recipes = assembleRecipes({ ...recipeCapture, inventory: lab.inventory, asOf: sydneyDate(now()), use: lab.use, scheduleAssignments });
             if (lab.recipes.rows.some(recipe => recipe.components.some(component => component.coffee === null))) labWarnings.push("CURRENT_RECIPE_COFFEE_AMBIGUOUS");
+            if (lab.recipes.rows.some(recipe => recipe.components.some(component => component.pricingBasis === "unverified"))) labWarnings.push("CURRENT_RECIPE_PRICE_UNVERIFIED");
+            if (lab.recipes.rows.some(recipe => recipe.components.some(component => component.pricingBasis === "default-profile"))) labWarnings.push("CURRENT_RECIPE_DEFAULT_PROFILE_FALLBACK");
           }, "LAB_RECIPES_UNAVAILABLE");
         if (!lab.recipes) delete labObservedAt.recipes;
         await publish();
@@ -477,6 +479,7 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
           if (!sameScheduleReads(schedules, verifiedSchedules)) throw new ReaderError("CROPSTER_CHANGED_DURING_READ");
           const after = await view(sourcePaths.production, "production", snapshot => parseRoastedOutput(snapshot, range), "weekly_production_after");
           if (!sameProduction(before, after)) throw new ReaderError("CROPSTER_CHANGED_DURING_READ");
+          scheduleAssignments = schedules.kind === "week" ? schedules.week.profileAssignments : null;
           weekRange(weekStart, now());
           const scheduled = aggregateScheduleRead(schedules, inventoryRecord ? inventoryPrices(inventoryRecord) : null, range);
           if (scheduled.scheduledValue === null && !warnings.includes("SCHEDULED_COST_UNAVAILABLE")) warnings.push("SCHEDULED_COST_UNAVAILABLE");

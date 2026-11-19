@@ -809,14 +809,15 @@ export const warehousePage = String.raw`<!doctype html>
         const row = node("div", void 0, "price-row");
         const name = node("span", item.name, "price-name");
         name.append(node("small", "Average roast loss " + percent(item.lossPercent)));
+        if (item.pricingNote && item.pricingNote !== "Current-week schedule price") name.append(node("small", item.pricingNote));
         row.append(name, node("strong", money(item.pricePerKg, true) + " / kg"));
         leaders.append(row);
       }
       const recipes = node("div");
       for (const item of prices.highlights || []) {
-        recipes.append(disclosure(item.name + " recipe", item.components?.length ? table(["Ingredient", "Share", "AUD/kg"], item.components.map((row) => [row.coffee && row.coffee !== row.name ? row.name + " (" + row.coffee + ")" : row.name, percent(row.percent), money(row.pricePerKg, true)]), item.name + " recipe") : empty("No verified recipe recorded."), Number.isFinite(item.lossBatchCount) ? note(num(item.lossBatchCount) + " recorded roast batches.") : null));
+        recipes.append(disclosure(item.name + " recipe", item.components?.length ? table(["Ingredient", "Share", "AUD/kg", "Price basis"], item.components.map((row) => [row.coffee && row.coffee !== row.name ? row.name + " (" + row.coffee + ")" : row.name, percent(row.percent), money(row.pricePerKg, true), row.pricingNote || "Saved recipe price; current-week lot not verified."]), item.name + " recipe") : empty("No verified recipe recorded."), Number.isFinite(item.lossBatchCount) ? note(num(item.lossBatchCount) + " recorded roast batches.") : null));
       }
-      const other = table(["Coffee", "AUD/kg", "Loss"], (prices.others || []).map((row) => [row.name, money(row.pricePerKg, true), percent(row.lossPercent)]), "Other coffee prices and roast loss");
+      const other = table(["Coffee", "AUD/kg", "Loss", "Price basis"], (prices.others || []).map((row) => [row.name, money(row.pricePerKg, true), percent(row.lossPercent), row.pricingNote || "Inventory price"]), "Other coffee prices and roast loss");
       const releases = node("ul", void 0, "simple-list");
       for (const row of settings.releases || []) releases.append(node("li", row.name + (date(row.date) ? " · " + date(row.date) : "")));
       return [

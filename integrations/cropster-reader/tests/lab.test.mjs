@@ -66,28 +66,58 @@ test("blend parser uses displayed percentages and exact linked groups", () => {
 
 test("associated profiles are deduplicated and complete current input IDs retain their source", () => {
   const snapshot = {
-    url: "https://c-sar.cropster.com/app/roast/profile-groups/GroupA", text: "Details Component A Archive General Information Default profile Roast A Minimum stock level 50 kg Associated profiles Green inventory",
-    links: [{ text: "Roast A", href: "/apps/roast/profiles/ProfileA" }, { text: "Roast A", href: "/apps/roast/profiles/ProfileA" }],
+    url: "https://c-sar.cropster.com/app/roast/profile-groups/GroupA", text: "Details Component A Archive General Information Default profile Roast A Minimum stock level 50 kg Associated profiles Green inventory\n30 kg\n[PG-0901] Example A\tMarrickville\t10 kg\n[PG-0903] Example C\tSupplier\t20 kg\nView green lots\nRoasted past 30 days",
+    links: [{ text: "Roast A", href: "/apps/roast/profiles/ProfileA" }, { text: "Roast A", href: "/apps/roast/profiles/ProfileA" }, { text: "[PG-0901]", href: "/apps/lots/LotA" }, { text: "[PG-0903]", href: "/apps/lots/LotC" }],
   };
   const group = parseProfileGroup(snapshot, "GroupA");
   assert.equal(group.profileUrls.length, 1);
   assert.equal(group.defaultProfileUrl, "https://c-sar.cropster.com/apps/roast/profiles/ProfileA");
+  assert.deepEqual(group.lotIds, ["PG-0901", "PG-0903"]);
+  assert.deepEqual(group.lotNames, [{ lotId: "PG-0901", name: "Example A" }, { lotId: "PG-0903", name: "Example C" }]);
+  assert.throws(() => parseProfileGroup({ ...snapshot, text: snapshot.text.replace("View green lots", "Show 1 - 2 of 3\nView green lots") }, "GroupA"), /CROPSTER_TABLE_INCOMPLETE/);
+  assert.throws(() => parseProfileGroup({ ...snapshot, text: snapshot.text.replace("30 kg\n[PG", "31 kg\n[PG") }, "GroupA"), /CROPSTER_RECIPE_UNAVAILABLE/);
+  assert.throws(() => parseProfileGroup({ ...snapshot, tables: [{ heading: "Green inventory", rows: [["Example A"]], pagination: "Show 1 - 1 of 3" }] }, "GroupA"), /CROPSTER_TABLE_INCOMPLETE/);
+  assert.throws(() => parseProfileGroup({ ...snapshot, tables: [{ heading: "Green inventory", rows: [["[PG-0901] Example A"]], pagination: "Show 1 - 1 of 1" }] }, "GroupA"), /CROPSTER_TABLE_INCOMPLETE/);
   const inputs = table(["", "Blend %", "Lot", "Green weight"], [["", "100%", "[PG-0901] Example A", "10 kg"], ["", "100%", "[PG-0902] Example B", "20 kg"]], [], [[{ text: "[PG-0901]", href: "/apps/lots/PositionA" }], [{ text: "[PG-0902]", href: "/apps/lots/PositionB" }]]);
   inputs.heading = "Components / Green lots";
   assert.deepEqual(parseProfileInputs({ url: group.defaultProfileUrl, text: "Components / Green lots", tables: [inputs], links: [{ text: "[PG-0999] unrelated history", href: "/apps/lots/Unrelated" }] }), { lotIds: ["PG-0901", "PG-0902"] });
 });
 
 test("raw recipes neither insert planned replacements nor guess one of multiple local coffees", () => {
-  const group = id => ({ id, name: "Group " + id, profileUrls: ["https://c-sar.cropster.com/apps/roast/profiles/" + id], defaultProfileUrl: "https://c-sar.cropster.com/apps/roast/profiles/" + id });
+  const group = id => ({ id, name: "Group " + id, profileUrls: ["https://c-sar.cropster.com/apps/roast/profiles/" + id], defaultProfileUrl: "https://c-sar.cropster.com/apps/roast/profiles/" + id, lotIds: ["PG-0901", "PG-0903"], lotNames: [{ lotId: "PG-0903", name: "Current group alternative C" }] });
   const groups = [group("A"), group("OH"), group("Decaf")];
   const profileInputs = new Map(groups.map(item => [item.defaultProfileUrl, { lotIds: item.id === "A" ? ["PG-0901", "PG-0902"] : ["PG-0901"] }]));
   const parsed = assembleRecipes({
     blends: [{ name: "Example Blend", signature: "Liberty", components: [{ name: "Group A", profileGroupId: "A", percent: 100 }] }],
     groups, profileInputs, inventory: { rows: [{ lotId: "PG-0901", name: "Coffee A", location: "Marrickville", kg: 10 }, { lotId: "PG-0902", name: "Coffee B", location: "Marrickville", kg: 10 }] },
     asOf: "2026-02-05", ohGroupId: "OH", decafGroupId: "Decaf",
+    scheduleAssignments: { complete: true, rows: [] },
   });
   assert.equal(parsed.rows[0].components[0].coffee, null);
-  assert.deepEqual(parsed.runoutProfiles[0].lotIds, ["PG-0901", "PG-0902"]);
+  assert.deepEqual(parsed.runoutProfiles[0].lotIds, ["PG-0901", "PG-0903", "PG-0902"]);
+  assert.ok(parsed.runoutLotNames.some(row => row.lotId === "PG-0903" && row.name === "Current group alternative C"));
   assert.equal(parsed.runoutProfiles[0].linksComplete, true);
   assert.match(parsed.runoutProfiles[0].note, /Planned contract replacements/);
+});
+
+test("runout keeps zero-stock alternatives and templates while a proved empty week permits labelled default pricing", () => {
+  const url = id => "https://c-sar.cropster.com/apps/roast/profiles/" + id;
+  const groups = [
+    { id: "A", name: "Group A", profileUrls: [url("A")], defaultProfileUrl: url("A"), lotIds: ["PG-0901", "PG-0903"], lotNames: [{ lotId: "PG-0903", name: "Current alternative C" }] },
+    { id: "OH", name: "Group OH", profileUrls: [url("OH")], defaultProfileUrl: url("OH"), lotIds: ["PG-0904"], lotNames: [] },
+    { id: "Decaf", name: "Group Decaf", profileUrls: [url("Decaf")], defaultProfileUrl: url("Decaf"), lotIds: ["PG-0905"], lotNames: [] },
+  ];
+  const parsed = assembleRecipes({
+    blends: [{ name: "Example blend", signature: "Liberty", components: [{ name: "Group A", profileGroupId: "A", percent: 100 }] }],
+    groups, profileInputs: new Map([[url("A"), { lotIds: ["PG-0902"] }], [url("OH"), { lotIds: ["PG-0904"] }], [url("Decaf"), { lotIds: ["PG-0905"] }]]),
+    inventory: { rows: [{ lotId: "PG-0902", name: "Template coffee B", location: "Marrickville", kg: 10, pricePerKg: 12 }, { lotId: "PG-0904", name: "OH coffee", location: "Marrickville", kg: 10, pricePerKg: 11 }] },
+    asOf: "2026-02-05", ohGroupId: "OH", decafGroupId: "Decaf",
+    scheduleAssignments: { complete: true, rows: [] },
+  });
+  assert.equal(parsed.rows[0].components[0].coffee, "Template coffee B");
+  assert.equal(parsed.rows[0].components[0].pricingBasis, "default-profile");
+  assert.deepEqual(parsed.runoutProfiles[0].lotIds, ["PG-0901", "PG-0903", "PG-0902"]);
+  assert.ok(parsed.runoutLotNames.some(row => row.lotId === "PG-0903" && row.name === "Current alternative C"));
+  assert.equal(parsed.runoutProfiles[0].plannedLotIds, undefined);
+  assert.equal(parsed.runoutProfiles[0].historicalLotIds, undefined);
 });

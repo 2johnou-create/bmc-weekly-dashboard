@@ -1,5 +1,5 @@
 import { HttpError } from "./auth.js";
-import { sydneyDate, validDate } from "./metrics.js";
+import { addDays, mondayOf, sydneyDate, validDate } from "./metrics.js";
 import { readLabSettings } from "./roastery-lab-settings.js";
 import { buildRunoutPools } from "./profile-runout.js";
 
@@ -10,6 +10,42 @@ const round = (value, digits = 2) => Number(value.toFixed(digits));
 const sum = values => values.reduce((total, value) => total + value, 0);
 const totalIfKnown = values => values.length && values.every(Number.isFinite) ? sum(values) : null;
 const object = value => value !== null && typeof value === "object" && !Array.isArray(value);
+const pricingFields = ["currentPricePerKg", "pricingBasis", "pricingDate", "pricingLotIds", "pricingProfileUrl"];
+const pricingBases = ["current-week-schedule", "default-profile", "unverified"];
+const validPricingLot = value => typeof value === "string" && /^PG-\d+$/.test(value) && value.length <= 160;
+
+function validPricingProfile(value) {
+  if (typeof value !== "string" || value.length > 500) return false;
+  try {
+    const url = new URL(value);
+    return url.href === value && url.origin === "https://c-sar.cropster.com" && !url.username && !url.password &&
+      !url.search && !url.hash && /^\/apps\/roast\/profiles\/[A-Za-z0-9_-]{1,160}$/.test(url.pathname);
+  } catch { return false; }
+}
+
+function validPricingDate(value, basis, asOf, today) {
+  if (!validDate(value) || !validDate(asOf)) return false;
+  const monday = mondayOf(asOf), friday = addDays(monday, 4);
+  if (basis === "current-week-schedule") return value >= monday && value <= friday;
+  return value <= today || basis === "unverified" && value >= monday && value <= friday;
+}
+
+function componentPricing(component, asOf, today) {
+  if (!pricingFields.some(field => Object.hasOwn(component, field))) return {};
+  const pricingBasis = component.pricingBasis;
+  if (!pricingBases.includes(pricingBasis)) fail("Use a valid Cropster component price basis.");
+  const currentPricePerKg = optionalAmount(component.currentPricePerKg, 10_000);
+  const pricingDate = component.pricingDate ?? null;
+  if (pricingDate !== null && !validPricingDate(pricingDate, pricingBasis, asOf, today)) fail("Use the verified Cropster price or current-week schedule date.");
+  const pricingLotIds = component.pricingLotIds ?? [];
+  if (!Array.isArray(pricingLotIds) || pricingLotIds.length > 1_200 || pricingLotIds.some(id => !validPricingLot(id)) ||
+      new Set(pricingLotIds).size !== pricingLotIds.length) fail("Use unique exact Cropster green lot IDs for component pricing.");
+  const pricingProfileUrl = component.pricingProfileUrl ?? null;
+  if (pricingProfileUrl !== null && !validPricingProfile(pricingProfileUrl)) fail("Use the exact Cropster roast profile URL for component pricing.");
+  if (pricingBasis === "unverified" && currentPricePerKg !== null) fail("An unverified component price must remain unknown.");
+  if (currentPricePerKg !== null && (!pricingDate || !pricingLotIds.length || !pricingProfileUrl)) fail("A verified component price needs its lot IDs, date and Cropster profile.");
+  return { currentPricePerKg, pricingBasis, pricingDate, pricingLotIds: [...pricingLotIds], pricingProfileUrl };
+}
 
 function fail(message) {
   throw new HttpError(message);
@@ -85,8 +121,9 @@ function inventory(data, today) {
 }
 
 function recipes(data, today) {
+  const asOf = date(data.asOf, today);
   return {
-    asOf: date(data.asOf, today),
+    asOf,
     decafProfileGroupId: data.decafProfileGroupId == null ? null : identifier(data.decafProfileGroupId),
     runoutProfiles: rows(data.runoutProfiles ?? [], 300, item => {
       if (!Array.isArray(item.lotIds) || item.lotIds.length > 1_200) fail("Record all related Cropster lot IDs for each profile group.");
@@ -110,6 +147,7 @@ function recipes(data, today) {
         coffee: component.coffee == null ? null : name(component.coffee),
         ...(component.profileGroupId == null ? {} : { profileGroupId: identifier(component.profileGroupId) }),
         percent: amount(component.percent, 100),
+        ...componentPricing(component, asOf, today),
       }), row => key(row.name));
       if (!components.length || components.some(component => component.percent === 0) ||
           Math.abs(sum(components.map(component => component.percent)) - 100) > 0.051) {
@@ -212,7 +250,7 @@ function groupStock(stock = {}) {
   return items;
 }
 
-function priceReport(stock, recipeList = {}, measuredLoss = {}) {
+function priceReport(stock, recipeList = {}, measuredLoss = {}, today = sydneyDate()) {
   const lossByName = new Map((measuredLoss.rows ?? []).map(row => [key(row.name), row]));
   const signatureRecipes = new Map();
   const otherRecipes = [];
@@ -229,12 +267,29 @@ function priceReport(stock, recipeList = {}, measuredLoss = {}) {
       lossPercent: observation ? round((1 - observation.roastedKg / observation.greenKg) * 100, 1) : null,
       lossBatchCount: observation?.batches ?? null,
       components,
+      pricingNote: !components.length ? "" : unitPrice === null ? "Current lot price unavailable" :
+        components.some(component => component.pricingBasis === "default-profile") ? "Default profile fallback" :
+        components.some(component => component.pricingBasis === undefined) ? "Saved recipe price" : "Current-week schedule price",
     };
   }
   function blend(label, recipe) {
-    const resolved = (recipe?.components ?? []).map(component => ({
-      ...component, pricePerKg: stock.get(key(component.coffee ?? component.name))?.pricePerKg ?? null,
-    }));
+    const resolved = (recipe?.components ?? []).map(component => {
+      const hasProvenance = pricingFields.some(field => Object.hasOwn(component, field));
+      if (!hasProvenance) return { ...component,
+        pricePerKg: stock.get(key(component.coffee ?? component.name))?.pricePerKg ?? null,
+        pricingNote: "Saved recipe / inventory price; current-week lot not verified.",
+      };
+      const exactPrice = ["current-week-schedule", "default-profile"].includes(component.pricingBasis) &&
+        Number.isFinite(component.currentPricePerKg) && component.currentPricePerKg >= 0 && component.currentPricePerKg <= 10_000 &&
+        validPricingDate(component.pricingDate, component.pricingBasis, recipeList.asOf, today) &&
+        Array.isArray(component.pricingLotIds) && component.pricingLotIds.length > 0 && component.pricingLotIds.every(validPricingLot) &&
+        new Set(component.pricingLotIds).size === component.pricingLotIds.length && validPricingProfile(component.pricingProfileUrl);
+      const pricePerKg = exactPrice ? component.currentPricePerKg : null;
+      const basis = component.pricingBasis === "current-week-schedule" ? "Scheduled lot" :
+        component.pricingBasis === "default-profile" ? "Default profile fallback" : "Unverified lot";
+      const detail = [component.pricingDate, ...(Array.isArray(component.pricingLotIds) ? component.pricingLotIds : [])].filter(Boolean).join(" · ");
+      return { ...component, pricePerKg, pricingNote: basis + (pricePerKg === null ? " price unavailable" : " price") + (detail ? " · " + detail : "") };
+    });
     const contributions = resolved.map(component => component.pricePerKg === null ? null : component.percent / 100 * component.pricePerKg);
     return report(label, recipe?.name ?? label,
       resolved.map(component => ({ ...component, pricePerKg: component.pricePerKg === null ? null : round(component.pricePerKg) })),
@@ -428,7 +483,7 @@ export function mergeGreenCoverage(consumption = {}, prices = {}, contracts = {}
 
 export function labReport(data = {}, today = sydneyDate()) {
   const stock = groupStock(data.inventory);
-  const prices = priceReport(stock, data.recipes, data.loss);
+  const prices = priceReport(stock, data.recipes, data.loss, today);
   prices.priceAsOf = data.inventory?.asOf ?? null;
   const monthsByDate = new Map((data.use?.months ?? []).map(month => [month.month, month]));
   const period = previousMonths(today);
