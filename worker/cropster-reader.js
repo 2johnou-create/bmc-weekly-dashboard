@@ -77,7 +77,7 @@ async function websiteJob(config, env, weekStart, jobId, fetcher) {
   try {
     if (jobId && !validSyncJobId(jobId)) throw new Error();
     const response = await fetcher(config.url + (jobId ? "/" + jobId : ""), {
-      method: jobId ? "GET" : "POST", redirect: "error", cache: "no-store", signal: controller.signal,
+      method: jobId ? "GET" : "POST", redirect: "manual", cache: "no-store", signal: controller.signal,
       headers: { Authorization: `Bearer ${env.CROPSTER_READER_TOKEN}`, "Content-Type": "application/json", Accept: "application/json" },
       ...(jobId ? {} : { body: JSON.stringify({ weekStart }) }),
     });

@@ -235,6 +235,25 @@ test("slow running jobs retain a verified older checkpoint and its actual captur
   } finally { db.close(); }
 });
 
+test("the reader connection uses Worker-supported redirect handling and never follows credentialed redirects", async () => {
+  const db = localDatabase(":memory:"); await seed(db);
+  let calls = 0;
+  const workerFetch = async (_url, init) => {
+    calls++;
+    if (init.redirect === "error") throw new TypeError("Worker runtime does not implement redirect error mode.");
+    assert.equal(init.redirect, "manual");
+    return calls === 1 ? Response.json(reply(fixture())) : new Response(null, { status: 302, headers: { Location: "https://other.invalid/" } });
+  };
+  try {
+    const live = await readCurrentCropster(options(db, workerFetch));
+    assert.equal(live.refresh.fetched, true);
+    const redirected = await readCurrentCropster(options(db, workerFetch));
+    assert.equal(calls, 2);
+    assert.equal(redirected.refresh.fetched, false);
+    assert.equal(redirected.production.asOf, now.toISOString());
+  } finally { db.close(); }
+});
+
 test("invalid bridge configuration and oversized replies do not change saved readings", async () => {
   const db = localDatabase(":memory:"); await seed(db);
   try {

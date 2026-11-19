@@ -50,7 +50,7 @@ async function harness(action) {
     const url = new URL(address); state.addresses.push(url);
     if (url.hostname === readerHost) {
       assert.equal(init.headers.Authorization, `Bearer ${token}`);
-      assert.equal(init.redirect, "error");
+      assert.equal(init.redirect, "manual");
       if (init.method === "POST") {
         assert.equal(url.pathname, "/v1/sync");
         assert.deepEqual(JSON.parse(init.body), { weekStart: week() });
