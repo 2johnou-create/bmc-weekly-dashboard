@@ -6,6 +6,7 @@ import { weekRange } from "./dates.mjs";
 import { createBrowserReader } from "./browser.mjs";
 import { callbackConfiguration, deliverCapture } from "./callback.mjs";
 import { safeProgress } from "./progress.mjs";
+import { cloneCheckpoint } from "./checkpoint.mjs";
 
 const MAX_BODY = 512;
 const json = (body, status = 200, extra = {}) => Response.json(body, {
@@ -18,9 +19,9 @@ export function readConfiguration(env) {
   if (typeof email !== "string" || email.length > 254 || !/^[^\s@]+@[^\s@]+$/.test(email)
     || typeof password !== "string" || !password.length || password.length > 1024
     || typeof token !== "string" || !/^[A-Za-z0-9_-]{32,256}$/.test(token)) throw new ReaderError("CONFIGURATION_REQUIRED");
-  const timeoutMs = Number(env.CROPSTER_READER_TIMEOUT_MS || 600000);
+  const timeoutMs = Number(env.CROPSTER_READER_TIMEOUT_MS || 1800000);
   const port = Number(env.PORT || 10000);
-  if (!Number.isInteger(timeoutMs) || timeoutMs < 10000 || timeoutMs > 600000
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 10000 || timeoutMs > 1800000
     || !Number.isInteger(port) || port < 1 || port > 65535
     || env.CHROMIUM_SANDBOX !== undefined && !["true", "false"].includes(env.CHROMIUM_SANDBOX)) throw new ReaderError("CONFIGURATION_REQUIRED");
   const profileKeys = { libertyBlend: "CROPSTER_LIBERTY_BLEND_ID", rhythmBlend: "CROPSTER_RHYTHM_BLEND_ID", ohGroup: "CROPSTER_OH_GROUP_ID", decafGroup: "CROPSTER_DECAF_GROUP_ID" };
@@ -74,28 +75,33 @@ export function createHandler({ reader, token, now = () => new Date(), log = () 
       jobs.delete(oldest[0]);
     }
   };
-  const run = (weekStart, scope, onProgress) => {
+  const run = (weekStart, scope, onProgress, onCapture) => {
     if (inFlight && (inFlight.weekStart !== weekStart || inFlight.scope !== scope)) throw new ReaderError("CROPSTER_READER_BUSY");
     if (!inFlight) {
-      const job = { weekStart, scope, promise: null, listeners: new Set(), progress: null };
+      const job = { weekStart, scope, promise: null, listeners: new Set(), captureListeners: new Set(), progress: null, result: null };
       job.promise = Promise.resolve().then(() => reader.read(weekStart, { scope, onProgress: input => {
         const progress = safeProgress(input, now);
         if (!progress) return;
         job.progress = progress;
         for (const listener of job.listeners) { try { listener(progress); } catch { /* Diagnostics cannot interrupt a source read. */ } }
+      }, onCapture: async result => {
+        job.result = structuredClone(result);
+        for (const listener of job.captureListeners) await listener(structuredClone(job.result));
       } })).finally(() => {
         if (inFlight === job) inFlight = null;
       });
       inFlight = job;
     }
     if (typeof onProgress === "function") inFlight.listeners.add(onProgress);
+    if (typeof onCapture === "function") inFlight.captureListeners.add(onCapture);
     return inFlight.promise;
   };
   const jobResponse = job => ({
     schemaVersion: "1.0", jobId: job.id, weekStart: job.weekStart, status: job.status,
-    ...(job.status === "complete" ? { result: job.result } : {}),
+    ...(job.result ? { result: job.result } : {}),
     ...(job.status === "failed" ? { error: job.error } : {}),
     ...(job.delivery ? { delivery: job.delivery } : {}),
+    ...(job.checkpointDelivery ? { checkpointDelivery: job.checkpointDelivery } : {}),
     ...(job.progress ? { progress: job.progress } : {}),
     ...(job.failures?.length ? { failures: job.failures } : {}),
   });
@@ -130,18 +136,28 @@ export function createHandler({ reader, token, now = () => new Date(), log = () 
           job.progress = progress;
           if (progress.state === "failed") job.failures = [...(job.failures || []), progress].slice(-8);
           log({ event: "reader_stage", jobId: job.id, ...progress });
+        }, async result => {
+          if (!job || job.status !== "running") return;
+          // This copy is authoritative before delivery begins: the dashboard
+          // callback can GET this same running job without awaiting its promise.
+          job.result = structuredClone(result);
+          const delivery = await deliverCapture(callback, { schemaVersion: "1.0", jobId: job.id, weekStart: job.weekStart, status: "running", result: job.result }, { fetcher, ...(sleep ? { sleep } : {}) });
+          job.checkpointDelivery = delivery;
+          log({ event: "reader_checkpoint", jobId: job.id, status: "running", delivery });
         });
-        job = { id: randomUUID(), weekStart: range.weekStart, status: "running", createdAt: now().getTime(), ...(inFlight?.progress ? { progress: inFlight.progress } : {}) };
+        job = { id: randomUUID(), weekStart: range.weekStart, status: "running", createdAt: now().getTime(), ...(inFlight?.progress ? { progress: inFlight.progress } : {}), ...(inFlight?.result ? { result: structuredClone(inFlight.result) } : {}) };
         jobs.set(job.id, job);
         // Attach failure handling immediately; no rejected background promise can
         // leak raw browser errors or terminate the process.
         void promise.then(async result => {
-          job.status = "complete"; job.result = result; job.finishedAt = now().getTime();
+          job.status = "complete"; job.result = structuredClone(result); job.finishedAt = now().getTime();
           log({ event: "reader_sync", status: "complete", durationMs: job.finishedAt - job.createdAt });
-          job.delivery = await deliverCapture(callback, { schemaVersion: "1.0", jobId: job.id, weekStart: job.weekStart, result }, { fetcher, ...(sleep ? { sleep } : {}) });
-        }, error => {
+          job.delivery = await deliverCapture(callback, { schemaVersion: "1.0", jobId: job.id, weekStart: job.weekStart, status: "complete", result: job.result }, { fetcher, ...(sleep ? { sleep } : {}) });
+        }, async error => {
           job.status = "failed"; job.error = safeFailure(error).code; job.finishedAt = now().getTime();
+          if (job.result) job.result = cloneCheckpoint(job.result, now);
           log({ event: "reader_sync", status: "failed", code: job.error, durationMs: job.finishedAt - job.createdAt });
+          if (job.result) job.delivery = await deliverCapture(callback, { schemaVersion: "1.0", jobId: job.id, weekStart: job.weekStart, status: "failed", result: job.result }, { fetcher, ...(sleep ? { sleep } : {}) });
         }).catch(() => { job.delivery = "failed"; });
         return json(jobResponse(job), 202);
       }
@@ -174,7 +190,7 @@ export function startService(env = process.env) {
       outgoing.end('{"error":{"code":"CROPSTER_UNAVAILABLE"}}');
     }
   });
-  server.requestTimeout = 610000;
+  server.requestTimeout = 1810000;
   server.headersTimeout = 10000;
   server.listen(configuration.port, "0.0.0.0", () => process.stdout.write('{"event":"reader_listening"}\n'));
   let closing = false;

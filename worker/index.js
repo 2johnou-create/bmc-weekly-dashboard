@@ -5,7 +5,7 @@ import { warehousePage } from "./warehouse-ui.js";
 import { collectWarehouse } from "./warehouse-report.js";
 import { collectWeeklyReport, readDispatchStatus } from "./weekly-report.js";
 import { addDays, collectDashboard, dashboardWeek, fetchSourceJson, SOURCE_ORIGINS, sydneyDate } from "./metrics.js";
-import { readCurrentCropster, validSyncJobId, ingestCropsterSync } from "./cropster-reader.js";
+import { readCurrentCropster, validSyncJobId, ingestCropsterSync, verifyCropsterJob } from "./cropster-reader.js";
 import { sourceSyncSummary, saveSourceSyncLog, readSourceSyncLog, mergeSourceSyncSummary } from "./source-sync.js";
 import { saveCropsterGreenStock, saveCropsterReading } from "./cropster.js";
 import { saveCropsterFriday } from "./cropster-friday.js";
@@ -106,7 +106,7 @@ async function finishSourceSync(env, session, cropsterResult, week, jobId, now) 
 async function roasteryReport(env, { fresh = false, jobId = null, syncWebsite = fresh } = {}) {
   const now = new Date();
   const week = dashboardWeek(undefined, now);
-  const cropster = await readCurrentCropster({ env, weekStart: week.start, followingWeekStart: addDays(week.start, 7), now, fresh: syncWebsite, jobId });
+  const cropster = await readCurrentCropster({ env, weekStart: week.start, followingWeekStart: addDays(week.start, 7), now, fresh: syncWebsite || Boolean(jobId), jobId });
   const [data, coffeeC, purchases] = await Promise.all([
     readRoasteryLab(env.DB, now), readCoffeeC({ now, fresh }), readPurchases({ now, fresh }),
   ]);
@@ -170,25 +170,52 @@ export default {
         await requireCropsterWriter(request, env);
         const input = await jsonInput(request, { ...labCropsterBody, maximum: 350_000 });
         if (!input || typeof input !== "object" || Array.isArray(input) || input.schemaVersion !== "1.0" ||
-          !validSyncJobId(input.jobId) || Object.keys(input).some(key => !["schemaVersion", "jobId", "weekStart", "result"].includes(key))) throw new HttpError("Enter a valid source observation.");
+          !validSyncJobId(input.jobId) || Object.keys(input).some(key => !["schemaVersion", "jobId", "weekStart", "result", "status"].includes(key)) ||
+          input.status !== undefined && !["running", "complete", "failed"].includes(input.status)) throw new HttpError("Enter a valid source observation.");
         const now = new Date();
         const week = dashboardWeek(input.weekStart, now);
         if (!week.isCurrent || input.weekStart !== week.start) throw new HttpError("Source observations must use the current Sydney week.");
-        const readings = await ingestCropsterSync({ env, weekStart: week.start, jobId: input.jobId, input: input.result, now });
-        if (!readings.refresh.fetched) throw new HttpError("The source observation could not be saved.", 503);
+        if (!input.result || input.result.weekStart !== week.start || input.result.periodEnd !== addDays(week.start, 4) ||
+          input.result.sourceSystem !== "cropster-website" || input.result.location !== "Marrickville") throw new HttpError("Enter a valid current-week source observation.");
+        const previous = await readSourceSyncLog(env.DB, input.jobId, week.start);
+        if (input.status === "running" && ["complete", "failed"].includes(previous?.jobStatus)) return json({ ok: true, status: previous.status });
+        // New checkpoint deliveries are cross-checked against the reader's actual
+        // job. A later checkpoint wins over an older delivery still in flight.
+        const verified = input.status === undefined ? { status: "complete", result: input.result } :
+          await verifyCropsterJob({ env, weekStart: week.start, jobId: input.jobId });
+        const readings = await ingestCropsterSync({ env, weekStart: week.start, jobId: input.jobId, input: verified.result, status: verified.status, now });
+        if (!readings.refresh.accepted) throw new HttpError("The source observation could not be saved.", 503);
+        if (verified.status !== "complete") {
+          const lab = await readRoasteryLab(env.DB, now);
+          const summary = sourceSyncSummary({ weekly: { generatedAt: now.toISOString(), cropsterRefresh: readings.refresh,
+            metrics: { production: readings.production, green: readings.green } },
+            lab: { ...lab, purchases: {}, coffeeC: {} } });
+          summary.sources = summary.sources.filter(source => ["production", "monday", "previous-production", "green"].includes(source.id) || source.id.startsWith("lab-"));
+          summary.status = "partial";
+          summary.jobStatus = verified.status;
+          summary.message = verified.status === "running" ? "Verified Cropster sections saved. Remaining reports are updating in the background." :
+            "The background update stopped. Verified sections were saved with their actual capture times.";
+          await saveSourceSyncLog(env.DB, input.jobId, week.start, summary, now);
+          return json({ ok: true, status: "partial" });
+        }
         // The server finishes source work even when the visitor has closed the page.
-        // Stock Take and Dispatch remain live authorized reads when a dashboard opens.
-        const [demand, priorDemand, expenses, purchases, coffeeC, lab] = await Promise.all([
+        // Stock Take remains a visitor-authorized read. Dispatch also supports
+        // its dedicated server read token, so its feed can be rechecked here.
+        const [demand, priorDemand, expenses, purchases, coffeeC, lab, dispatch] = await Promise.all([
           readWeeklyDemand(week.start, { fresh: true }), readWeeklyDemand(addDays(week.start, -7), { fresh: true }),
           readExpenses({ db: env.DB, env, week, now, fresh: true }), readPurchases({ now, fresh: true }),
           readCoffeeC({ now, fresh: true }), readRoasteryLab(env.DB, now),
+          readDispatchStatus({ weekStart: week.start, env, now }),
         ]);
-        const summary = sourceSyncSummary({ weekly: { generatedAt: now.toISOString(), cropsterRefresh: readings.refresh, metrics: {} }, lab: { ...lab, purchases, coffeeC } });
+        const summary = sourceSyncSummary({ weekly: { generatedAt: now.toISOString(), cropsterRefresh: readings.refresh,
+          metrics: { production: readings.production, green: readings.green, wholesale: dispatch.wholesale } }, lab: { ...lab, purchases, coffeeC } });
+        summary.sources = summary.sources.filter(source => !["demand", "stocktake", "expenses"].includes(source.id));
         summary.jobStatus = "complete";
-        summary.message = summary.status === "complete" ? "Cropster and workbook sources saved. App feeds recheck when the dashboard opens." : summary.message;
         summary.sources.push({ id: "demand", label: "Roast tallies", status: [demand, priorDemand].every(value => value.status === "live") ? "updated" : "failed", asOf: demand.asOf });
         summary.sources.push({ id: "expenses", label: "Warehouse expenses sheet", status: expenses.status === "live" ? "updated" : "failed", asOf: expenses.asOf });
-        if (summary.sources.some(item => item.status !== "updated")) { summary.status = "partial"; summary.message = "Some sources could not update. Saved readings retain their capture times."; }
+        summary.status = summary.sources.every(item => item.status === "updated") ? "complete" : "partial";
+        summary.message = summary.status === "complete" ? "Cropster, Dispatch and workbook sources saved. Stock Take rechecks when the dashboard opens." :
+          "Some sources need attention. Verified readings retain their actual capture times.";
         await saveSourceSyncLog(env.DB, input.jobId, week.start, summary, now);
         return json({ ok: true, status: summary.status });
       }
@@ -207,10 +234,11 @@ export default {
         const jobId = request.method === "GET" ? url.searchParams.get("jobId") : null;
         if (request.method === "GET" && !validSyncJobId(jobId)) throw new HttpError("Choose a valid source sync job.");
         const completed = jobId ? await readSourceSyncLog(env.DB, jobId, week.start) : null;
-        if (completed?.jobStatus && completed.sources.some(item => item.id === "stocktake")) return json({ status: completed.jobStatus, jobId, weekStart: week.start, sourceSync: completed });
+        if (["complete", "failed"].includes(completed?.jobStatus) && completed.sources.some(item => item.id === "stocktake")) return json({ status: completed.jobStatus, jobId, weekStart: week.start, sourceSync: completed });
         const readings = await readCurrentCropster({ env, weekStart: week.start, followingWeekStart: addDays(week.start, 7), now, fresh: true, jobId });
         const policy = readings.refresh;
         if (policy.status === "pending") return json({ status: "running", jobId: policy.jobId, weekStart: week.start, note: policy.note }, 202);
+        if (jobId && policy.status === "failed" && !policy.readerStatus) throw new HttpError("The background update could not be checked. It will be checked again shortly.", 503);
         const sourceSync = await finishSourceSync(env, session, readings, week, policy.jobId || jobId, now);
         return json({ status: policy.status === "refreshed" ? "complete" : policy.status === "not-connected" ? "not-connected" : "failed",
           ...(policy.jobId || jobId ? { jobId: policy.jobId || jobId } : {}), weekStart: week.start, note: policy.note, sourceSync });

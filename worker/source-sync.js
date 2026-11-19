@@ -5,6 +5,7 @@ export function sourceSyncSummary({ weekly, lab, packing, weather }, { historica
   const metrics = weekly?.metrics || {};
   const cropster = weekly?.cropsterRefresh || {};
   const state = success => success ? "updated" : "failed";
+  const metricState = metric => metric?.status === "partial" ? "partial" : state(readable(metric));
   const cropsterState = flag => historical ? "archive" : flag ? "updated" :
     cropster.mode === "saved-readings" ? "not-connected" : cropster.status === "pending" ? "pending" : cropster.status === "saved" ? "saved" : "failed";
   const sources = Object.keys(metrics).length ? [
@@ -15,8 +16,8 @@ export function sourceSyncSummary({ weekly, lab, packing, weather }, { historica
     source("previous-production", "Cropster previous-week comparison", cropsterState(cropster.previousFetched), cropster.previousAsOf || null),
     source("green", "Cropster Marrickville stock", cropsterState(cropster.greenFetched &&
       [metrics.green?.kg, metrics.green?.value].every(Number.isFinite)), metrics.green?.asOf),
-    source("stocktake", "Stock Take inventory", state(readable(metrics.stock)), metrics.stock?.asOf),
-    source("dispatch", "Wholesale dispatch", state(readable(metrics.wholesale)), metrics.wholesale?.asOf),
+    source("stocktake", "Stock Take inventory", metricState(metrics.stock), metrics.stock?.asOf, metrics.stock?.note),
+    source("dispatch", "Wholesale dispatch", metricState(metrics.wholesale), metrics.wholesale?.asOf, metrics.wholesale?.note),
     source("expenses", "Warehouse expenses sheet", metrics.expenses?.status === "live" ? "updated" :
       ["recorded", "stale"].includes(metrics.expenses?.status) ? "not-connected" : "failed", metrics.expenses?.asOf, metrics.expenses?.note),
   ] : [];
@@ -26,20 +27,20 @@ export function sourceSyncSummary({ weekly, lab, packing, weather }, { historica
     for (const part of ["inventory", "recipes", "use", "loss"]) {
       const item = cropster.labParts?.[part];
       sources.push(source("lab-" + part, "Cropster Lab " + ({ inventory: "inventory and prices", recipes: "blend profiles", use: "consumption", loss: "roast loss" })[part],
-        historical ? "archive" : item?.status === "updated" ? "updated" : cropster.mode === "saved-readings" ? "not-connected" : cropster.status === "saved" ? "saved" : "failed",
+        historical ? "archive" : item?.status === "updated" ? "updated" : cropster.mode === "saved-readings" ? "not-connected" : cropster.status === "pending" ? "pending" : cropster.status === "saved" ? "saved" : "failed",
         item?.asOf || lab.source?.partAsOf?.[part] || null));
     }
     sources.push(source("planning", "Green buy, purchases and contracts workbook", state(readable(lab.purchases) && readable(lab.purchases?.contracts) && readable(lab.purchases?.greenForecast)), lab.purchases?.asOf));
     sources.push(source("coffee-c", "Coffee C market quote", state(readable(lab.coffeeC)), lab.coffeeC?.asOf));
     sources.push(source("qa-releases", "QA notes and release plan", state(Boolean(lab.settings) && lab.settings.status !== "unavailable"), lab.settings?.updatedAt));
   }
-  if (packing) sources.push(source("packing", "Stock Take packing rate", state(readable(packing)), packing.asOf));
+  if (packing) sources.push(source("packing", "Stock Take packing rate", metricState(packing), packing.asOf, packing.note));
   if (weather) sources.push(source("weather", "Local weather forecast", state(readable(weather)), weather.asOf));
   return summarizeSources(sources, weekly?.generatedAt || null, historical);
 }
 
 function summarizeSources(sources, checkedAt, historical = false) {
-  const failed = sources.filter(item => ["failed", "not-connected", "pending", "saved"].includes(item.status));
+  const failed = sources.filter(item => ["failed", "partial", "not-connected", "pending", "saved"].includes(item.status));
   const checked = sources.length - failed.length;
   return {
     status: failed.length ? "partial" : "complete",
@@ -63,7 +64,12 @@ export async function saveSourceSyncLog(db, id, weekStart, summary, now = new Da
   try {
     await db.prepare(`INSERT INTO dashboard_source_sync_log (id, week_start, checked_at, status, source_status_json)
       VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET checked_at = excluded.checked_at,
-      status = excluded.status, source_status_json = excluded.source_status_json`)
+      status = excluded.status, source_status_json = excluded.source_status_json
+      WHERE excluded.checked_at >= dashboard_source_sync_log.checked_at
+      AND NOT (COALESCE(json_extract(dashboard_source_sync_log.source_status_json, '$.jobStatus'), '') IN ('complete', 'failed')
+        AND COALESCE(json_extract(excluded.source_status_json, '$.jobStatus'), '') = 'running')
+      AND NOT (COALESCE(json_extract(dashboard_source_sync_log.source_status_json, '$.jobStatus'), '') = 'complete'
+        AND COALESCE(json_extract(excluded.source_status_json, '$.jobStatus'), '') = 'failed')`)
       .bind(id, weekStart, now.getTime(), summary.status, JSON.stringify(summary)).run();
   } catch { /* A diagnostic log cannot discard freshly read source data. */ }
 }

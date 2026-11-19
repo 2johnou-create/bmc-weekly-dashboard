@@ -5,6 +5,7 @@ import { saveLabCropster } from "./roastery-lab.js";
 
 const DEADLINE_MS = 12_000;
 const MAX_BODY = 350_000;
+const MAX_SECTION_AGE = 1_860_000;
 const activeReads = new WeakMap();
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
 const boundedAmount = (value, limit, nullable = false) => nullable && value === null ||
@@ -23,13 +24,13 @@ function connection(env) {
   } catch { return { configured: true, valid: false }; }
 }
 
-export function validateCropsterObservation(input, weekStart, now = new Date()) {
+export function validateCropsterObservation(input, weekStart, now = new Date(), { maximumPublicationAge = 300_000 } = {}) {
   if (!isObject(input) || input.schemaVersion !== "1.0" || input.sourceSystem !== "cropster-website" ||
     input.location !== "Marrickville" || input.weekStart !== weekStart || !validDate(weekStart) ||
     input.periodEnd !== addDays(weekStart, 4) || !isObject(input.production)) throw new Error("Invalid website observation.");
   const observedAt = typeof input.observedAt === "string" ? Date.parse(input.observedAt) : NaN;
   if (!Number.isFinite(observedAt) || !/T.*(?:Z|[+-]\d\d:\d\d)$/.test(input.observedAt) ||
-    observedAt > now.getTime() + 120_000 || observedAt < now.getTime() - 300_000) throw new Error("Invalid source capture time.");
+    observedAt > now.getTime() + 120_000 || observedAt < now.getTime() - maximumPublicationAge) throw new Error("Invalid source capture time.");
   const production = input.production;
   for (const key of ["roastedKg", "scheduledKg"]) {
     if (!boundedAmount(production[key], 1_000_000)) throw new Error("Invalid production weight.");
@@ -50,7 +51,7 @@ export function validateCropsterObservation(input, weekStart, now = new Date()) 
       field === "mondayObservedAt" && input.mondayRoastedKg == null ||
       field === "previousProductionObservedAt" && input.previousProduction == null;
     const time = input[field] === undefined || optionalSection && input[field] === null ? observedAt : Date.parse(input[field]);
-    if (!Number.isFinite(time) || time > observedAt || time < observedAt - 660_000) throw new Error("Invalid section capture time.");
+    if (!Number.isFinite(time) || time > observedAt || time < observedAt - MAX_SECTION_AGE) throw new Error("Invalid section capture time.");
     times[field] = new Date(time);
   }
   let previousProduction = null;
@@ -80,6 +81,7 @@ async function websiteJob(config, env, weekStart, jobId, fetcher) {
       headers: { Authorization: `Bearer ${env.CROPSTER_READER_TOKEN}`, "Content-Type": "application/json", Accept: "application/json" },
       ...(jobId ? {} : { body: JSON.stringify({ weekStart }) }),
     });
+    if (jobId && response.status === 404) { const expired = new Error("The background job has expired."); expired.jobExpired = true; throw expired; }
     if (!response.ok || !response.headers.get("content-type")?.includes("application/json")) throw new Error();
     const length = Number(response.headers.get("content-length"));
     if (length > MAX_BODY) throw new Error();
@@ -145,12 +147,20 @@ async function captureAndSave({ config, env, weekStart, now, fetcher, jobId, sup
   let observation, state;
   try {
     state = suppliedState || await websiteJob(config, env, weekStart, jobId, fetcher);
-    if (state.status === "running") return { status: "pending", fetched: false, greenFetched: false,
+    if (state.status === "running" && !state.result) return { status: "pending", readerStatus: "running", fetched: false, greenFetched: false,
       jobId: state.jobId, weekStart, note: "Cropster website sync is running." };
-    if (state.status === "failed") throw new Error();
-    observation = validateCropsterObservation(state.result, weekStart, now);
+    if (state.status === "failed" && !state.result) return { status: "failed", readerStatus: "failed", fetched: false, greenFetched: false,
+      jobId: state.jobId, weekStart, note: "The Cropster background update stopped. Previous readings retain their capture times." };
+    observation = validateCropsterObservation(state.result, weekStart, now,
+      state.status === "running" ? { maximumPublicationAge: MAX_SECTION_AGE } : {});
   }
-  catch { return { status: "failed", fetched: false, greenFetched: false, note: "Cropster could not be read. Previous readings and their original capture times are shown. Try Refresh again." }; }
+  catch (error) {
+    if (state?.status === "running") return { status: "pending", readerStatus: "running", jobId: state.jobId, weekStart,
+      fetched: false, greenFetched: false, note: "Cropster is still updating. The latest verified readings retain their capture times." };
+    return { status: "failed", ...(state?.status ? { readerStatus: state.status } : error.jobExpired ? { readerStatus: "expired" } : {}),
+      fetched: false, greenFetched: false, note: "Cropster could not be read. Previous readings and their original capture times are shown. Try Refresh again." };
+  }
+  let productionFetched = false, productionAccepted = false;
   try {
     // Update only current-week fields. Comparisons survive even a transient SELECT failure.
     const value = observation.production;
@@ -167,9 +177,11 @@ async function captureAndSave({ config, env, weekStart, now, fetcher, jobId, sup
       VALUES (${columns.map(() => "?").join(", ")}) ON CONFLICT(week_start) DO UPDATE SET ${updates}
       WHERE excluded.recorded_at >= dashboard_cropster_readings.recorded_at RETURNING week_start`)
       .bind(weekStart, ...amounts, observation.productionObservedAt.getTime()).first();
-    if (!saved) throw new Error("Newer reading retained.");
+    productionFetched = Boolean(saved);
+    const retained = saved || await env.DB.prepare("SELECT recorded_at FROM dashboard_cropster_readings WHERE week_start = ?").bind(weekStart).first();
+    productionAccepted = Boolean(saved) || Number(retained?.recorded_at) >= observation.productionObservedAt.getTime();
   } catch {
-    return { status: "failed", fetched: false, greenFetched: false, note: "The fresh Cropster reading could not be saved. The latest saved reading is shown." };
+    // Other independently captured sections can still be newer and valid.
   }
   let greenFetched = false, mondayFetched = false;
   if (observation.green) {
@@ -182,14 +194,14 @@ async function captureAndSave({ config, env, weekStart, now, fetcher, jobId, sup
   }
   const labParts = {};
   for (const part of ["inventory", "recipes", "use", "loss"]) {
-    labParts[part] = { status: "failed", asOf: null };
+    labParts[part] = { status: state.status === "running" ? "pending" : "failed", asOf: null };
     if (!isObject(observation.lab[part])) continue;
     try {
       let report = observation.lab[part];
       if (part === "recipes") report = await mergeRecipeAssignments(env.DB, report, env);
       const partTime = typeof observation.labCapturedAt[part] === "string" ? new Date(observation.labCapturedAt[part]) : observation.observedAt;
       if (!Number.isFinite(partTime.getTime()) || partTime > observation.observedAt ||
-        partTime.getTime() < observation.observedAt.getTime() - 660_000) throw new Error();
+        partTime.getTime() < observation.observedAt.getTime() - MAX_SECTION_AGE) throw new Error();
       await saveLabCropster(env.DB, { [part]: report }, partTime);
       // D1 upserts may retain a newer capture; verify that a usable part survived.
       const stored = await env.DB.prepare("SELECT recorded_at FROM dashboard_roastery_lab_cropster WHERE part = ?").bind(part).first();
@@ -198,13 +210,17 @@ async function captureAndSave({ config, env, weekStart, now, fetcher, jobId, sup
     } catch { /* A failed section cannot replace its verified prior data. */ }
   }
   return {
-    status: "refreshed", fetched: true, greenFetched, mondayFetched, labParts,
-    previousFetched: observation.previousProduction !== null,
-    previousAsOf: observation.previousProduction ? observation.previousProductionObservedAt.toISOString() : null,
+    status: state.status === "running" ? "pending" : state.status === "failed" || !productionAccepted ? "failed" : "refreshed",
+    readerStatus: state.status,
+    accepted: productionAccepted || greenFetched || mondayFetched || Object.values(labParts).some(part => part.status === "updated"),
+    fetched: productionFetched, greenFetched, mondayFetched, labParts,
+    previousFetched: productionFetched && observation.previousProduction !== null,
+    previousAsOf: productionFetched && observation.previousProduction ? observation.previousProductionObservedAt.toISOString() : null,
     jobId: state.jobId, weekStart, productionCapturedAt: observation.productionObservedAt.toISOString(),
     greenCapturedAt: observation.greenObservedAt.toISOString(),
-    note: "Production was read from Cropster’s website and saved." +
-      (greenFetched ? " Marrickville green stock was also updated." : " Green stock was not updated; its original capture time is shown."),
+    note: (productionFetched ? "Verified production was read from Cropster’s website and saved." : "The latest saved production reading was retained.") +
+      (greenFetched ? " Marrickville green stock was also updated." : " Green stock keeps its original capture time.") +
+      (state.status === "running" ? " Remaining Cropster reports are updating in the background." : state.status === "failed" ? " Some reports could not finish; verified sections were retained." : ""),
   };
 }
 
@@ -233,10 +249,17 @@ export async function readCurrentCropster({ env, weekStart, followingWeekStart, 
   return readBackCropster({ env, weekStart, followingWeekStart, now, refresh, configured: config.configured });
 }
 
-export async function ingestCropsterSync({ env, weekStart, jobId, input, now = new Date() }) {
+export async function verifyCropsterJob({ env, weekStart, jobId, fetcher = fetch }) {
+  const config = connection(env);
+  if (!config.valid || !validSyncJobId(jobId)) throw new Error("The source job cannot be verified.");
+  return websiteJob(config, env, weekStart, jobId, fetcher);
+}
+
+export async function ingestCropsterSync({ env, weekStart, jobId, input, status = "complete", now = new Date() }) {
   if (!validSyncJobId(jobId)) throw new Error("Invalid source job.");
+  if (!["running", "complete", "failed"].includes(status)) throw new Error("Invalid source job status.");
   const refresh = { mode: "website-reader", ...await captureAndSave({ env, weekStart, now,
-    suppliedState: { schemaVersion: "1.0", status: "complete", weekStart, jobId, result: input } }) };
+    suppliedState: { schemaVersion: "1.0", status, weekStart, jobId, result: input } }) };
   return readBackCropster({ env, weekStart, followingWeekStart: addDays(weekStart, 7), now, refresh, configured: true });
 }
 

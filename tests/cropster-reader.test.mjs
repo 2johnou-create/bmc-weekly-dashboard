@@ -118,7 +118,7 @@ test("a missing green observation retains its own original date while production
     assert.equal(result.green.kg, 900);
     assert.equal(result.green.asOf, priorCapture.toISOString());
     assert.equal(result.refresh.greenFetched, false);
-    assert.match(result.refresh.note, /Green stock was not updated/);
+    assert.match(result.refresh.note, /Green stock keeps its original capture time/);
   } finally { db.close(); }
 });
 
@@ -167,14 +167,72 @@ test("observations reject wrong weeks, scope, timestamps and quantities rather t
 
 test("a slow background capture keeps each section's actual observation time", () => {
   const value = fixture();
-  const sectionTime = new Date(Date.parse(value.observedAt) - 600_000).toISOString();
+  const sectionTime = new Date(Date.parse(value.observedAt) - 1_800_000).toISOString();
   value.greenObservedAt = sectionTime;
   value.mondayObservedAt = sectionTime;
   const result = validateCropsterObservation(value, weekStart, now);
   assert.equal(result.greenObservedAt.toISOString(), sectionTime);
   assert.equal(result.mondayObservedAt.toISOString(), sectionTime);
-  value.greenObservedAt = new Date(Date.parse(value.observedAt) - 660_001).toISOString();
+  value.greenObservedAt = new Date(Date.parse(value.observedAt) - 1_860_001).toISOString();
   assert.throws(() => validateCropsterObservation(value, weekStart, now));
+});
+
+test("running and failed jobs can persist verified checkpoints without claiming completion", async () => {
+  const db = localDatabase(":memory:"); await seed(db);
+  try {
+    for (const status of ["running", "failed"]) {
+      const reading = fixture();
+      reading.production.scheduledKg = status === "running" ? 25 : 20;
+      const result = await readCurrentCropster(options(db, async () => Response.json({ ...reply(reading), status })));
+      assert.equal(result.refresh.status, status === "running" ? "pending" : "failed");
+      assert.equal(result.refresh.readerStatus, status);
+      assert.equal(result.refresh.accepted, true);
+      assert.equal(result.refresh.fetched, true);
+      assert.equal(result.production.scheduledKg, reading.production.scheduledKg);
+      assert.equal(result.refresh.labParts.recipes.status, status === "running" ? "pending" : "failed");
+      assert.doesNotMatch(result.refresh.note, /all.*updated/i);
+    }
+  } finally { db.close(); }
+});
+
+test("newer independent sections survive an older production checkpoint", async () => {
+  const db = localDatabase(":memory:"); await seed(db);
+  const newer = new Date(now.getTime() + 30_000);
+  await saveCropsterReading(db, { weekStart, roastedKg: 250, scheduledKg: 10, roastedValue: 2500, scheduledValue: 100 }, weekStart, newer);
+  const reading = fixture();
+  reading.lab = { inventory: { asOf: "2026-11-20", allLocationsComplete: true, totalKg: 800,
+    rows: [{ name: "Fixture coffee", location: "Marrickville", lotId: "PG-0001", kg: 800, pricePerKg: 10 }] } };
+  try {
+    const result = await readCurrentCropster(options(db, async () => Response.json({ ...reply(reading), status: "running" })));
+    assert.equal(result.refresh.status, "pending");
+    assert.equal(result.refresh.fetched, false);
+    assert.equal(result.refresh.accepted, true);
+    assert.equal(result.production.roastedKg, 250);
+    assert.equal(result.production.asOf, newer.toISOString());
+    assert.equal(result.green.kg, 800);
+    assert.equal(result.green.asOf, now.toISOString());
+    assert.equal(result.refresh.labParts.inventory.status, "updated");
+    assert.equal((await db.prepare("SELECT recorded_at FROM dashboard_roastery_lab_cropster WHERE part = 'inventory'").first()).recorded_at, now.getTime());
+  } finally { db.close(); }
+});
+
+test("slow running jobs retain a verified older checkpoint and its actual capture dates", async () => {
+  const db = localDatabase(":memory:"); await seed(db);
+  const reading = fixture();
+  reading.observedAt = new Date(now.getTime() - 600_000).toISOString();
+  try {
+    assert.throws(() => validateCropsterObservation(reading, weekStart, now));
+    const result = await readCurrentCropster(options(db, async () => Response.json({ ...reply(reading), status: "running" })));
+    assert.equal(result.refresh.status, "pending");
+    assert.equal(result.refresh.readerStatus, "running");
+    assert.equal(result.production.scheduledKg, 40);
+    assert.equal(result.production.asOf, reading.observedAt);
+    assert.equal(result.green.asOf, reading.observedAt);
+    const expired = await readCurrentCropster(options(db, async () => Response.json({}, { status: 404 }), { jobId }));
+    assert.equal(expired.refresh.status, "failed");
+    assert.equal(expired.refresh.readerStatus, "expired");
+    assert.equal(expired.production.asOf, reading.observedAt);
+  } finally { db.close(); }
 });
 
 test("invalid bridge configuration and oversized replies do not change saved readings", async () => {

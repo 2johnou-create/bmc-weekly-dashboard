@@ -16,23 +16,23 @@ const views = [
 const script = page => page.match(/<script>([\s\S]*?)<\/script>/)[1];
 const response = (value, status = 200) => Response.json(value, { status });
 
-function clock(automatic = true) {
+function clock() {
   const pending = new Map(), durations = [];
   let elapsed = 0, sequence = 0;
+  const epoch = Date.parse(checked);
   const setTimeout = (callback, duration) => {
     const id = ++sequence;
     durations.push(duration);
     pending.set(id, { callback, duration });
-    if (automatic && duration <= 2000) queueMicrotask(() => {
-      if (!pending.delete(id)) return;
-      elapsed += duration;
-      callback();
-    });
     return id;
   };
   return {
     setTimeout, clearTimeout: id => pending.delete(id), durations, pending,
-    Date: class extends Date { static now() { return elapsed; } },
+    advance: duration => {elapsed += duration;},
+    Date: class extends Date {
+      constructor(...args) {super(...(args.length ? args : [epoch + elapsed]));}
+      static now() { return epoch + elapsed; }
+    },
   };
 }
 
@@ -45,7 +45,7 @@ function fixtureReport(view, status = "complete") {
   return view.kind === "warehouse" ? { weekly: report, lab: {}, sourceSync: report.sourceSync, generatedAt: checked } : report;
 }
 
-function runtime(view, fetcher, timer = clock(), selectedWeek = "") {
+function runtime(view, fetcher, timer = clock(), selectedWeek = "", storage = new Map()) {
   const source = script(view.page);
   const helperStart = source.indexOf("    function cropsterRefreshText(report) {");
   const helperEnd = source.indexOf("    function " + view.following, helperStart);
@@ -65,13 +65,14 @@ function runtime(view, fetcher, timer = clock(), selectedWeek = "") {
   const initial = fixtureReport(view, "partial");
   const dependencies = {
     el, timer, selectedWeek, initial, state, statuses,
+    sessionStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
     fetch: async (address, options) => {
       calls.push({ address, options });
       return fetcher(address, options, { state, el, initial, calls });
     },
   };
   const prelude = `
-    const {el, timer, selectedWeek, initial, state, statuses, fetch} = deps;
+    const {el, timer, selectedWeek, initial, state, statuses, fetch, sessionStorage} = deps;
     const {setTimeout, clearTimeout, Date} = timer;
     const formatTimestamp = value => value && Number.isFinite(new Date(value).getTime()) ? value : '';
     const date = formatTimestamp, dateText = formatTimestamp, timeFormat = {};
@@ -86,7 +87,7 @@ function runtime(view, fetcher, timer = clock(), selectedWeek = "") {
     let loadedWeek = {start: '${week}', isCurrent: true}, requestedWeek = selectedWeek;
     let loadedCropsterRefresh = {mode: 'website-reader'};
     let data = initial;
-    const showSession = () => { signedIn = false; state.expired++; currentRequest?.abort(); activeRequest?.abort(); currentRequest = null; activeRequest = undefined; };
+    const showSession = () => { signedIn = false; state.expired++; clearPendingSourceSync(); currentRequest?.abort(); activeRequest?.abort(); currentRequest = null; activeRequest = undefined; };
     const expireSession = showSession;
     const abortLoad = () => {activeRequest?.abort(); activeRequest = undefined;};
     const render = next => {state.rendered++; state.payload = next; loadedWeek = next.week; return Promise.resolve(true);};
@@ -95,110 +96,115 @@ function runtime(view, fetcher, timer = clock(), selectedWeek = "") {
   `;
   const app = new Function("deps", prelude + source.slice(helperStart, helperEnd) + source.slice(loadStart, loadEnd) + `
     return {load, sync: coordinateSourceSync, summary: sourceSyncResultText, notice: cropsterRefreshText,
-      abort: () => (currentRequest || activeRequest)?.abort(), getData: () => data};
+      abort: () => (currentRequest || activeRequest)?.abort(), getData: () => data,
+      pending: readPendingSourceSync, pendingForWeek: pendingSourceSyncForWeek, storageKey: sourceSyncStorageKey};
   `)(dependencies);
-  return { ...app, calls, el, state, statuses, timer, initial };
+  return { ...app, calls, el, state, statuses, timer, initial, storage };
 }
 
 for (const view of views) {
-  test(view.name + " waits for the full source job, then reads all report feeds with the same job reference", async () => {
-    let polls = 0;
+  test(view.name + " immediately reads cards after starting a background job", async () => {
     const app = runtime(view, async (address, options, context) => {
       const url = new URL(address, "https://dashboard.test");
       if (options.method === "POST") {
         assert.equal(url.pathname, "/api/source-sync");
-        assert.equal(options.headers["Content-Type"], "application/json");
         assert.deepEqual(JSON.parse(options.body), view.kind === "weekly" ? {weekStart: week} : {});
-        return response({ status: "running", jobId, weekStart: week, pollUrl: "https://untrusted.test/ignore" });
-      }
-      if (url.pathname === "/api/source-sync") {
-        assert.equal(context.state.rendered, 0);
-        assert.equal(context.el("refresh").disabled, true);
-        assert.equal(context.el("weekNoteInput").value, "Unsaved meeting draft");
-        assert.equal(context.el("figures").hidden, false);
-        assert.equal(url.searchParams.get("jobId"), jobId);
-        assert.equal(url.searchParams.get("week"), week);
-        polls++;
-        return response({ status: polls === 1 ? "running" : "complete", jobId, weekStart: week });
+        return response({status: "running", jobId, weekStart: week, pollUrl: "https://untrusted.test/ignore"});
       }
       assert.equal(url.pathname, view.path);
-      assert.equal(polls, 2);
+      assert.equal(context.state.rendered, 0);
       assert.equal(url.searchParams.get("refresh"), "1");
       assert.equal(url.searchParams.get("sourceSyncJob"), jobId);
       assert.equal(url.searchParams.get("sourceSyncWeek"), week);
       return response(fixtureReport(view));
     }, clock(), view.kind === "weekly" ? week : "");
-    await app.load(true, { fresh: true });
-    assert.deepEqual(app.timer.durations, [720000, 2000, 2000]);
-    assert.equal(app.calls.length, 4);
+    await app.load(true, {fresh: true});
+    assert.equal(app.calls.length, 2, "No blocking GET polling before the first report");
+    assert.deepEqual(app.timer.durations, [90000]);
     assert.ok(app.calls.every(call => call.options.signal === app.calls[0].options.signal));
-    assert.ok(app.statuses.includes("Updating Cropster…"));
-    assert.match(app.el("status").textContent, /All connected sources were updated\./);
     assert.equal(app.state.rendered, 1);
-    assert.equal(app.el("qa").value, "Unsaved meeting draft");
     assert.equal(app.el("refresh").disabled, false);
+    assert.match(app.el("status").textContent, /Cropster updating in background/);
+    assert.doesNotMatch(app.el("status").textContent, /All connected sources/);
+    const report = view.kind === "warehouse" ? app.state.payload.weekly : app.state.payload;
+    assert.match(app.notice(report), /Cropster updating in background/);
+    assert.ok(app.notice(report).includes(captured));
+    assert.equal(app.el("qa").value, "Unsaved meeting draft");
+    assert.equal(app.pending().jobId, jobId);
+    assert.deepEqual(Object.keys(JSON.parse(app.storage.get(app.storageKey))).sort(), ["jobId", "startedAt", "weekStart"]);
   });
 
-  test(view.name + " reads back a failed source job and reports partial coverage instead of all-source success", async () => {
+  test(view.name + " checks one pending job on automatic refresh and reads new checkpoints without another POST", async () => {
+    let reportCount = 0;
     const app = runtime(view, async (address, options) => {
       const url = new URL(address, "https://dashboard.test");
       if (options.method === "POST") return response({status: "running", jobId, weekStart: week});
-      if (url.pathname === "/api/source-sync") return response({status: "failed", jobId, weekStart: week});
-      assert.equal(url.searchParams.get("sourceSyncJob"), jobId);
-      return response(fixtureReport(view, "partial"));
+      if (url.pathname === "/api/source-sync") {
+        assert.equal(url.searchParams.get("jobId"), jobId);
+        assert.equal(url.searchParams.get("week"), week);
+        return response({status: "running", jobId, weekStart: week});
+      }
+      const report = fixtureReport(view);
+      const core = view.kind === "warehouse" ? report.weekly : report;
+      core.cropsterRefresh.productionAsOf = ++reportCount === 1 ? captured : checked;
+      core.source.asOf = core.cropsterRefresh.productionAsOf;
+      core.cropsterRefresh.labAsOf = core.source.asOf;
+      return response(report);
     });
     await app.load(true, {fresh: true});
-    assert.equal(app.calls.length, 3);
-    assert.equal(app.state.rendered, 1);
-    assert.match(app.el("status").textContent, /Cropster could not update\. Other connected sources were rechecked\./);
-    assert.doesNotMatch(app.el("status").textContent, /All connected sources/);
+    const startedAt = app.pending().startedAt;
+    app.timer.advance(60000);
+    await app.load(false);
+    assert.equal(app.calls.length, 4);
+    assert.equal(app.calls.filter(call => call.options.method === "POST").length, 1);
+    const reportUrl = new URL(app.calls[3].address, "https://dashboard.test");
+    assert.equal(reportUrl.pathname, view.path);
+    assert.equal(reportUrl.searchParams.get("sourceSyncJob"), jobId);
+    assert.equal(reportUrl.searchParams.has("refresh"), false);
+    assert.equal(app.state.rendered, 2);
+    assert.equal(app.pending().startedAt, startedAt);
+    const core = view.kind === "warehouse" ? app.state.payload.weekly : app.state.payload;
+    assert.ok(app.notice(core).includes(checked));
+    assert.match(app.el("status").textContent, /updating in background/);
     assert.equal(app.el("weekNoteInput").value, "Unsaved meeting draft");
   });
 
-  test(view.name + " reads back an immediately completed job without polling", async () => {
+  for (const terminal of ["complete", "failed"]) test(view.name + " clears a " + terminal + " job after one automatic status check and retains source timestamps", async () => {
+    let running = true;
     const app = runtime(view, async (address, options) => {
       const url = new URL(address, "https://dashboard.test");
-      if (options.method === "POST") return response({status: "complete", jobId, weekStart: week});
-      assert.equal(url.pathname, view.path);
+      if (options.method === "POST") return response({status: "running", jobId, weekStart: week});
+      if (url.pathname === "/api/source-sync") return response({status: terminal, jobId, weekStart: week});
       assert.equal(url.searchParams.get("sourceSyncJob"), jobId);
-      assert.equal(url.searchParams.get("sourceSyncWeek"), week);
-      assert.equal(url.searchParams.get("refresh"), "1");
-      return response(fixtureReport(view));
+      return response(fixtureReport(view, running || terminal === "complete" ? "complete" : "partial"));
     });
     await app.load(true, {fresh: true});
-    assert.equal(app.calls.length, 2);
-    assert.deepEqual(app.timer.durations, [720000]);
-    assert.equal(app.state.rendered, 1);
-    assert.match(app.el("status").textContent, /All connected sources were updated\./);
+    running = false;
+    await app.load(false);
+    assert.equal(app.pending(), null);
+    assert.equal(app.storage.has(app.storageKey), false);
+    assert.equal(app.calls.length, 4);
+    assert.equal(app.state.rendered, 2);
+    assert.equal(app.el("qa").value, "Unsaved meeting draft");
+    assert.match(app.el("status").textContent, terminal === "complete" ? /All connected sources were updated/ : /Cropster could not update/);
+    const core = view.kind === "warehouse" ? app.state.payload.weekly : app.state.payload;
+    assert.ok(app.notice(core).includes(captured));
   });
 
-  test(view.name + " accepts an immediate capture without a job reference and never polls it", async () => {
-    const app = runtime(view, async (address, options) => {
-      const url = new URL(address, "https://dashboard.test");
-      if (options.method === "POST") return response({status: "complete", weekStart: week});
-      assert.equal(url.pathname, view.path);
-      assert.equal(url.searchParams.has("sourceSyncJob"), false);
-      assert.equal(url.searchParams.has("sourceSyncWeek"), false);
-      assert.equal(url.searchParams.get("refresh"), "1");
-      return response(fixtureReport(view));
-    });
-    await app.load(true, {fresh: true});
-    assert.equal(app.calls.length, 2);
-    assert.deepEqual(app.timer.durations, [720000]);
-    assert.equal(app.state.rendered, 1);
-  });
-
-  for (const phase of ["start", "poll"]) test(view.name + " stops immediately when the source " + phase + " returns401", async () => {
-    const app = runtime(view, async (_address, options) => options.method === "POST" && phase === "poll"
-      ? response({status: "running", jobId, weekStart: week}) : response({error: "Sign in again"}, 401));
-    await app.load(true, {fresh: true});
-    assert.equal(app.calls.length, phase === "start" ? 1 : 2);
+  for (const phase of ["start", "poll"]) test(view.name + " stops on401 during a background " + phase, async () => {
+    const storage = new Map();
+    const timer = clock();
+    if (phase === "poll") storage.set("bmc-dashboard-cropster-source-job-v1", JSON.stringify({jobId, weekStart: week, startedAt: timer.Date.now()}));
+    const app = runtime(view, async () => response({error: "Sign in again"}, 401), timer, "", storage);
+    await app.load(true, {fresh: phase === "start"});
+    assert.equal(app.calls.length, 1);
     assert.equal(app.state.expired, 1);
     assert.equal(app.state.rendered, 0);
     assert.equal(app.getData(), app.initial);
+    assert.equal(app.pending(), null);
   });
 
-  test(view.name + " keeps a manual source job intact when an automatic refresh fires", async () => {
+  test(view.name + " keeps a manual network request intact when automatic refresh fires", async () => {
     let resolveStart;
     const start = new Promise(resolve => {resolveStart = resolve;});
     const app = runtime(view, async (_address, options) => options.method === "POST" ? start : response(fixtureReport(view)));
@@ -207,23 +213,181 @@ for (const view of views) {
     assert.equal(app.calls.length, 1);
     assert.equal(app.calls[0].options.signal.aborted, false);
     assert.equal(app.getData(), app.initial);
-    resolveStart(response({status: "not-connected", weekStart: week}));
+    resolveStart(response({status: "running", jobId, weekStart: week}));
     await completion;
     assert.equal(app.calls.length, 2);
-    assert.equal(new URL(app.calls[1].address, "https://dashboard.test").searchParams.has("sourceSyncJob"), false);
+    assert.equal(app.pending().jobId, jobId);
+  });
+
+  test(view.name + " keeps a slow automatic pending-job request intact when the next automatic interval fires", async () => {
+    const timer = clock();
+    const storage = new Map([["bmc-dashboard-cropster-source-job-v1", JSON.stringify({jobId, weekStart: week, startedAt: timer.Date.now()})]]);
+    let resolveStatus;
+    const status = new Promise(resolve => {resolveStatus = resolve;});
+    const app = runtime(view, async address => new URL(address, "https://dashboard.test").pathname === "/api/source-sync"
+      ? status : response(fixtureReport(view)), timer, "", storage);
+    const first = app.load(false);
+    assert.equal(app.calls.length, 1);
+    timer.advance(35000);
+    await app.load(false);
+    assert.equal(app.calls.length, 1, "The next automatic interval must not replace the existing source check");
+    assert.equal(app.calls[0].options.signal.aborted, false);
+    resolveStatus(response({status: "running", jobId, weekStart: week}));
+    await first;
+    assert.equal(app.calls.length, 2);
+    assert.equal(app.state.rendered, 1);
+    assert.equal(app.el("refresh").disabled, false);
+    assert.equal(timer.pending.size, 0);
+  });
+
+  test(view.name + " lets manual Refresh supersede a slow automatic pending-job request", async () => {
+    const timer = clock();
+    const storage = new Map([["bmc-dashboard-cropster-source-job-v1", JSON.stringify({jobId, weekStart: week, startedAt: timer.Date.now()})]]);
+    const app = runtime(view, async (address, options) => {
+      const url = new URL(address, "https://dashboard.test");
+      if (url.pathname === "/api/source-sync" && options.method !== "POST") return new Promise((_resolve, reject) => {
+        options.signal.addEventListener("abort", () => reject(new DOMException("Superseded", "AbortError")), {once: true});
+      });
+      if (options.method === "POST") return response({status: "running", jobId, weekStart: week});
+      return response(fixtureReport(view));
+    }, timer, "", storage);
+    const automatic = app.load(false);
+    assert.equal(app.calls.length, 1);
+    const manual = app.load(true, {fresh: true});
+    await Promise.all([automatic, manual]);
+    assert.equal(app.calls.length, 3);
+    assert.equal(app.calls[0].options.signal.aborted, true);
+    assert.equal(app.calls[1].options.method, "POST");
+    assert.equal(app.calls[1].options.signal.aborted, false);
+    assert.equal(app.state.rendered, 1);
+    assert.match(app.el("status").textContent, /updating in background/);
+    assert.equal(app.el("weekNoteInput").value, "Unsaved meeting draft");
+    assert.equal(app.el("refresh").disabled, false);
+    assert.equal(timer.pending.size, 0);
+  });
+
+  test(view.name + " keeps its previous cards and draft when the pending status request fails", async () => {
+    let fail = false;
+    const app = runtime(view, async (address, options) => {
+      const url = new URL(address, "https://dashboard.test");
+      if (options.method === "POST") return response({status: "running", jobId, weekStart: week});
+      if (url.pathname === "/api/source-sync" && fail) throw new Error("Connection unavailable");
+      return response(fixtureReport(view));
+    });
+    await app.load(true, {fresh: true});
+    const previous = app.state.payload;
+    fail = true;
+    await app.load(false);
+    assert.equal(app.state.payload, previous);
+    assert.equal(app.state.rendered, 1);
+    assert.equal(app.calls.length, 3);
+    assert.equal(app.pending().jobId, jobId);
+    assert.equal(app.el("weekNoteInput").value, "Unsaved meeting draft");
+    assert.match(app.el("status").textContent, /Connection unavailable|Refresh failed/);
+  });
+
+  test(view.name + " accepts immediate completion without polling", async () => {
+    const app = runtime(view, async (address, options) => {
+      if (options.method === "POST") return response({status: "complete", jobId, weekStart: week});
+      assert.equal(new URL(address, "https://dashboard.test").searchParams.get("sourceSyncJob"), jobId);
+      return response(fixtureReport(view));
+    });
+    await app.load(true, {fresh: true});
+    assert.equal(app.calls.length, 2);
+    assert.equal(app.pending(), null);
+    assert.match(app.el("status").textContent, /All connected sources were updated/);
   });
 }
 
-test("all three pages use the same fixed-path source-job coordinator", () => {
+test("the same pending reference is joined when moving between all three dashboards", async () => {
+  const storage = new Map();
+  const timer = clock();
+  for (const [index, view] of views.entries()) {
+    const app = runtime(view, async (address, options) => {
+      const url = new URL(address, "https://dashboard.test");
+      if (index === 0 && options.method === "POST") return response({status: "running", jobId, weekStart: week});
+      if (url.pathname === "/api/source-sync") {
+        assert.notEqual(options.method, "POST");
+        assert.equal(url.searchParams.get("jobId"), jobId);
+        return response({status: "running", jobId, weekStart: week});
+      }
+      assert.equal(url.pathname, view.path);
+      assert.equal(url.searchParams.get("sourceSyncJob"), jobId);
+      return response(fixtureReport(view));
+    }, timer, "", storage);
+    await app.load(index === 0, {fresh: index === 0});
+    assert.equal(app.calls.length, 2);
+    assert.equal(app.pending().startedAt, timer.Date.now());
+    assert.match(app.el("status").textContent, /updating in background/);
+  }
+});
+
+test("all three pages use the same background job reference validation and coordinator", () => {
   const implementations = views.map(view => {
     const code = script(view.page);
-    return code.slice(code.indexOf("    function sourceSyncPause("), code.indexOf("    function sourceSyncResultText("));
+    return code.slice(code.indexOf("    const sourceSyncStorageKey"), code.indexOf("    function sourceSyncResultText("));
   });
   assert.equal(implementations[0], implementations[1]);
   assert.equal(implementations[0], implementations[2]);
+  assert.doesNotMatch(implementations[0], /while\s*\(/);
 });
 
-test("job references and weeks are validated before any poll or report request", async () => {
+test("malformed, expired and future-dated stored references never cause a status request", async () => {
+  const timer = clock();
+  const valid = {jobId, weekStart: week, startedAt: timer.Date.now()};
+  for (const raw of [
+    "{invalid", "x".repeat(251), JSON.stringify([]),
+    JSON.stringify({...valid, jobId: "https://untrusted.test/private"}),
+    JSON.stringify({...valid, weekStart: "2026-11-17"}),
+    JSON.stringify({...valid, startedAt: timer.Date.now() - 2100000}),
+    JSON.stringify({...valid, startedAt: timer.Date.now() + 1}),
+    JSON.stringify({...valid, extra: "unexpected"}),
+  ]) {
+    const storage = new Map([["bmc-dashboard-cropster-source-job-v1", raw]]);
+    const app = runtime(views[0], async address => {
+      assert.equal(new URL(address, "https://dashboard.test").pathname, views[0].path);
+      return response(fixtureReport(views[0]));
+    }, timer, "", storage);
+    await app.load(false);
+    assert.equal(app.calls.length, 1);
+    assert.equal(app.pending(), null);
+    assert.equal(storage.size, 0);
+    assert.deepEqual(app.timer.durations.slice(-1), [30000]);
+  }
+});
+
+test("the original start time is preserved across manual taps on a coalesced job and expires at35minutes", async () => {
+  const app = runtime(views[0], async (_address, options) => options.method === "POST"
+    ? response({status: "running", jobId, weekStart: week}) : response(fixtureReport(views[0])));
+  await app.load(true, {fresh: true});
+  const startedAt = app.pending().startedAt;
+  app.timer.advance(60000);
+  await app.load(true, {fresh: true});
+  assert.equal(app.pending().startedAt, startedAt);
+  app.timer.advance(2040000);
+  assert.equal(app.pending(), null);
+  assert.equal(app.storage.size, 0);
+});
+
+test("historical Steam Room views do not poll or attach the current-week job and keep it available", async () => {
+  const timer = clock();
+  const storage = new Map([["bmc-dashboard-cropster-source-job-v1", JSON.stringify({jobId, weekStart: week, startedAt: timer.Date.now()})]]);
+  const app = runtime(views[0], async address => {
+    const url = new URL(address, "https://dashboard.test");
+    assert.equal(url.pathname, views[0].path);
+    assert.equal(url.searchParams.get("week"), "2026-11-09");
+    assert.equal(url.searchParams.has("sourceSyncJob"), false);
+    const report = fixtureReport(views[0]);
+    report.week = {start: "2026-11-09", isCurrent: false};
+    return response(report);
+  }, timer, "2026-11-09", storage);
+  await app.load(false);
+  assert.equal(app.calls.length, 1);
+  assert.equal(app.pending().jobId, jobId);
+  assert.equal(app.notice(app.state.payload), "Cropster: saved Friday archive.");
+});
+
+test("unexpected job IDs or weeks from the source endpoint cannot be applied to cards", async () => {
   for (const state of [
     {status: "running", jobId: "https://untrusted.test/private", weekStart: week},
     {status: "complete", jobId: "https://untrusted.test/private", weekStart: week},
@@ -234,48 +398,28 @@ test("job references and weeks are validated before any poll or report request",
     await app.load(true, {fresh: true});
     assert.equal(app.calls.length, 1);
     assert.equal(app.state.rendered, 0);
-    assert.equal(app.getData(), app.initial);
+    assert.equal(app.pending(), null);
   }
 });
 
-test("mismatched poll results cannot be applied to the selected report", async () => {
-  const app = runtime(views[0], async (_address, options) => response(options.method === "POST"
-    ? {status: "running", jobId, weekStart: week}
-    : {status: "complete", jobId, weekStart: "2026-11-09"}));
-  await app.load(true, {fresh: true});
-  assert.equal(app.calls.length, 2);
-  assert.equal(app.state.rendered, 0);
-});
-
-test("source polling is bounded to660seconds and retains the last report when it expires", async () => {
-  const app = runtime(views[0], async () => response({status: "running", jobId, weekStart: week}));
-  await app.load(true, {fresh: true});
-  assert.equal(app.calls.length, 330);
-  assert.equal(app.state.rendered, 0);
-  assert.match(app.el("status").textContent, /took too long.*last loaded figures/);
-});
-
-test("aborting during the two-second pause prevents both further polls and report reads", async () => {
-  const timer = clock(false);
-  const app = runtime(views[0], async () => response({status: "running", jobId, weekStart: week}), timer);
-  const completion = app.load(true, {fresh: true});
-  for (let turn = 0; turn < 200 && !app.statuses.includes("Updating Cropster…"); turn++) await Promise.resolve();
-  assert.ok(app.statuses.includes("Updating Cropster…"));
-  app.abort();
-  await completion;
+test("a completion for a different pending job is rejected without losing the valid stored reference", async () => {
+  const timer = clock();
+  const storage = new Map([["bmc-dashboard-cropster-source-job-v1", JSON.stringify({jobId, weekStart: week, startedAt: timer.Date.now()})]]);
+  const app = runtime(views[0], async () => response({status: "complete", jobId: "99999999-2222-4333-8444-555555555555", weekStart: week}), timer, "", storage);
+  await app.load(false);
   assert.equal(app.calls.length, 1);
   assert.equal(app.state.rendered, 0);
-  assert.equal(timer.pending.size, 0);
+  assert.equal(app.pending().jobId, jobId);
 });
 
-test("a failed start without a job cannot be presented as an all-source success", () => {
+test("pending state takes precedence over an old all-updated source summary", () => {
   const app = runtime(views[0], async () => {throw Error("No network expected");});
   const report = {sourceSync: {status: "complete", message: "All sources updated."}};
-  assert.match(app.summary(report, report, {status: "failed"}), /Cropster could not update/);
-  assert.doesNotMatch(app.summary(report, report, {status: "failed"}), /All sources updated/);
+  assert.match(app.summary(report, report, {status: "running", jobId}), /updating in background/);
+  assert.doesNotMatch(app.summary(report, report, {status: "running", jobId}), /All sources updated/);
 });
 
-test("Lab freshness uses its own report capture instead of a newer production capture", () => {
+test("Lab freshness uses its own saved capture while production has a newer timestamp", () => {
   const app = runtime(views[2], async () => {throw Error("No network expected");});
   const notice = app.notice({source: {asOf: captured}, cropsterRefresh: {mode: "website-reader", status: "refreshed", productionAsOf: checked}});
   assert.ok(notice.includes(captured));

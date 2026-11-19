@@ -12,10 +12,10 @@ const request = (body = { weekStart: "2026-02-02" }, bearer = token) => new Requ
 
 test("configuration accepts only bounded runtime secrets and a bounded timeout", () => {
   const config = { CROPSTER_EMAIL: "reader@example.test", CROPSTER_PASSWORD: "synthetic-only", CROPSTER_READER_TOKEN: token };
-  assert.equal(readConfiguration(config).timeoutMs, 600000);
-  assert.equal(readConfiguration({ ...config, CROPSTER_READER_TIMEOUT_MS: "600000" }).timeoutMs, 600000);
+  assert.equal(readConfiguration(config).timeoutMs, 1800000);
+  assert.equal(readConfiguration({ ...config, CROPSTER_READER_TIMEOUT_MS: "1800000" }).timeoutMs, 1800000);
   for (const field of ["CROPSTER_EMAIL", "CROPSTER_PASSWORD", "CROPSTER_READER_TOKEN"]) assert.throws(() => readConfiguration({ ...config, [field]: "" }), /CONFIGURATION_REQUIRED/);
-  assert.throws(() => readConfiguration({ ...config, CROPSTER_READER_TIMEOUT_MS: "999999" }), /CONFIGURATION_REQUIRED/);
+  assert.throws(() => readConfiguration({ ...config, CROPSTER_READER_TIMEOUT_MS: "3600000" }), /CONFIGURATION_REQUIRED/);
 });
 
 test("health and rejected requests cannot invoke a browser or reveal business data", async () => {

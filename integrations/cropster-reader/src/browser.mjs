@@ -3,10 +3,11 @@ import { addDays, completedMonths, sydneyDate, weekRange } from "./dates.mjs";
 import { captureDocument, renderedViewReady, viewDiagnostics } from "./dom.mjs";
 import { createLimiter, settlesWithin } from "./runtime-limits.mjs";
 import { browserFailureCode, safeProgress } from "./progress.mjs";
+import { cloneCheckpoint, emitCheckpoint } from "./checkpoint.mjs";
 import {
-  CROPSTER_ORIGIN, aggregateSchedule, parseInventory, inventoryPrices, parseMarrickvilleStock,
+  CROPSTER_ORIGIN, aggregateScheduleRead, parseInventory, inventoryPrices, parseMarrickvilleStock,
   parseRoastedCost, parseRoastedOutput, parseScheduleDay, sameProduction, parseMonthlyUse, parseLoss,
-  parseBlend, parseProfileGroup, parseProfileInputs, assembleRecipes, blendLoss, sameSchedules, previousProduction,
+  parseBlend, parseProfileGroup, parseProfileInputs, assembleRecipes, blendLoss, parseScheduleWeek, sameScheduleReads, previousProduction,
 } from "./parse.mjs";
 
 const PAGE_LIMIT = 1;
@@ -29,6 +30,7 @@ function paths(range) {
     production: `/apps/roast/production-report/profile-group?${query}`,
     cost: `/apps/roast/production-report/inventory?${query}`,
     schedule: Array.from({ length: 5 }, (_, index) => `/apps/roast/schedule/calendar/day?date=${addDays(range.weekStart, index)}`),
+    weekSchedule: `/apps/roast/schedule/calendar/week?date=${range.weekStart}`,
     prices: "/app/inventory/overview",
     green: "/apps/lots/inventory-report/location",
   };
@@ -133,7 +135,7 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
     } catch { throw new ReaderError("CROPSTER_AUTH_REQUIRED"); }
   }
 
-  async function read(weekStart, { scope = "weekly", onProgress } = {}) {
+  async function read(weekStart, { scope = "weekly", onProgress, onCapture } = {}) {
     if (!["weekly", "all"].includes(scope)) throw new ReaderError("INVALID_REQUEST", 400);
     const startedAt = now();
     const range = weekRange(weekStart, startedAt);
@@ -238,10 +240,22 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
           if (await checkbox.count() !== 1) throw new ReaderError("CROPSTER_SCOPE_UNVERIFIED");
           await checkbox.check({ timeout: remaining() });
         }
+        if (kind === "schedule") {
+          const machines = page.locator('input[type="checkbox"][id*="-machine-"]');
+          const count = await machines.count();
+          for (let index = 0; index < count && index < 20; index++) await machines.nth(index).check({ timeout: remaining() });
+        }
         phase = "pagination"; emit(stage, "running", phase);
-        if (["production", "stock", "schedule"].includes(kind)) await expandLegacy(page);
         phase = "parse"; emit(stage, "running", phase);
-        const result = await snapshotUntilParsed(page, parse);
+        let result;
+        try { result = parse(await page.evaluate(captureDocument)); }
+        catch (error) {
+          if (!(error instanceof ReaderError) || error.code === "CROPSTER_CHANGED_DURING_READ") throw error;
+          phase = "pagination"; emit(stage, "running", phase);
+          if (["production", "stock", "schedule"].includes(kind)) await expandLegacy(page);
+          phase = "parse"; emit(stage, "running", phase);
+          result = await snapshotUntilParsed(page, parse);
+        }
         emit(stage, "complete", phase);
         return result;
       } catch (error) {
@@ -289,6 +303,25 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
         throw error instanceof ReaderError ? error : new ReaderError(code);
       } finally { if (page) await closePage(page); }
     });
+    const scheduleSources = new Set();
+    const readSchedules = async (verify = false, forceDays = false) => {
+      const prefix = verify ? "weekly_schedule_verify_" : "weekly_schedule_";
+      if (!forceDays) {
+        scheduleSources.add(CROPSTER_ORIGIN + sourcePaths.weekSchedule);
+        try {
+          const week = await view(sourcePaths.weekSchedule, "schedule", snapshot => parseScheduleWeek(snapshot, range), prefix + "week");
+          if (week) return { kind: "week", week };
+        } catch (error) {
+          if (error instanceof ReaderError && ["CROPSTER_AUTH_REQUIRED", "CROPSTER_TIMEOUT", "CROPSTER_CLEANUP_TIMEOUT"].includes(error.code)) throw error;
+          // Unproven week coverage is a performance fallback, never a zero.
+        }
+      }
+      const days = await allRequired(sourcePaths.schedule.map((path, index) => {
+        scheduleSources.add(CROPSTER_ORIGIN + path);
+        return view(path, "schedule", snapshot => parseScheduleDay(snapshot, addDays(range.weekStart, index), range), prefix + index);
+      }));
+      return { kind: "days", days };
+    };
 
     const capture = async () => { try {
       emit("authenticate", "running", "open");
@@ -313,7 +346,7 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
           return null;
         }
       };
-      if (scope === "all") {
+      const captureLab = async publish => { if (scope === "all") {
         const months = completedMonths(startedAt);
         const period = { weekStart: months[0].weekStart, periodEnd: months.at(-1).periodEnd };
         const allLocationPath = (kind, period) => {
@@ -331,6 +364,10 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
             return view(path, "blend", snapshot => parseBlend(snapshot, id, signature), "lab_blend_" + signature.toLowerCase());
           }));
           freshDefinitions = { rows: blends };
+          if (rawLoss) {
+            lab.loss = blendLoss(rawLoss, freshDefinitions);
+            await publish();
+          }
           const groupIds = [...new Set([...blends.flatMap(blend => blend.components.map(component => component.profileGroupId)), ids.ohGroup, ids.decafGroup])];
           const groups = await allRequired(groupIds.map((id, index) => {
             const path = "/app/roast/profile-groups/" + id;
@@ -346,8 +383,7 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
           })));
           return { blends, groups, profileInputs, decafGroupId: ids.decafGroup, ohGroupId: ids.ohGroup };
         };
-        await allRequired([
-          optionalLab(async () => {
+        await optionalLab(async () => {
             const previousRange = { weekStart: addDays(range.weekStart, -7), periodEnd: addDays(range.weekStart, -3) };
             const query = new URLSearchParams({ dateFrom: previousRange.weekStart, dateTo: previousRange.periodEnd, locations: "lK0G1" });
             const outputPath = `/apps/roast/production-report/profile-group?${query}`;
@@ -360,27 +396,54 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
             }, "previous_cost");
             previous = previousProduction(outputCapture.snapshot, costSnapshot, previousRange);
             previousProductionObservedAt = now().toISOString();
-          }, "PREVIOUS_PRODUCTION_UNAVAILABLE"),
-          optionalLab(async () => {
+          }, "PREVIOUS_PRODUCTION_UNAVAILABLE");
+        await publish();
+        await optionalLab(async () => {
             const captured = await allRequired(months.map((month, index) => view(allLocationPath("inventory", month), "production", snapshot => parseMonthlyUse(snapshot, month), "lab_consumption_month_" + index)));
             lab.use = { months: captured };
             labObservedAt.use = now().toISOString();
-          }, "LAB_USE_UNAVAILABLE"),
-          optionalLab(async () => {
+          }, "LAB_USE_UNAVAILABLE");
+        await publish();
+        await optionalLab(async () => {
             rawLoss = await view(allLocationPath("profile-group", period), "production", snapshot => parseLoss(snapshot, period), "lab_loss");
             labObservedAt.loss = now().toISOString();
-          }, "LAB_LOSS_UNAVAILABLE"),
-          optionalLab(async () => {
+            lab.loss = { ...rawLoss, rows: rawLoss.rows.map(({ profileGroupId, ...row }) => row) };
+          }, "LAB_LOSS_UNAVAILABLE");
+        await publish();
+        await optionalLab(async () => {
             recipeCapture = await readRecipes();
             labObservedAt.recipes = now().toISOString();
-          }, "LAB_RECIPES_UNAVAILABLE"),
-        ]);
-      }
+            if (!lab.inventory) throw new ReaderError("CROPSTER_INVENTORY_UNAVAILABLE");
+            lab.recipes = assembleRecipes({ ...recipeCapture, inventory: lab.inventory, asOf: sydneyDate(now()), use: lab.use });
+            if (lab.recipes.rows.some(recipe => recipe.components.some(component => component.coffee === null))) labWarnings.push("CURRENT_RECIPE_COFFEE_AMBIGUOUS");
+          }, "LAB_RECIPES_UNAVAILABLE");
+        if (!lab.recipes) delete labObservedAt.recipes;
+        await publish();
+      } };
+      const prerequisiteWarnings = [];
+      let greenObservedAt = null, mondayObservedAt = null, inventoryObservedAt = null;
+      const prerequisite = async (run, warning) => {
+        try { return await run(); }
+        catch (error) {
+          if (error instanceof ReaderError && ["CROPSTER_AUTH_REQUIRED", "CROPSTER_TIMEOUT", "CROPSTER_CLEANUP_TIMEOUT"].includes(error.code)) throw error;
+          prerequisiteWarnings.push(warning);
+          return null;
+        }
+      };
+      const mondayRange = { ...range, periodEnd: range.weekStart };
+      const mondayQuery = new URLSearchParams({ dateFrom: weekStart, dateTo: weekStart, locations: "lK0G1" });
+      const mondayPath = `/apps/roast/production-report/profile-group?${mondayQuery}`;
+      // These independent point-in-time sources retain their own observation
+      // timestamps and do not lengthen the production/schedule coherence window.
+      const [inventoryRecord, green, monday] = await allRequired([
+        prerequisite(async () => { const record = await inventory(); inventoryObservedAt = now().toISOString(); return record; }, "INVENTORY_UNAVAILABLE"),
+        prerequisite(async () => { const record = await view(sourcePaths.green, "stock", snapshot => parseMarrickvilleStock(snapshot, sydneyDate(now())), "green_marrickville"); greenObservedAt = now().toISOString(); return record; }, "GREEN_STOCK_UNAVAILABLE"),
+        prerequisite(async () => { const record = await view(mondayPath, "production", snapshot => parseRoastedOutput(snapshot, mondayRange), "weekly_monday"); mondayObservedAt = now().toISOString(); return record; }, "MONDAY_ROASTED_UNAVAILABLE"),
+      ]);
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
           const before = await view(sourcePaths.production, "production", snapshot => parseRoastedOutput(snapshot, range), "weekly_production_before");
-          const warnings = [...labWarnings];
-          let greenObservedAt = null, mondayObservedAt = null, inventoryObservedAt = null;
+          const warnings = [...prerequisiteWarnings];
           const optional = async (run, warning) => {
             try { return await run(); }
             catch (error) {
@@ -389,38 +452,22 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
               return null;
             }
           };
-          const mondayRange = { ...range, periodEnd: range.weekStart };
-          const mondayQuery = new URLSearchParams({ dateFrom: weekStart, dateTo: weekStart, locations: "lK0G1" });
-          const mondayPath = `/apps/roast/production-report/profile-group?${mondayQuery}`;
-          const [days, roastedValue, inventoryRecord, green, monday] = await allRequired([
-            allRequired(sourcePaths.schedule.map((path, index) => view(path, "schedule", snapshot => parseScheduleDay(snapshot, addDays(range.weekStart, index), range), "weekly_schedule_" + index))),
+          const [schedules, roastedValue] = await allRequired([
+            readSchedules(),
             optional(() => view(sourcePaths.cost, "production", snapshot => parseRoastedCost(snapshot, range, before.greenKg), "weekly_roasted_cost"), "ROASTED_COST_UNAVAILABLE"),
-            optional(async () => { const record = await inventory(); inventoryObservedAt = now().toISOString(); return record; }, "INVENTORY_UNAVAILABLE"),
-            optional(async () => { const record = await view(sourcePaths.green, "stock", snapshot => parseMarrickvilleStock(snapshot, sydneyDate(now())), "green_marrickville"); greenObservedAt = now().toISOString(); return record; }, "GREEN_STOCK_UNAVAILABLE"),
-            optional(async () => { const record = await view(mondayPath, "production", snapshot => parseRoastedOutput(snapshot, mondayRange), "weekly_monday"); mondayObservedAt = now().toISOString(); return record; }, "MONDAY_ROASTED_UNAVAILABLE"),
           ]);
-          const verifiedDays = await allRequired(sourcePaths.schedule.map((path, index) => view(path, "schedule", snapshot => parseScheduleDay(snapshot, addDays(range.weekStart, index), range), "weekly_schedule_verify_" + index)));
-          if (!sameSchedules(days, verifiedDays)) throw new ReaderError("CROPSTER_CHANGED_DURING_READ");
+          const verifiedSchedules = await readSchedules(true, schedules.kind === "days");
+          if (!sameScheduleReads(schedules, verifiedSchedules)) throw new ReaderError("CROPSTER_CHANGED_DURING_READ");
           const after = await view(sourcePaths.production, "production", snapshot => parseRoastedOutput(snapshot, range), "weekly_production_after");
           if (!sameProduction(before, after)) throw new ReaderError("CROPSTER_CHANGED_DURING_READ");
           weekRange(weekStart, now());
-          const scheduled = aggregateSchedule(days, inventoryRecord ? inventoryPrices(inventoryRecord) : null, range);
+          const scheduled = aggregateScheduleRead(schedules, inventoryRecord ? inventoryPrices(inventoryRecord) : null, range);
           if (scheduled.scheduledValue === null && !warnings.includes("SCHEDULED_COST_UNAVAILABLE")) warnings.push("SCHEDULED_COST_UNAVAILABLE");
           if (roastedValue === null && !warnings.includes("ROASTED_COST_UNAVAILABLE")) warnings.push("ROASTED_COST_UNAVAILABLE");
           if (scope === "all") {
             if (inventoryRecord) { lab.inventory = inventoryRecord; labObservedAt.inventory = inventoryObservedAt; }
-            if (recipeCapture && inventoryRecord) {
-              try {
-                lab.recipes = assembleRecipes({ ...recipeCapture, inventory: inventoryRecord, asOf: sydneyDate(now()), use: lab.use });
-                if (lab.recipes.rows.some(recipe => recipe.components.some(component => component.coffee === null))) warnings.push("CURRENT_RECIPE_COFFEE_AMBIGUOUS");
-              } catch {
-                delete labObservedAt.recipes;
-                warnings.push("LAB_RECIPES_UNAVAILABLE");
-              }
-            } else { delete labObservedAt.recipes; if (!warnings.includes("LAB_RECIPES_UNAVAILABLE")) warnings.push("LAB_RECIPES_UNAVAILABLE"); }
-            if (rawLoss) lab.loss = freshDefinitions ? blendLoss(rawLoss, freshDefinitions) : { ...rawLoss, rows: rawLoss.rows.map(({ profileGroupId, ...row }) => row) };
           }
-          return {
+          const observation = {
             schemaVersion: "1.0", sourceSystem: "cropster-website", location: "Marrickville",
             weekStart, periodEnd: range.periodEnd, ...captureTimestamps(now),
             mondayRoastedKg: monday?.roastedKg ?? null, mondayObservedAt, greenObservedAt,
@@ -428,9 +475,22 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
             green,
             ...(scope === "all" ? { lab, labObservedAt } : {}),
             ...(previous ? { previousProduction: previous, previousProductionObservedAt } : {}),
-            sources: { ...Object.fromEntries(Object.entries(sourcePaths).map(([key, value]) => [key, Array.isArray(value) ? value.map(path => CROPSTER_ORIGIN + path) : CROPSTER_ORIGIN + value])), monday: CROPSTER_ORIGIN + mondayPath, ...(scope === "all" ? { lab: labSources, previousProduction: previousSources } : {}) },
+            sources: { ...Object.fromEntries(Object.entries(sourcePaths).map(([key, value]) => [key, Array.isArray(value) ? value.map(path => CROPSTER_ORIGIN + path) : CROPSTER_ORIGIN + value])), schedule: [...scheduleSources], monday: CROPSTER_ORIGIN + mondayPath, ...(scope === "all" ? { lab: labSources, previousProduction: previousSources } : {}) },
             warnings,
           };
+          const publish = async () => {
+            remaining();
+            observation.warnings = [...new Set([...warnings, ...labWarnings])];
+            if (previous) { observation.previousProduction = previous; observation.previousProductionObservedAt = previousProductionObservedAt; }
+            emit("capture", "running", "parse", "CHECKPOINT_READY");
+            return emitCheckpoint(observation, onCapture, now);
+          };
+          // Publish the verified weekly result before starting any retrospective
+          // or Lab views. Later checkpoints add fresh sections without changing
+          // the weekly/individual source observation times.
+          await publish();
+          await captureLab(publish);
+          return cloneCheckpoint(observation, now);
         } catch (error) {
           if (error instanceof ReaderError && error.code === "CROPSTER_CHANGED_DURING_READ" && attempt === 0 && deadline - now().getTime() > 18000) {
             emit("capture", "retry", "parse", error.code);

@@ -58,6 +58,22 @@ export function captureDocument() {
     links: Array.from(document.querySelectorAll("a[href]")).slice(0, 1500).map(link => ({ text: text(link), href: link.href })),
     activeFilters: Array.from(document.querySelectorAll('[role="status"]')).map(text).filter(value => /^Filters\s*:/.test(value)),
     scheduleStatuses: Object.fromEntries(Array.from(document.querySelectorAll('input[type="checkbox"][id*="-status-"]')).map(input => [input.id.split("-status-").at(-1), input.checked])),
+    scheduleMachines: Object.fromEntries(Array.from(document.querySelectorAll('input[type="checkbox"][id*="-machine-"]')).map(input => [input.id.split("-machine-").at(-1), input.checked])),
+    calendarWeek: {
+      dates: Array.from(document.querySelectorAll('.calendar--week__row--header .calendar--week__header a[href*="/calendar/day?date="]')).map(link => {
+        try { return new URL(link.href).searchParams.get("date"); } catch { return null; }
+      }),
+      rows: Array.from(document.querySelectorAll(".calendar--week__row--main")).map(row => {
+        const cells = Array.from(row.children);
+        const days = cells.slice(1);
+        return {
+          machineId: cells[0]?.querySelector("[data-test-schedule-create-for-machine]")?.getAttribute("data-test-schedule-create-for-machine") || null,
+          cellCount: cells.length, summary: text(cells[0]),
+          batchCounts: days.map(cell => cell.querySelectorAll(".calendar__item__main").length),
+          emptyCells: days.map(cell => text(cell) === ""),
+        };
+      }),
+    },
     tables: Array.from(document.querySelectorAll("table")).slice(0, 30).map(table => {
       const head = table.querySelector("thead tr") || table.querySelector("tr");
       const heading = headings.filter(item => item.compareDocumentPosition(table) & 4).at(-1);

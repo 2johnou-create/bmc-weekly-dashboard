@@ -125,3 +125,23 @@ test("rendered DOM capture pairs each table with its own pager and reads no inpu
     assert.doesNotMatch(JSON.stringify(captured), /must-never-be-read/);
   } finally { globalThis.document = originalDocument; globalThis.location = originalLocation; }
 });
+
+test("rendered weekly capture scopes dates, machines and batch counts to calendar cells", () => {
+  const originalDocument = globalThis.document, originalLocation = globalThis.location;
+  const counts = [2, 1, 0, 0, 0, 0, 0];
+  const header = { innerText: "Example machine\n3 Batches, 30 kg", querySelector: () => ({ getAttribute: () => "M1" }) };
+  const cells = counts.map(count => ({ innerText: count ? "Scheduled batch" : "", querySelectorAll: () => Array.from({ length: count }, () => ({})) }));
+  try {
+    globalThis.document = {
+      title: "Synthetic schedule", body: { innerText: "2-8 February 2026, in Marrickville" },
+      querySelectorAll: selector => selector.includes("-machine-") ? [{ id: "example-machine-M1", checked: true }]
+        : selector.startsWith(".calendar--week__row--header") ? Array.from({ length: 7 }, (_, index) => ({ href: `https://c-sar.cropster.com/apps/roast/schedule/calendar/day?date=2026-02-0${index + 2}` }))
+        : selector === ".calendar--week__row--main" ? [{ children: [header, ...cells] }] : [],
+    };
+    globalThis.location = { href: "https://c-sar.cropster.com/apps/roast/schedule/calendar/week?date=2026-02-02" };
+    const captured = captureDocument();
+    assert.deepEqual(captured.scheduleMachines, { M1: true });
+    assert.deepEqual(captured.calendarWeek.dates, Array.from({ length: 7 }, (_, index) => `2026-02-0${index + 2}`));
+    assert.deepEqual(captured.calendarWeek.rows, [{ machineId: "M1", cellCount: 8, summary: header.innerText, batchCounts: counts, emptyCells: [false, false, true, true, true, true, true] }]);
+  } finally { globalThis.document = originalDocument; globalThis.location = originalLocation; }
+});

@@ -146,6 +146,10 @@ export function parseScheduleDay(snapshot, day, range) {
   }
   const displayedDay = `${Number(day.slice(5, 7))}/${Number(day.slice(8, 10))}/${day.slice(0, 4)}`;
   const remainingHeader = `${displayedDay} to roast`, totalHeader = `${displayedDay} total`, outputHeader = `${displayedDay} estimated output`;
+  return { day, ...parsePendingTables(snapshot, remainingHeader, totalHeader, outputHeader) };
+}
+
+function parsePendingTables(snapshot, remainingHeader, totalHeader, outputHeader) {
   const coffees = tableWith(snapshot, ["profile", "type", remainingHeader, totalHeader, outputHeader]);
   const lots = tableWith(snapshot, ["lot", remainingHeader, totalHeader]);
   if (!completeTable(snapshot, coffees) || !completeTable(snapshot, lots)) throw new ReaderError("CROPSTER_TABLE_INCOMPLETE");
@@ -170,7 +174,44 @@ export function parseScheduleDay(snapshot, day, range) {
     lotKg.set(id, (lotKg.get(id) || 0) + kg);
   }
   if (!close(greenKg, sum([...lotKg.values()]))) throw new ReaderError("CROPSTER_SCHEDULE_AMBIGUOUS");
-  return { day, greenKg, roastedKg, lotKg };
+  return { greenKg, roastedKg, lotKg };
+}
+
+export function parseScheduleWeek(snapshot, range) {
+  const url = sourceUrl(snapshot, "/apps/roast/schedule/calendar/week");
+  const selected = url.searchParams.get("date");
+  if (selected && (selected < range.weekStart || selected > addDays(range.weekStart, 6))) return null;
+  if (!["unpublished", "scheduled", "synced", "roasted", "inconsistent"].every(status => snapshot.scheduleStatuses?.[status] === true)) return null;
+  const machines = snapshot.scheduleMachines;
+  if (!machines || typeof machines !== "object" || !Object.keys(machines).length || !Object.values(machines).every(checked => checked === true)) return null;
+  const grid = snapshot.calendarWeek;
+  if (!grid || !Array.isArray(grid.dates) || grid.dates.length !== 7
+    || grid.dates.some((day, index) => day !== addDays(range.weekStart, index)) || !Array.isArray(grid.rows)
+    || grid.rows.length !== Object.keys(machines).length || grid.rows.length > 20) return null;
+  const from = Number(range.weekStart.slice(8, 10)), through = Number(addDays(range.weekStart, 6).slice(8, 10));
+  if (!new RegExp(`\\b${from}\\s*[-–]\\s*${through}\\b[^,]{1,60},\\s*in\\s+Marrickville\\b`).test(compact(snapshot.text))) return null;
+  const seen = new Set();
+  for (const row of grid.rows) {
+    if (!Object.hasOwn(machines, row.machineId) || seen.has(row.machineId) || row.cellCount !== 8
+      || !Array.isArray(row.batchCounts) || row.batchCounts.length !== 7
+      || row.batchCounts.some(count => !Number.isSafeInteger(count) || count < 0 || count > 10000)
+      || !Array.isArray(row.emptyCells) || row.emptyCells.length !== 7 || row.emptyCells.some(empty => typeof empty !== "boolean")) return null;
+    seen.add(row.machineId);
+    const reported = compact(row.summary).match(/(?:^|\s)(\d[\d,]*)\s+Batch(?:es)?\b/i)?.[1];
+    if (reported === undefined || number(reported) !== sum(row.batchCounts)
+      || row.batchCounts.some((count, index) => count > 0 && row.emptyCells[index])) return null;
+    if ([5, 6].some(index => row.batchCounts[index] !== 0 || row.emptyCells[index] !== true)) return null;
+  }
+  const prefix = `${from}-${through}`;
+  const pending = parsePendingTables(snapshot, `${prefix} to roast`, `${prefix} total`, `${prefix} estimated output`);
+  return { weekStart: range.weekStart, periodEnd: range.periodEnd, ...pending };
+}
+
+export function sameScheduleReads(first, second) {
+  if (first.kind !== second.kind) return false;
+  if (first.kind === "days") return sameSchedules(first.days, second.days);
+  if (first.kind !== "week" || first.week.weekStart !== second.week.weekStart || first.week.periodEnd !== second.week.periodEnd) return false;
+  return sameSchedules([{ ...first.week, day: first.week.weekStart }], [{ ...second.week, day: second.week.weekStart }]);
 }
 
 export function parseInventory(snapshots, asOf) {
@@ -279,6 +320,10 @@ export function parseLoss(snapshot, range) {
 
 export function aggregateSchedule(days, prices, range) {
   if (!Array.isArray(days) || days.length !== 5 || days.some((day, index) => day.day !== addDays(range.weekStart, index))) throw new ReaderError("CROPSTER_SCHEDULE_INCOMPLETE");
+  return aggregatePendingRows(days, prices);
+}
+
+function aggregatePendingRows(days, prices) {
   let value = 0, completeCost = prices instanceof Map;
   for (const day of days) for (const [id, kg] of day.lotKg) {
     const price = prices?.get(id);
@@ -290,6 +335,12 @@ export function aggregateSchedule(days, prices, range) {
     scheduledKg: round(sum(days.map(day => day.roastedKg))),
     scheduledValue: greenKg === 0 ? 0 : completeCost ? round(value) : null,
   };
+}
+
+export function aggregateScheduleRead(reading, prices, range) {
+  if (reading.kind === "days") return aggregateSchedule(reading.days, prices, range);
+  if (reading.kind !== "week" || reading.week.weekStart !== range.weekStart || reading.week.periodEnd !== range.periodEnd) throw new ReaderError("CROPSTER_SCHEDULE_INCOMPLETE");
+  return aggregatePendingRows([reading.week], prices);
 }
 
 export function parseMarrickvilleStock(snapshot, day) {

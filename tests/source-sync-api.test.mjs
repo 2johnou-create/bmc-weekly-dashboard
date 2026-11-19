@@ -60,8 +60,8 @@ async function harness(action) {
       assert.equal(init.method, "GET");
       assert.equal(url.pathname, "/v1/sync/" + state.jobId);
       state.polls++;
-      state.observation = observation(week(), state.pendingKg);
-      return Response.json({ schemaVersion: "1.0", status: "complete", jobId: state.jobId, weekStart: week(), result: state.observation });
+      state.observation = state.readerObservation || observation(week(), state.pendingKg);
+      return Response.json({ schemaVersion: "1.0", status: state.readerStatus || "complete", jobId: state.jobId, weekStart: week(), result: state.observation });
     }
     if (url.hostname === "bmc-stockroom.misty-jelly-1931.chatgpt.site" && url.pathname === "/api/inventory") {
       return Response.json(state.revoked ? {} : { items: [] }, { status: state.revoked ? 401 : 200 });
@@ -328,5 +328,61 @@ test("a callback preserves legacy planned replacements when their provenance can
     assert.equal(statuses.get("lab-recipes"), "failed");
     for (const part of ["inventory", "use", "loss"]) assert.equal(statuses.get("lab-" + part), "updated");
     assert.ok(state.addresses.every(url => url.hostname !== "bmc-stockroom.misty-jelly-1931.chatgpt.site"));
+  });
+});
+
+test("checkpoint callbacks verify the authoritative job and save progress before completion", async () => {
+  await harness(async ({ db, state, request }) => {
+    const partial = observation(week(), 20);
+    partial.lab = { inventory: partial.lab.inventory };
+    partial.labObservedAt = { inventory: partial.labObservedAt.inventory };
+    state.readerObservation = partial;
+    state.readerStatus = "running";
+    const send = body => request("/api/integrations/cropster", { method: "POST", authorized: false, requestOrigin: null,
+      authorization: "Bearer " + writeToken, body });
+    const first = await send({ schemaVersion: "1.0", jobId: state.jobId, weekStart: week(), status: "running", result: observation(week(), 60) });
+    assert.equal(first.status, 200);
+    assert.equal(state.polls, 1);
+    assert.equal((await db.prepare("SELECT scheduled_kg FROM dashboard_cropster_readings").first()).scheduled_kg, 20);
+    assert.equal((await db.prepare("SELECT part FROM dashboard_roastery_lab_cropster").all()).results.length, 1);
+    const progress = JSON.parse((await db.prepare("SELECT source_status_json FROM dashboard_source_sync_log").first()).source_status_json);
+    assert.equal(progress.jobStatus, "running");
+    assert.equal(progress.sources.find(source => source.id === "production").status, "updated");
+    assert.equal(progress.sources.find(source => source.id === "lab-recipes").status, "pending");
+    assert.ok(state.addresses.every(url => url.hostname === readerHost));
+
+    const complete = observation(week(), 20);
+    complete.productionObservedAt = partial.productionObservedAt;
+    state.readerObservation = complete;
+    state.readerStatus = "complete";
+    // The callback sent for an older checkpoint can arrive after the job ends.
+    const finished = await send({ schemaVersion: "1.0", jobId: state.jobId, weekStart: week(), status: "running", result: partial });
+    assert.equal(finished.status, 200);
+    assert.equal((await db.prepare("SELECT part FROM dashboard_roastery_lab_cropster").all()).results.length, 4);
+    assert.equal((await db.prepare("SELECT recorded_at FROM dashboard_cropster_readings").first()).recorded_at, Date.parse(partial.productionObservedAt));
+    const finishedLog = (await db.prepare("SELECT source_status_json FROM dashboard_source_sync_log").first()).source_status_json;
+    assert.equal(JSON.parse(finishedLog).jobStatus, "complete");
+    const polls = state.polls;
+    await send({ schemaVersion: "1.0", jobId: state.jobId, weekStart: week(), status: "running", result: partial });
+    assert.equal(state.polls, polls);
+    assert.equal((await db.prepare("SELECT source_status_json FROM dashboard_source_sync_log").first()).source_status_json, finishedLog);
+  });
+});
+
+test("a failed background job retains its verified sections and terminal status", async () => {
+  await harness(async ({ db, state, request }) => {
+    state.readerObservation = observation(week(), 15);
+    state.readerObservation.lab = {};
+    state.readerStatus = "failed";
+    const saved = await request("/api/integrations/cropster", { method: "POST", authorized: false, requestOrigin: null,
+      authorization: "Bearer " + writeToken,
+      body: { schemaVersion: "1.0", jobId: state.jobId, weekStart: week(), status: "failed", result: state.readerObservation } });
+    assert.equal(saved.status, 200);
+    assert.equal(saved.body.status, "partial");
+    assert.equal((await db.prepare("SELECT scheduled_kg FROM dashboard_cropster_readings").first()).scheduled_kg, 15);
+    const log = JSON.parse((await db.prepare("SELECT source_status_json FROM dashboard_source_sync_log").first()).source_status_json);
+    assert.equal(log.jobStatus, "failed");
+    assert.match(log.message, /stopped/);
+    assert.equal(log.sources.find(source => source.id === "lab-recipes").status, "failed");
   });
 });

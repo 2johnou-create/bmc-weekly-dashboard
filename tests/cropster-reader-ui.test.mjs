@@ -70,7 +70,7 @@ for (const [name, page, followingFunction, formatter] of views) {
       assert.equal(helpers.notice(report), "Cropster: saved Friday archive.");
       assert.equal(helpers.result(report), "Saved Friday Cropster archive reloaded.");
     }
-    assert.equal(helpers.loading({ mode: "website-reader" }), "Reading Cropster…");
+    assert.equal(helpers.loading({ mode: "website-reader" }), "Checking Cropster background update…");
     assert.match(helpers.loading({ mode: "saved-readings" }), /^Refreshing/);
     assert.match(helpers.loading(null), /^Refreshing/);
   });
@@ -109,6 +109,7 @@ function runtime(page, kind, fetcher, timers, el) {
     const {el, fetch, setTimeout, clearTimeout, helpers, initial, formatTimestamp} = deps;
     const cropsterRefreshLoadingText = helpers.loading, cropsterRefreshResultText = helpers.result;
     const coordinateSourceSync = async () => ({status: 'not-connected', weekStart: '2026-11-16'});
+    const pendingSourceSyncForWeek = () => null;
     const sourceSyncResultText = (report, cropsterReport) => helpers.result(cropsterReport);
     const set = (id, value) => { el(id).textContent = value; };
     const setMessage = set, showText = set;
@@ -131,7 +132,7 @@ function runtime(page, kind, fetcher, timers, el) {
 }
 
 for (const [name, page, kind] of [["Steam Room", weeklyPage, "weekly"], ["Warehouse", warehousePage, "warehouse"]]) {
-  test(name + " keeps existing content and allows240seconds for a coordinated manual refresh", async () => {
+  test(name + " keeps existing content and allows90seconds for network requests during manual refresh", async () => {
     const pending = deferred();
     const timers = [];
     const el = fakeElements();
@@ -139,8 +140,8 @@ for (const [name, page, kind] of [["Steam Room", weeklyPage, "weekly"], ["Wareho
     const calls = [];
     const app = runtime(page, kind, (url, options) => { calls.push({ url, options }); return pending.promise; }, timers, el);
     const completion = app.load(true, { fresh: true });
-    assert.deepEqual(timers, [720000]);
-    assert.equal(el("status").textContent, "Reading Cropster…");
+    assert.deepEqual(timers, [90000]);
+    assert.equal(el("status").textContent, "Checking Cropster background update…");
     assert.equal(el("refresh").disabled, true);
     assert.equal(el("figures").hidden, false);
     assert.equal(el("weekNoteInput").value, "Keep this meeting draft");

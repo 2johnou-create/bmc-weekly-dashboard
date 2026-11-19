@@ -219,7 +219,7 @@ export async function collectWeeklyReport({ weekStart, stockroomCookie, env, now
   const inventory = await fetchSourceJson(SOURCE_ORIGINS.stockroom + "/api/inventory", stockroomHeaders, fetcher);
   const demandOptions = { fetch: fetcher, now: () => now.getTime(), fresh };
   const cropsterReading = cropsterResult ? Promise.resolve(cropsterResult) : historical ? readCropsterFriday(env.DB, week.start) :
-    readCurrentCropster({ env, weekStart: week.start, followingWeekStart: addDays(week.start, 7), now, fetcher, fresh, jobId: sourceSyncJob });
+    readCurrentCropster({ env, weekStart: week.start, followingWeekStart: addDays(week.start, 7), now, fetcher, fresh: fresh || Boolean(sourceSyncJob), jobId: sourceSyncJob });
   const [{ production, green, refresh: cropsterRefresh }, mondayReading, stock, expenses, purchases, [weekDemand, previousDemand, dispatch, previousDispatch]] = await Promise.all([
     cropsterReading,
     cropsterReading.then(() => readCropsterMonday({ db: env.DB, weekStart: week.start })),
