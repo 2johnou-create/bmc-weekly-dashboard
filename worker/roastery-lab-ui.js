@@ -45,6 +45,7 @@ export const roasteryLabPage = String.raw`<!doctype html>
     .report { padding-block: clamp(1.25rem, 3vw, 2.4rem) 2rem; }
     h1 { font-size: clamp(1.9rem, 4vw, 2.85rem); letter-spacing: -.045em; line-height: 1.1; }
     .report-status { min-height: 1.25rem; margin-block: .45rem .95rem; color: var(--muted); font-size: .85rem; }
+    .cropster-freshness { margin-block: -.5rem .95rem; color: var(--muted); font-size: .85rem; }
     .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: clamp(.7rem, 1.3vw, 1.15rem); }
     .settings { margin-top: clamp(.7rem, 1.3vw, 1.15rem); }
     .card { min-width: 0; background: var(--paper); border: 1px solid var(--line); border-radius: .55rem; }
@@ -289,6 +290,7 @@ export const roasteryLabPage = String.raw`<!doctype html>
   <main id="lab" class="wrap report" tabindex="-1" hidden>
     <h1>Roastery Lab</h1>
     <p id="status" class="report-status" role="status"></p>
+    <p id="cropsterFreshness" class="cropster-freshness" hidden></p>
     <div id="board" hidden>
       <div class="grid">
         <details class="card prices">
@@ -1148,6 +1150,89 @@ export const roasteryLabPage = String.raw`<!doctype html>
     async function readJson(response) {
       return response.json().catch(() => ({}));
     }
+    function cropsterRefreshText(report) {
+      const policy = report?.cropsterRefresh || {};
+      if (policy.mode === 'friday-archive' || report?.week?.isCurrent === false) return 'Cropster: saved Friday archive.';
+      if (policy.mode !== 'website-reader') return 'Cropster: saved readings · automatic sync not connected.';
+      const captured = dateText(policy.labAsOf || report?.source?.asOf, timeFormat);
+      if (policy.status === 'failed') return captured
+        ? 'Cropster could not update · previous reading shown, captured ' + captured + ' Sydney time.'
+        : 'Cropster could not update · no saved Lab reading.';
+      return captured ? 'Cropster website · captured ' + captured + ' Sydney time.' : 'Cropster website · capture unavailable.';
+    }
+    function cropsterRefreshResultText(report) {
+      const policy = report?.cropsterRefresh || {};
+      if (policy.mode === 'friday-archive' || report?.week?.isCurrent === false) return 'Saved Friday Cropster archive reloaded.';
+      if (policy.mode === 'website-reader' && policy.fetched === true && policy.status === 'refreshed') return policy.greenFetched === false
+        ? 'Cropster production updated. Green stock was not updated.' : 'Cropster updated from website.';
+      if (policy.mode === 'website-reader' && policy.status === 'failed') return dateText(policy.labAsOf || report?.source?.asOf, timeFormat)
+        ? 'Cropster could not update. Previous reading retained.' : 'Cropster could not update. No saved Lab reading is available.';
+      return 'Cropster was not fetched again.';
+    }
+    function cropsterRefreshLoadingText(policy) {
+      return policy?.mode === 'website-reader' ? 'Updating Cropster…' : 'Refreshing Roastery Lab…';
+    }
+    function sourceSyncPause(signal, delay) {
+      return new Promise((resolve, reject) => {
+        if (signal.aborted) { reject(new DOMException('Source update stopped.', 'AbortError')); return; }
+        const aborted = () => { clearTimeout(timer); reject(new DOMException('Source update stopped.', 'AbortError')); };
+        const timer = setTimeout(() => { signal.removeEventListener('abort', aborted); resolve(); }, delay);
+        signal.addEventListener('abort', aborted, { once: true });
+      });
+    }
+    async function coordinateSourceSync(weekStart, signal, onProgress) {
+      if (signal.aborted) throw new DOMException('Source update stopped.', 'AbortError');
+      const startedAt = Date.now();
+      const validWeek = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) &&
+        Number.isFinite(Date.parse(value + 'T00:00:00Z')) && new Date(value + 'T00:00:00Z').toISOString().slice(0, 10) === value &&
+        new Date(value + 'T00:00:00Z').getUTCDay() === 1;
+      const validJob = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+      const readState = async response => {
+        if (response.status === 401) {
+          const error = new Error('Your session has ended. Sign in again.');
+          error.status = 401;
+          throw error;
+        }
+        const state = await readJson(response);
+        if (!response.ok) throw new Error(state.error || 'The source update could not be checked.');
+        return state;
+      };
+      const options = { cache: 'no-store', credentials: 'same-origin', signal };
+      let state = await readState(await fetch('/api/source-sync', {
+        ...options, method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(weekStart ? { weekStart } : {}),
+      }));
+      if (signal.aborted) throw new DOMException('Source update stopped.', 'AbortError');
+      if (!['running', 'complete', 'not-connected', 'archive', 'failed'].includes(state.status) ||
+          !validWeek(state.weekStart) || weekStart && state.weekStart !== weekStart) throw new Error('The source update returned an unexpected reporting week.');
+      const targetWeek = state.weekStart;
+      if (state.status === 'not-connected' || state.status === 'archive') return { status: state.status, weekStart: targetWeek };
+      if (state.status === 'complete' && state.jobId === undefined) return { status: 'complete', weekStart: targetWeek };
+      if (!validJob(state.jobId)) {
+        if (state.status === 'failed' && state.jobId === undefined) return { status: 'failed', weekStart: targetWeek, note: state.note };
+        throw new Error('The source update returned an invalid job reference.');
+      }
+      const jobId = state.jobId;
+      if (state.status === 'running') onProgress();
+      while (state.status === 'running') {
+        const remaining = 210000 - (Date.now() - startedAt);
+        if (remaining <= 0) throw new Error('The Cropster update took too long. Previous figures are still shown.');
+        await sourceSyncPause(signal, Math.min(2000, remaining));
+        if (Date.now() - startedAt >= 210000) throw new Error('The Cropster update took too long. Previous figures are still shown.');
+        const query = new URLSearchParams({ jobId, week: targetWeek });
+        state = await readState(await fetch('/api/source-sync?' + query, options));
+        if (signal.aborted) throw new DOMException('Source update stopped.', 'AbortError');
+        if (!['running', 'complete', 'failed'].includes(state.status) || state.weekStart !== targetWeek ||
+            state.jobId !== undefined && state.jobId !== jobId) throw new Error('The source update returned an unexpected job result.');
+      }
+      return { jobId, weekStart: targetWeek, status: state.status, note: state.note };
+    }
+    function sourceSyncResultText(report, cropsterReport = report, sync) {
+      const summary = report?.sourceSync || report?.weekly?.sourceSync;
+      if (sync?.status === 'failed' && !sync.jobId) return 'Cropster could not update. Previous readings are shown. Other sources were rechecked.';
+      if (summary && ['complete', 'partial'].includes(summary.status) && typeof summary.message === 'string' && summary.message.trim()) return summary.message;
+      return cropsterRefreshResultText(cropsterReport);
+    }
     function sourceStatus(source = {}) {
       const timestamp = dateText(source.asOf, timeFormat);
       if (timestamp && source.status === 'stale') return 'Last Cropster update ' + timestamp + ' Sydney time. Data may be out of date.';
@@ -1170,6 +1255,8 @@ export const roasteryLabPage = String.raw`<!doctype html>
       renderPurchases(data.purchases, { fresh });
       renderSettings(data.settings);
       message('status', sourceStatus(data.source));
+      el('cropsterFreshness').textContent = cropsterRefreshText(data);
+      el('cropsterFreshness').hidden = false;
       el('sourceNote').textContent = data.source?.note || '';
       el('sourceNote').hidden = !data.source?.note;
       el('board').hidden = false;
@@ -1210,6 +1297,8 @@ export const roasteryLabPage = String.raw`<!doctype html>
       dirty.clear();
       setBusy(false);
       el('board').hidden = true;
+      el('cropsterFreshness').hidden = true;
+      el('cropsterFreshness').textContent = '';
       for (const id of ['blendHighlights', 'blendDetails', 'otherPriceRows', 'monthRows', 'lastMonthRows', 'originRows', 'runoutPools', 'coverageHeaders', 'coverageMonths', 'coverageYear', 'releaseRows', 'latestReleases', 'purchaseDays', 'selectedPurchases', 'upcomingPurchases', 'purchaseTotalRows']) el(id).replaceChildren();
       for (const id of ['releasePreview', 'qaPreview', 'latestQa', 'stockAsOf', 'coverageStatus', 'coverageAverageNote', 'coverageSource', 'coverageNote', 'originNote', 'originAverageLabel', 'originLastMonthLabel', 'sourceNote', 'status', 'consumptionNote', 'lastMonthTitle', 'consumptionWindow', 'priceDates', 'lossNote', 'coffeeCChange', 'coffeeCContract', 'coffeeCTiming', 'coffeeCAsOf', 'coffeeCNote', 'purchasePreview', 'purchaseNote', 'purchaseAsOf', 'purchaseMonth', 'selectedPurchaseDate', 'selectedPurchaseEmpty', 'upcomingPurchaseEmpty']) el(id).textContent = '';
       for (const id of ['avgKg', 'avgBags', 'coffeeCPrice']) el(id).textContent = missing;
@@ -1232,12 +1321,17 @@ export const roasteryLabPage = String.raw`<!doctype html>
       const controller = new AbortController();
       activeRequest = controller;
       const generation = sessionGeneration;
-      const timeout = setTimeout(() => controller.abort(), 30000);
+      const timeout = setTimeout(() => controller.abort(), fresh ? 240000 : 30000);
       el('refresh').disabled = true;
       el('refresh').textContent = fresh ? 'Refreshing…' : 'Refresh';
       if (showLoading) message('status', fresh ? 'Refreshing Roastery Lab…' : 'Loading Roastery Lab…');
       try {
-        const response = await fetch('/api/roastery-lab' + (fresh ? '?refresh=1' : ''), { cache: 'no-store', signal: controller.signal });
+        const sync = fresh ? await coordinateSourceSync(undefined, controller.signal, () => message('status', 'Updating Cropster…')) : null;
+        if (controller !== activeRequest || generation !== sessionGeneration || !signedIn) return;
+        const query = new URLSearchParams();
+        if (fresh) query.set('refresh', '1');
+        if (sync?.jobId) { query.set('sourceSyncJob', sync.jobId); query.set('sourceSyncWeek', sync.weekStart); }
+        const response = await fetch('/api/roastery-lab' + (query.size ? '?' + query : ''), { cache: 'no-store', signal: controller.signal });
         if (controller !== activeRequest || generation !== sessionGeneration || !signedIn) return;
         if (response.status === 401) { expireSession(); return; }
         const data = await readJson(response);
@@ -1246,10 +1340,11 @@ export const roasteryLabPage = String.raw`<!doctype html>
         renderReport(data, { fresh });
         if (fresh) {
           const checked = new Date(data.generatedAt || Date.now()).toLocaleTimeString('en-AU', { timeZone: 'Australia/Sydney', hour: 'numeric', minute: '2-digit', second: '2-digit' });
-          message('status', 'Refresh complete. Checked ' + checked + ' Sydney time. ' + sourceStatus(data.source));
+          message('status', 'Dashboard rechecked ' + checked + ' Sydney time. ' + sourceSyncResultText(data, data, sync));
         }
       } catch (error) {
         if (controller === activeRequest && generation === sessionGeneration && signedIn) {
+          if (error.status === 401) { expireSession(); return; }
           message('status', error.name === 'AbortError' ? 'The refresh took too long. Select Refresh to try again.' : error.message, true);
         }
       } finally {

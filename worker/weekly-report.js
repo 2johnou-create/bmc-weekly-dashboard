@@ -1,11 +1,13 @@
 import { addDays, dashboardWeek, fetchSourceJson, isoTimestamp, mapNonCoffee, mondayOf, SOURCE_ORIGINS, sydneyDate, validDate } from "./metrics.js";
-import { CROPSTER_WEBSITE, readCropsterReadings } from "./cropster.js";
+import { CROPSTER_WEBSITE } from "./cropster.js";
+import { readCurrentCropster } from "./cropster-reader.js";
 import { readCropsterMonday } from "./cropster-monday.js";
 import { readCropsterFriday } from "./cropster-friday.js";
 import { readWeeklyDemand } from "./demand.js";
 import { readFridayStock } from "./stock-history.js";
 import { readExpenses } from "./expenses.js";
 import { readPurchases, PURCHASE_SOURCE_URL } from "./purchases.js";
+import { sourceSyncSummary, readSourceSyncLog, mergeSourceSyncSummary } from "./source-sync.js";
 
 const dispatchPath = "/api/integrations/dashboard/weekly";
 
@@ -202,7 +204,7 @@ function stockMetric(inventory) {
   }
 }
 
-export async function collectWeeklyReport({ weekStart, stockroomCookie, env, now = new Date(), fetcher = fetch, fresh = false }) {
+export async function collectWeeklyReport({ weekStart, stockroomCookie, env, now = new Date(), fetcher = fetch, fresh = false, sourceSyncJob = null, cropsterResult = null, planningSource = null }) {
   const week = dashboardWeek(weekStart, now);
   const previousWeek = addDays(week.start, -7);
   const historical = !week.isCurrent;
@@ -216,12 +218,14 @@ export async function collectWeeklyReport({ weekStart, stockroomCookie, env, now
   // Check Stockroom access before reading other business data.
   const inventory = await fetchSourceJson(SOURCE_ORIGINS.stockroom + "/api/inventory", stockroomHeaders, fetcher);
   const demandOptions = { fetch: fetcher, now: () => now.getTime(), fresh };
-  const [{ production, green }, mondayReading, stock, expenses, purchases, [weekDemand, previousDemand, dispatch, previousDispatch]] = await Promise.all([
-    historical ? readCropsterFriday(env.DB, week.start) : readCropsterReadings({ db: env.DB, weekStart: week.start, followingWeekStart: addDays(week.start, 7), now }),
-    readCropsterMonday({ db: env.DB, weekStart: week.start }),
+  const cropsterReading = cropsterResult ? Promise.resolve(cropsterResult) : historical ? readCropsterFriday(env.DB, week.start) :
+    readCurrentCropster({ env, weekStart: week.start, followingWeekStart: addDays(week.start, 7), now, fetcher, fresh, jobId: sourceSyncJob });
+  const [{ production, green, refresh: cropsterRefresh }, mondayReading, stock, expenses, purchases, [weekDemand, previousDemand, dispatch, previousDispatch]] = await Promise.all([
+    cropsterReading,
+    cropsterReading.then(() => readCropsterMonday({ db: env.DB, weekStart: week.start })),
     historical ? readFridayStock({ date: week.end, inventory, stockroomCookie, now, fetcher }) : stockMetric(inventory),
     readExpenses({ db: env.DB, env, week, fresh, now, fetcher }),
-    readPurchases({ now, fetcher, fresh }),
+    planningSource ? planningSource() : readPurchases({ now, fetcher, fresh }),
     Promise.allSettled([
       readWeeklyDemand(week.start, demandOptions),
       readWeeklyDemand(previousWeek, demandOptions),
@@ -236,10 +240,10 @@ export async function collectWeeklyReport({ weekStart, stockroomCookie, env, now
   const greenForecast = purchases.greenForecast;
   const greenReport = new URL("/apps/lots/inventory-report/location", CROPSTER_WEBSITE);
   if (historical) greenReport.searchParams.set("reportDates", JSON.stringify([null, week.end]));
-  return {
+  const report = {
     week,
     generatedAt: now.toISOString(),
-    cropsterRefresh: {
+    cropsterRefresh: cropsterRefresh || {
       mode: historical ? "friday-archive" : "saved-readings",
       fetched: false,
       productionAsOf: production.asOf || null,
@@ -261,4 +265,6 @@ export async function collectWeeklyReport({ weekStart, stockroomCookie, env, now
       { label: "Current month Green Buy forecast", note: greenForecast?.note || "The current month’s forecast is unavailable.", url: PURCHASE_SOURCE_URL, asOf: greenForecast?.asOf },
     ],
   };
+  report.sourceSync = mergeSourceSyncSummary(await readSourceSyncLog(env.DB, sourceSyncJob, week.start), sourceSyncSummary({ weekly: report }, { historical }));
+  return report;
 }

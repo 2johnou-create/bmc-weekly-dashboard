@@ -33,7 +33,7 @@ test("manual current-week Refresh reports saved Cropster observations without ad
     const report = await collectWeeklyReport({ weekStart, stockroomCookie: "synthetic", env: { DB: db }, now: checked, fresh: true, fetcher: sourceReader(reads) });
     assert.equal(report.generatedAt, checked.toISOString());
     assert.deepEqual(report.cropsterRefresh, {
-      mode: "saved-readings", fetched: false,
+      mode: "saved-readings", status: "not-connected", fetched: false, greenFetched: false,
       productionAsOf: captured.toISOString(), greenAsOf: captured.toISOString(),
       note: "Cropster was not fetched again. Roasted, scheduled and green stock figures use saved readings.",
     });

@@ -508,6 +508,7 @@ export const weeklyPage = String.raw`<!doctype html>
     const unavailable = '—';
     const sourceNames = { stockroom: 'Stock Take App', dispatch: 'Dispatch', cropster: 'Cropster' };
     let loadedWeek;
+    let loadedCropsterRefresh = null;
     let requestedWeek = new URL(location.href).searchParams.get('week') || '';
     let currentRequest;
     let loadedWholesale = null, dispatchRequest = null, dispatchGeneration = 0, dispatchPollFailed = false;
@@ -597,7 +598,86 @@ export const weeklyPage = String.raw`<!doctype html>
     function cropsterRefreshText(report) {
       const policy = report.cropsterRefresh || {};
       const historical = policy.mode === 'friday-archive' || report.week?.isCurrent === false;
-      return historical ? 'Cropster: saved Friday archive.' : 'Cropster: saved readings · automatic sync not connected.';
+      if (historical) return 'Cropster: saved Friday archive.';
+      if (policy.mode !== 'website-reader') return 'Cropster: saved readings · automatic sync not connected.';
+      const captured = formatTimestamp(policy.productionAsOf || report.metrics?.production?.asOf);
+      if (policy.status === 'failed') return captured
+        ? 'Cropster could not update · previous reading shown, captured ' + captured + ' Sydney time.'
+        : 'Cropster could not update · no saved production reading.';
+      return captured ? 'Cropster website · captured ' + captured + ' Sydney time.' : 'Cropster website · capture unavailable.';
+    }
+    function cropsterRefreshResultText(report) {
+      const policy = report.cropsterRefresh || {};
+      if (policy.mode === 'friday-archive' || report.week?.isCurrent === false) return 'Saved Friday Cropster archive reloaded.';
+      if (policy.mode === 'website-reader' && policy.fetched === true && policy.status === 'refreshed') return policy.greenFetched === false
+        ? 'Cropster production updated. Green stock was not updated.' : 'Cropster updated from website.';
+      if (policy.mode === 'website-reader' && policy.status === 'failed') return formatTimestamp(policy.productionAsOf || report.metrics?.production?.asOf)
+        ? 'Cropster could not update. Previous reading retained.' : 'Cropster could not update. No saved production reading is available.';
+      return 'Cropster was not fetched again.';
+    }
+    function cropsterRefreshLoadingText(policy) {
+      return policy?.mode === 'website-reader' ? 'Reading Cropster…' : 'Refreshing weekly figures…';
+    }
+    function sourceSyncPause(signal, delay) {
+      return new Promise((resolve, reject) => {
+        if (signal.aborted) { reject(new DOMException('Source update stopped.', 'AbortError')); return; }
+        const aborted = () => { clearTimeout(timer); reject(new DOMException('Source update stopped.', 'AbortError')); };
+        const timer = setTimeout(() => { signal.removeEventListener('abort', aborted); resolve(); }, delay);
+        signal.addEventListener('abort', aborted, { once: true });
+      });
+    }
+    async function coordinateSourceSync(weekStart, signal, onProgress) {
+      if (signal.aborted) throw new DOMException('Source update stopped.', 'AbortError');
+      const startedAt = Date.now();
+      const validWeek = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) &&
+        Number.isFinite(Date.parse(value + 'T00:00:00Z')) && new Date(value + 'T00:00:00Z').toISOString().slice(0, 10) === value &&
+        new Date(value + 'T00:00:00Z').getUTCDay() === 1;
+      const validJob = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+      const readState = async response => {
+        if (response.status === 401) {
+          const error = new Error('Your session has ended. Sign in again.');
+          error.status = 401;
+          throw error;
+        }
+        const state = await readJson(response);
+        if (!response.ok) throw new Error(state.error || 'The source update could not be checked.');
+        return state;
+      };
+      const options = { cache: 'no-store', credentials: 'same-origin', signal };
+      let state = await readState(await fetch('/api/source-sync', {
+        ...options, method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(weekStart ? { weekStart } : {}),
+      }));
+      if (signal.aborted) throw new DOMException('Source update stopped.', 'AbortError');
+      if (!['running', 'complete', 'not-connected', 'archive', 'failed'].includes(state.status) ||
+          !validWeek(state.weekStart) || weekStart && state.weekStart !== weekStart) throw new Error('The source update returned an unexpected reporting week.');
+      const targetWeek = state.weekStart;
+      if (state.status === 'not-connected' || state.status === 'archive') return { status: state.status, weekStart: targetWeek };
+      if (state.status === 'complete' && state.jobId === undefined) return { status: 'complete', weekStart: targetWeek };
+      if (!validJob(state.jobId)) {
+        if (state.status === 'failed' && state.jobId === undefined) return { status: 'failed', weekStart: targetWeek, note: state.note };
+        throw new Error('The source update returned an invalid job reference.');
+      }
+      const jobId = state.jobId;
+      if (state.status === 'running') onProgress();
+      while (state.status === 'running') {
+        const remaining = 210000 - (Date.now() - startedAt);
+        if (remaining <= 0) throw new Error('The Cropster update took too long. Previous figures are still shown.');
+        await sourceSyncPause(signal, Math.min(2000, remaining));
+        if (Date.now() - startedAt >= 210000) throw new Error('The Cropster update took too long. Previous figures are still shown.');
+        const query = new URLSearchParams({ jobId, week: targetWeek });
+        state = await readState(await fetch('/api/source-sync?' + query, options));
+        if (signal.aborted) throw new DOMException('Source update stopped.', 'AbortError');
+        if (!['running', 'complete', 'failed'].includes(state.status) || state.weekStart !== targetWeek ||
+            state.jobId !== undefined && state.jobId !== jobId) throw new Error('The source update returned an unexpected job result.');
+      }
+      return { jobId, weekStart: targetWeek, status: state.status, note: state.note };
+    }
+    function sourceSyncResultText(report, cropsterReport = report, sync) {
+      const summary = report?.sourceSync || report?.weekly?.sourceSync;
+      if (sync?.status === 'failed' && !sync.jobId) return 'Cropster could not update. Previous readings are shown. Other sources were rechecked.';
+      if (summary && ['complete', 'partial'].includes(summary.status) && typeof summary.message === 'string' && summary.message.trim()) return summary.message;
+      return cropsterRefreshResultText(cropsterReport);
     }
     function statusText(metric, unavailableLabel) {
       if (metric.status === 'unavailable') return unavailableLabel;
@@ -996,6 +1076,7 @@ export const weeklyPage = String.raw`<!doctype html>
         showText('fridayCaptureMessage', '');
       }
       loadedWeek = week;
+      loadedCropsterRefresh = data.cropsterRefresh || null;
       renderWeekNote(week.start);
       const noteRequest = loadWeekNote(week.start, { fresh });
       el('capture').hidden = !week.isCurrent;
@@ -1072,6 +1153,7 @@ export const weeklyPage = String.raw`<!doctype html>
       el('figures').querySelectorAll('details').forEach(card => { card.open = false; });
       el('sources').open = false;
       loadedWeek = undefined;
+      loadedCropsterRefresh = null;
     }
     async function readJson(response) { return response.json().catch(() => ({})); }
     async function load(announce = true, { fresh = false } = {}) {
@@ -1083,7 +1165,7 @@ export const weeklyPage = String.raw`<!doctype html>
       controller.fresh = fresh;
       currentRequest = controller;
       const weekToLoad = requestedWeek;
-      const timeout = setTimeout(() => controller.abort(), 30000);
+      const timeout = setTimeout(() => controller.abort(), fresh ? 240000 : 30000);
       el('report').setAttribute('aria-busy', 'true');
       el('previous').disabled = true;
       el('next').disabled = true;
@@ -1095,13 +1177,16 @@ export const weeklyPage = String.raw`<!doctype html>
         el('sources').hidden = true;
       }
       if (announce || !loadedWeek) {
-        set('status', fresh ? 'Refreshing weekly figures…' : 'Loading weekly figures…');
+        set('status', fresh ? cropsterRefreshLoadingText(loadedCropsterRefresh) : 'Loading weekly figures…');
         el('status').classList.remove('error');
       }
       try {
+        const sync = fresh ? await coordinateSourceSync(weekToLoad || undefined, controller.signal, () => set('status', 'Updating Cropster…')) : null;
+        if (currentRequest !== controller || !signedIn) return;
         const query = new URLSearchParams();
         if (weekToLoad) query.set('week', weekToLoad);
         if (fresh) query.set('refresh', '1');
+        if (sync?.jobId) { query.set('sourceSyncJob', sync.jobId); query.set('sourceSyncWeek', sync.weekStart); }
         const response = await fetch('/api/weekly-report' + (query.size ? '?' + query : ''), { cache: 'no-store', signal: controller.signal });
         if (currentRequest !== controller) return;
         if (response.status === 401) {
@@ -1119,7 +1204,7 @@ export const weeklyPage = String.raw`<!doctype html>
           if (currentRequest !== controller || !signedIn) return;
           const checked = new Date().toLocaleTimeString('en-AU', { timeZone: 'Australia/Sydney', hour: 'numeric', minute: '2-digit', second: '2-digit' });
           set('status', 'Dashboard rechecked ' + checked + ' Sydney time. ' +
-            (data.week?.isCurrent === false ? 'Saved Friday Cropster archive reloaded.' : 'Cropster was not fetched again.') +
+            sourceSyncResultText(data, data, sync) +
             (noteChecked === false ? ' The meeting note could not be checked. Use Refresh note to try again.' : '') +
             (noteChecked === 'saving' ? ' The meeting note is still saving.' : ''));
         }
@@ -1127,6 +1212,12 @@ export const weeklyPage = String.raw`<!doctype html>
         setWeekQuery(requestedWeek);
       } catch (error) {
         if (currentRequest !== controller || !signedIn) return;
+        if (error.status === 401) {
+          showSession(false);
+          showText('loginMessage', 'Your session has ended. Sign in again.');
+          el('password').focus();
+          return;
+        }
         const message = error.name === 'AbortError' ? 'The report took too long to load.' : error.message;
         set('status', loadedWeek ? message + ' Showing the last loaded figures.' : message + ' Select Refresh to try again.');
         el('status').classList.add('error');

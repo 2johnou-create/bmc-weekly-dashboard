@@ -93,7 +93,15 @@ function recipes(data, today) {
       const lotIds = item.lotIds.map(identifier);
       if (new Set(lotIds).size !== lotIds.length) fail("A profile group contains duplicate lot IDs.");
       if (item.note != null && (typeof item.note !== "string" || item.note.length > 1_000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/.test(item.note))) fail("Use a short source note for profile eligibility.");
-      return { id: identifier(item.id), name: name(item.name), lotIds, linksComplete: optionalBoolean(item.linksComplete), note: item.note?.replace(/\s+/g, " ").trim() || "" };
+      const provenance = {};
+      for (const field of ["cropsterLotIds", "plannedLotIds", "historicalLotIds"]) {
+        if (item[field] === undefined) continue;
+        if (!Array.isArray(item[field]) || item[field].length > 1_200) fail("Record valid source assignments for each profile group.");
+        const ids = item[field].map(identifier);
+        if (new Set(ids).size !== ids.length || ids.some(id => !lotIds.includes(id))) fail("Source assignments must match the group’s related lots.");
+        provenance[field] = ids;
+      }
+      return { id: identifier(item.id), name: name(item.name), lotIds, ...provenance, linksComplete: optionalBoolean(item.linksComplete), note: item.note?.replace(/\s+/g, " ").trim() || "" };
     }, row => row.id),
     runoutLotNames: rows(data.runoutLotNames ?? [], 2_400, item => ({ lotId: identifier(item.lotId), name: name(item.name) }), row => JSON.stringify([row.lotId, key(row.name)])),
     rows: rows(data.rows, 150, item => {
@@ -507,11 +515,18 @@ export async function readRoasteryLab(db, now = new Date()) {
     report.consumption.averageKg !== null && report.consumption.averageBags !== null &&
     report.consumption.forecasts.some(item => item.depletionMonth !== null);
   const latest = stored.results.length ? Math.max(...stored.results.map(row => row.recorded_at)) : null;
+  const partAsOf = Object.fromEntries(parts.map(part => {
+    const record = stored.results.find(row => row.part === part);
+    return [part, Number.isFinite(record?.recorded_at) ? new Date(record.recorded_at).toISOString() : null];
+  }));
+  const oldest = parts.every(part => partAsOf[part]) ? Math.min(...Object.values(partAsOf).map(Date.parse)) : null;
   return {
     ...report, settings,
     source: {
       status: latest === null ? "unavailable" : complete ? "recorded" : "partial",
-      asOf: latest === null ? null : new Date(latest).toISOString(),
+      asOf: oldest === null ? null : new Date(oldest).toISOString(),
+      latestAsOf: latest === null ? null : new Date(latest).toISOString(),
+      partAsOf,
       note: latest === null ? "A verified Cropster report needs to be recorded." :
         complete ? "Latest verified Cropster reports." : "Latest verified Cropster reports. Unavailable figures are left blank.",
     },

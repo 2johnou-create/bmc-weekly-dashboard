@@ -4,7 +4,9 @@ import { roasteryLabPage } from "./roastery-lab-ui.js";
 import { warehousePage } from "./warehouse-ui.js";
 import { collectWarehouse } from "./warehouse-report.js";
 import { collectWeeklyReport, readDispatchStatus } from "./weekly-report.js";
-import { collectDashboard, dashboardWeek, fetchSourceJson, SOURCE_ORIGINS, sydneyDate } from "./metrics.js";
+import { addDays, collectDashboard, dashboardWeek, fetchSourceJson, SOURCE_ORIGINS, sydneyDate } from "./metrics.js";
+import { readCurrentCropster, validSyncJobId, ingestCropsterSync } from "./cropster-reader.js";
+import { sourceSyncSummary, saveSourceSyncLog, readSourceSyncLog, mergeSourceSyncSummary } from "./source-sync.js";
 import { saveCropsterGreenStock, saveCropsterReading } from "./cropster.js";
 import { saveCropsterFriday } from "./cropster-friday.js";
 import { brandLogo } from "./brand-logo.js";
@@ -17,7 +19,7 @@ import { readRoasteryLab, saveLabCropster, mergeGreenCoverage } from "./roastery
 import { saveLabSettings } from "./roastery-lab-settings.js";
 import { readCoffeeC } from "./coffee-c.js";
 import { readPurchases } from "./purchases.js";
-import { saveExpenseReading } from "./expenses.js";
+import { readExpenses, saveExpenseReading } from "./expenses.js";
 import { readJohnCheers, saveJohnCheers } from "./john-cheers.js";
 import { readOnlineOrders, ONLINE_ORDERS_FOLDER_URL, ONLINE_ORDERS_CSV_HEADERS } from "./online-orders.js";
 
@@ -50,6 +52,8 @@ const labSettingsBody = { maximum: 32_768, missing: "Enter release or QA details
 const labCropsterBody = { ...cropsterBody, maximum: 350_000, tooLarge: "The Cropster report is too large." };
 const expenseBody = { maximum: 100_000, missing: "Enter a verified sheet reading.", invalid: "Enter a valid sheet reading.", tooLarge: "The sheet reading is too large." };
 const cheerBody = { maximum: 8_192, missing: "The cheer log needs valid events.", invalid: "The cheer log needs valid events.", tooLarge: "The cheer batch is too large." };
+const sourceSyncBody = { maximum: 512, missing: "Choose a reporting week.", invalid: "Choose a valid reporting week.", tooLarge: "The sync request is too large." };
+const finishingSyncs = new Map();
 const documents = new Map([["/", weeklyPage], ["/details", page], ["/roastery-lab", roasteryLabPage], ["/warehouse", warehousePage]]);
 const warehouseAsset = typeof __WAREHOUSE_SCENE__ === "string" ? __WAREHOUSE_SCENE__ : null;
 async function activeSession(request, env) {
@@ -62,16 +66,58 @@ async function activeSession(request, env) {
   }
   return session;
 }
-async function roasteryReport(env, { fresh = false } = {}) {
+async function requireCropsterWriter(request, env) {
+  const expected = env.CROPSTER_SYNC_WRITE_TOKEN;
+  const header = request.headers.get("authorization") || "";
+  if (typeof expected !== "string" || expected.length < 32 || expected.length > 256 ||
+    !header.startsWith("Bearer ") || header.length > 263) throw new HttpError("Source writer authorization is required.", 401);
+  const hash = value => crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  const [first, second] = await Promise.all([hash(expected), hash(header.slice(7))]);
+  const a = new Uint8Array(first), b = new Uint8Array(second);
+  let difference = 0;
+  for (let index = 0; index < a.length; index++) difference |= a[index] ^ b[index];
+  if (difference) throw new HttpError("Source writer authorization is required.", 401);
+}
+function requestedSyncJob(url, weekStart) {
+  const jobId = url.searchParams.get("sourceSyncJob");
+  if (jobId === null) return null;
+  if (!validSyncJobId(jobId) || url.searchParams.get("sourceSyncWeek") !== weekStart) throw new HttpError("The source sync does not match this reporting week.");
+  return jobId;
+}
+
+async function finishSourceSync(env, session, cropsterResult, week, jobId, now) {
+  // A finished browser job also forces every sheet/feed used by the three dashboards.
+  // This is shared by simultaneous staff refreshes; it never returns business values.
+  const key = jobId || crypto.randomUUID();
+  let task = finishingSyncs.get(key);
+  if (!task) {
+    task = collectWarehouse({ env, stockroomCookie: session.stockroomCookie, now, fresh: true, cropsterResult })
+      .then(async report => {
+        report.sourceSync.jobStatus = cropsterResult.refresh.status === "refreshed" ? "complete" : "failed";
+        await saveSourceSyncLog(env.DB, key, week.start, report.sourceSync, new Date());
+        return report.sourceSync;
+      });
+    finishingSyncs.set(key, task);
+    void task.finally(() => { if (finishingSyncs.get(key) === task) finishingSyncs.delete(key); }).catch(() => {});
+  }
+  return task;
+}
+
+async function roasteryReport(env, { fresh = false, jobId = null, syncWebsite = fresh } = {}) {
   const now = new Date();
+  const week = dashboardWeek(undefined, now);
+  const cropster = await readCurrentCropster({ env, weekStart: week.start, followingWeekStart: addDays(week.start, 7), now, fresh: syncWebsite, jobId });
   const [data, coffeeC, purchases] = await Promise.all([
     readRoasteryLab(env.DB, now), readCoffeeC({ now, fresh }), readPurchases({ now, fresh }),
   ]);
-  return {
+  const report = {
     ...data,
     consumption: { ...data.consumption, coverage: mergeGreenCoverage(data.consumption, data.prices, purchases.contracts, sydneyDate(now)) },
-    coffeeC, purchases, generatedAt: now.toISOString(),
+    coffeeC, purchases, generatedAt: now.toISOString(), cropsterRefresh: cropster.refresh,
   };
+  const stored = await readSourceSyncLog(env.DB, jobId, week.start);
+  report.sourceSync = mergeSourceSyncSummary(stored, sourceSyncSummary({ weekly: { week, generatedAt: now.toISOString(), cropsterRefresh: cropster.refresh, metrics: {} }, lab: report }));
+  return report;
 }
 function notesUnavailable() { return { status: "unavailable", source: "Entered issue notes", asOf: null, note: "Customer issue notes could not be loaded. Please try again.", count: null, items: [] }; }
 function onlineUnavailable() { return { status: "unavailable", source: "Online orders folder", asOf: null, note: "The online orders folder could not be read. Please try again.", orders: null, value: null, currency: "AUD", url: ONLINE_ORDERS_FOLDER_URL }; }
@@ -119,6 +165,56 @@ export default {
         if (request.method === "DELETE") return json({ authenticated: false }, 200, { "Set-Cookie": await signOut(request, env) });
         return json({ error: "Method not allowed." }, 405, { Allow: "GET, POST, DELETE" });
       }
+      if (url.pathname === "/api/integrations/cropster") {
+        if (request.method !== "POST") return json({ error: "Method not allowed." }, 405, { Allow: "POST" });
+        await requireCropsterWriter(request, env);
+        const input = await jsonInput(request, { ...labCropsterBody, maximum: 350_000 });
+        if (!input || typeof input !== "object" || Array.isArray(input) || input.schemaVersion !== "1.0" ||
+          !validSyncJobId(input.jobId) || Object.keys(input).some(key => !["schemaVersion", "jobId", "weekStart", "result"].includes(key))) throw new HttpError("Enter a valid source observation.");
+        const now = new Date();
+        const week = dashboardWeek(input.weekStart, now);
+        if (!week.isCurrent || input.weekStart !== week.start) throw new HttpError("Source observations must use the current Sydney week.");
+        const readings = await ingestCropsterSync({ env, weekStart: week.start, jobId: input.jobId, input: input.result, now });
+        if (!readings.refresh.fetched) throw new HttpError("The source observation could not be saved.", 503);
+        // The server finishes source work even when the visitor has closed the page.
+        // Stock Take and Dispatch remain live authorized reads when a dashboard opens.
+        const [demand, priorDemand, expenses, purchases, coffeeC, lab] = await Promise.all([
+          readWeeklyDemand(week.start, { fresh: true }), readWeeklyDemand(addDays(week.start, -7), { fresh: true }),
+          readExpenses({ db: env.DB, env, week, now, fresh: true }), readPurchases({ now, fresh: true }),
+          readCoffeeC({ now, fresh: true }), readRoasteryLab(env.DB, now),
+        ]);
+        const summary = sourceSyncSummary({ weekly: { generatedAt: now.toISOString(), cropsterRefresh: readings.refresh, metrics: {} }, lab: { ...lab, purchases, coffeeC } });
+        summary.jobStatus = "complete";
+        summary.message = summary.status === "complete" ? "Cropster and workbook sources saved. App feeds recheck when the dashboard opens." : summary.message;
+        summary.sources.push({ id: "demand", label: "Roast tallies", status: [demand, priorDemand].every(value => value.status === "live") ? "updated" : "failed", asOf: demand.asOf });
+        summary.sources.push({ id: "expenses", label: "Warehouse expenses sheet", status: expenses.status === "live" ? "updated" : "failed", asOf: expenses.asOf });
+        if (summary.sources.some(item => item.status !== "updated")) { summary.status = "partial"; summary.message = "Some sources could not update. Saved readings retain their capture times."; }
+        await saveSourceSyncLog(env.DB, input.jobId, week.start, summary, now);
+        return json({ ok: true, status: summary.status });
+      }
+      if (url.pathname === "/api/source-sync") {
+        if (!["GET", "POST"].includes(request.method)) return json({ error: "Method not allowed." }, 405, { Allow: "GET, POST" });
+        if (request.method === "POST") requireOrigin(request);
+        const session = await activeSession(request, env);
+        let input = {};
+        if (request.method === "POST") {
+          input = await jsonInput(request, sourceSyncBody);
+          if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).some(key => key !== "weekStart")) throw new HttpError("Choose a valid reporting week.");
+        }
+        const now = new Date();
+        const week = dashboardWeek(request.method === "GET" ? url.searchParams.get("week") || undefined : input.weekStart || undefined, now);
+        if (!week.isCurrent) return json({ status: "archive", weekStart: week.start, note: "Historical Friday archives will be rechecked." });
+        const jobId = request.method === "GET" ? url.searchParams.get("jobId") : null;
+        if (request.method === "GET" && !validSyncJobId(jobId)) throw new HttpError("Choose a valid source sync job.");
+        const completed = jobId ? await readSourceSyncLog(env.DB, jobId, week.start) : null;
+        if (completed?.jobStatus && completed.sources.some(item => item.id === "stocktake")) return json({ status: completed.jobStatus, jobId, weekStart: week.start, sourceSync: completed });
+        const readings = await readCurrentCropster({ env, weekStart: week.start, followingWeekStart: addDays(week.start, 7), now, fresh: true, jobId });
+        const policy = readings.refresh;
+        if (policy.status === "pending") return json({ status: "running", jobId: policy.jobId, weekStart: week.start, note: policy.note }, 202);
+        const sourceSync = await finishSourceSync(env, session, readings, week, policy.jobId || jobId, now);
+        return json({ status: policy.status === "refreshed" ? "complete" : policy.status === "not-connected" ? "not-connected" : "failed",
+          ...(policy.jobId || jobId ? { jobId: policy.jobId || jobId } : {}), weekStart: week.start, note: policy.note, sourceSync });
+      }
       const issueMatch = url.pathname.match(/^\/api\/issues\/([A-Za-z0-9-]{1,80})$/);
       if (url.pathname === "/api/issues" || issueMatch) {
         const allowed = issueMatch ? ["PATCH"] : ["GET", "POST"];
@@ -149,6 +245,10 @@ export default {
         let week;
         try { week = dashboardWeek(url.searchParams.get("week") || undefined); }
         catch { return json({ error: "Choose this week or an earlier Monday." }, 400); }
+        if (fresh && week.isCurrent) {
+          await fetchSourceJson(SOURCE_ORIGINS.stockroom + "/api/inventory", { Cookie: session.stockroomCookie, Origin: SOURCE_ORIGINS.stockroom });
+          await readCurrentCropster({ env, weekStart: week.start, followingWeekStart: addDays(week.start, 7), fresh: true, jobId: requestedSyncJob(url, week.start) });
+        }
         const [data, demand, notes, online] = await Promise.all([
           collectDashboard({ weekStart: week.start, stockroomCookie: session.stockroomCookie, env }),
           readWeeklyDemand(week.start, { ...env, fresh }),
@@ -169,8 +269,9 @@ export default {
         let week;
         try { week = dashboardWeek(url.searchParams.get("week") || undefined); }
         catch { throw new HttpError("Choose this week or an earlier Monday."); }
+        const sourceSyncJob = requestedSyncJob(url, week.start);
         try {
-          return json(await collectWeeklyReport({ weekStart: week.start, stockroomCookie: session.stockroomCookie, env, fresh }));
+          return json(await collectWeeklyReport({ weekStart: week.start, stockroomCookie: session.stockroomCookie, env, fresh, sourceSyncJob }));
         } catch (error) {
           if ([401, 403].includes(error?.status)) throw new HttpError("Your Stockroom session has ended. Sign in again.", 401);
           throw new HttpError("Stockroom could not verify your access. Try Refresh.", 503);
@@ -189,7 +290,7 @@ export default {
         const session = await readSession(request, env);
         if (!session) throw new HttpError("Sign in with your Stock Take App password.", 401);
         try {
-          return json(await collectWarehouse({ env, stockroomCookie: session.stockroomCookie, fresh }));
+          return json(await collectWarehouse({ env, stockroomCookie: session.stockroomCookie, fresh, sourceSyncJob: requestedSyncJob(url, dashboardWeek().start) }));
         } catch (error) {
           if ([401, 403].includes(error?.status)) throw new HttpError("Your Stockroom session has ended. Sign in again.", 401);
           throw error;
@@ -231,7 +332,7 @@ export default {
         await activeSession(request, env);
         if (action === "settings") return json(await saveLabSettings(env.DB, await jsonInput(request, labSettingsBody)));
         if (action === "cropster") await saveLabCropster(env.DB, await jsonInput(request, labCropsterBody));
-        return json(await roasteryReport(env, { fresh: fresh || action === "cropster" }));
+        return json(await roasteryReport(env, { fresh: fresh || action === "cropster", syncWebsite: fresh, jobId: requestedSyncJob(url, dashboardWeek().start) }));
       }
       return json({ error: "Not found." }, 404);
     } catch (error) {

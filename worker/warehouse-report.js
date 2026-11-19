@@ -6,6 +6,7 @@ import { PURCHASE_SOURCE_URL, PURCHASE_SHEET, readPurchases } from "./purchases.
 import { readWeeklyNote } from "./weekly-note.js";
 import { readWarehouseWeather } from "./weather.js";
 import { deriveJohnStatus } from "./john-status.js";
+import { sourceSyncSummary } from "./source-sync.js";
 
 function settled(result, fallback) {
   return result.status === "fulfilled" ? result.value : fallback;
@@ -27,14 +28,16 @@ async function readPacking(weekStart, stockroomCookie, fetcher) {
   return mapPacking(source, weekStart);
 }
 
-export async function collectWarehouse({ env = {}, stockroomCookie, now = new Date(), fetcher = fetch, fresh = false }) {
+export async function collectWarehouse({ env = {}, stockroomCookie, now = new Date(), fetcher = fetch, fresh = false, sourceSyncJob = null, cropsterResult = null }) {
   // The weekly report verifies Stockroom access before any supplemental source is read.
-  const weekly = await collectWeeklyReport({ env, stockroomCookie, now, fetcher, fresh });
+  let planningRead;
+  const planningSource = () => planningRead ||= readPurchases({ now, fetcher, fresh });
+  const weekly = await collectWeeklyReport({ env, stockroomCookie, now, fetcher, fresh, sourceSyncJob, cropsterResult, planningSource });
   const weekStart = weekly.week.start;
   const [lab, coffeeC, purchases, packing, notes, weather] = await Promise.allSettled([
     readRoasteryLab(env.DB, now),
     readCoffeeC({ now, fetcher, fresh }),
-    readPurchases({ now, fetcher, fresh }),
+    planningSource(),
     readPacking(weekStart, stockroomCookie, fetcher),
     readWeeklyNote(env.DB, weekStart),
     readWarehouseWeather({ now, fetcher, fresh }),
@@ -45,7 +48,7 @@ export async function collectWarehouse({ env = {}, stockroomCookie, now = new Da
     note: "The ORDER PLAN purchase calendar could not be loaded. Try refreshing.",
   });
 
-  return {
+  const report = {
     weekly,
     john: deriveJohnStatus(weekly),
     lab: {
@@ -73,4 +76,7 @@ export async function collectWarehouse({ env = {}, stockroomCookie, now = new Da
     }),
     generatedAt: now.toISOString(),
   };
+  report.sourceSync = sourceSyncSummary(report);
+  report.weekly.sourceSync = report.sourceSync;
+  return report;
 }

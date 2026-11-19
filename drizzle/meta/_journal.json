@@ -64,6 +64,13 @@
       "when": 1795039179517,
       "tag": "0008_john_cheer_log",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1795116684108,
+      "tag": "0009_source_sync_log",
+      "breakpoints": true
     }
   ]
 }

@@ -1,0 +1,78 @@
+const source = (id, label, status, asOf = null, note = "") => ({ id, label, status, asOf, note });
+const readable = metric => metric && ["live", "recorded", "estimated", "delayed", "available"].includes(metric.status);
+
+export function sourceSyncSummary({ weekly, lab, packing, weather }, { historical = false } = {}) {
+  const metrics = weekly?.metrics || {};
+  const cropster = weekly?.cropsterRefresh || {};
+  const state = success => success ? "updated" : "failed";
+  const cropsterState = flag => historical ? "archive" : flag ? "updated" :
+    cropster.mode === "saved-readings" ? "not-connected" : cropster.status === "pending" ? "pending" : cropster.status === "saved" ? "saved" : "failed";
+  const sources = Object.keys(metrics).length ? [
+    source("demand", "Roast tally", state(readable(metrics.demand)), metrics.demand?.asOf, metrics.demand?.note),
+    source("production", "Cropster production and schedule", cropsterState(cropster.fetched &&
+      [metrics.production?.roastedKg, metrics.production?.scheduledKg, metrics.production?.roastedValue, metrics.production?.scheduledValue].every(Number.isFinite)), metrics.production?.asOf, cropster.note),
+    source("monday", "Cropster Monday output", cropsterState(cropster.mondayFetched), null),
+    source("previous-production", "Cropster previous-week comparison", cropsterState(cropster.previousFetched), cropster.previousAsOf || null),
+    source("green", "Cropster Marrickville stock", cropsterState(cropster.greenFetched &&
+      [metrics.green?.kg, metrics.green?.value].every(Number.isFinite)), metrics.green?.asOf),
+    source("stocktake", "Stock Take inventory", state(readable(metrics.stock)), metrics.stock?.asOf),
+    source("dispatch", "Wholesale dispatch", state(readable(metrics.wholesale)), metrics.wholesale?.asOf),
+    source("expenses", "Warehouse expenses sheet", metrics.expenses?.status === "live" ? "updated" :
+      ["recorded", "stale"].includes(metrics.expenses?.status) ? "not-connected" : "failed", metrics.expenses?.asOf, metrics.expenses?.note),
+  ] : [];
+  if (!lab && metrics.expenses?.greenForecast) sources.push(source("planning", "Green buy forecast workbook",
+    state(readable(metrics.expenses.greenForecast)), metrics.expenses.greenForecast.asOf));
+  if (lab) {
+    for (const part of ["inventory", "recipes", "use", "loss"]) {
+      const item = cropster.labParts?.[part];
+      sources.push(source("lab-" + part, "Cropster Lab " + ({ inventory: "inventory and prices", recipes: "blend profiles", use: "consumption", loss: "roast loss" })[part],
+        historical ? "archive" : item?.status === "updated" ? "updated" : cropster.mode === "saved-readings" ? "not-connected" : cropster.status === "saved" ? "saved" : "failed",
+        item?.asOf || lab.source?.partAsOf?.[part] || null));
+    }
+    sources.push(source("planning", "Green buy, purchases and contracts workbook", state(readable(lab.purchases) && readable(lab.purchases?.contracts) && readable(lab.purchases?.greenForecast)), lab.purchases?.asOf));
+    sources.push(source("coffee-c", "Coffee C market quote", state(readable(lab.coffeeC)), lab.coffeeC?.asOf));
+    sources.push(source("qa-releases", "QA notes and release plan", state(Boolean(lab.settings) && lab.settings.status !== "unavailable"), lab.settings?.updatedAt));
+  }
+  if (packing) sources.push(source("packing", "Stock Take packing rate", state(readable(packing)), packing.asOf));
+  if (weather) sources.push(source("weather", "Local weather forecast", state(readable(weather)), weather.asOf));
+  return summarizeSources(sources, weekly?.generatedAt || null, historical);
+}
+
+function summarizeSources(sources, checkedAt, historical = false) {
+  const failed = sources.filter(item => ["failed", "not-connected", "pending", "saved"].includes(item.status));
+  const checked = sources.length - failed.length;
+  return {
+    status: failed.length ? "partial" : "complete",
+    checkedAt,
+    sources,
+    message: failed.length
+      ? `Updated ${checked} of ${sources.length} sources. ${failed.length} ${failed.length === 1 ? "source needs" : "sources need"} attention; saved readings keep their capture dates.`
+      : historical ? "Historical sources rechecked. Friday archives retained." : "All card sources updated.",
+  };
+}
+
+export function mergeSourceSyncSummary(previous, current) {
+  if (!previous) return current;
+  const sources = new Map(previous.sources.map(item => [item.id, item]));
+  for (const item of current.sources) sources.set(item.id, item);
+  return summarizeSources([...sources.values()], current.checkedAt);
+}
+
+export async function saveSourceSyncLog(db, id, weekStart, summary, now = new Date()) {
+  if (!db?.prepare) return;
+  try {
+    await db.prepare(`INSERT INTO dashboard_source_sync_log (id, week_start, checked_at, status, source_status_json)
+      VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET checked_at = excluded.checked_at,
+      status = excluded.status, source_status_json = excluded.source_status_json`)
+      .bind(id, weekStart, now.getTime(), summary.status, JSON.stringify(summary)).run();
+  } catch { /* A diagnostic log cannot discard freshly read source data. */ }
+}
+
+export async function readSourceSyncLog(db, id, weekStart) {
+  if (!db?.prepare || !id) return null;
+  try {
+    const row = await db.prepare("SELECT source_status_json FROM dashboard_source_sync_log WHERE id = ? AND week_start = ?").bind(id, weekStart).first();
+    const value = row ? JSON.parse(row.source_status_json) : null;
+    return value && ["complete", "partial"].includes(value.status) && typeof value.message === "string" && Array.isArray(value.sources) ? value : null;
+  } catch { return null; }
+}

@@ -108,3 +108,11 @@ export const warehouseJohnCheers = sqliteTable("warehouse_john_cheers", {
 }, table => [
   index("warehouse_john_cheers_week_received_idx").on(table.weekStart, table.receivedAt),
 ]);
+
+export const dashboardSourceSyncLog = sqliteTable("dashboard_source_sync_log", {
+  id: text("id").primaryKey(),
+  weekStart: text("week_start").notNull(),
+  checkedAt: integer("checked_at").notNull(),
+  status: text("status").notNull(),
+  sourceStatus: text("source_status_json").notNull(),
+}, table => [index("dashboard_source_sync_checked").on(table.checkedAt)]);
