@@ -29,6 +29,32 @@ test("timeout diagnostics return only structural classifications and bounded fla
   } finally { globalThis.document = originalDocument; globalThis.location = originalLocation; }
 });
 
+test("readiness and diagnostics agree on multiline rendered body and table headings", () => {
+  const originalDocument = globalThis.document, originalLocation = globalThis.location;
+  const cases = [
+    ["production", "Production\n report\nShow 1 - 2 of 2", "Amount\nof\ngreen"],
+    ["stock", "Values\nrefer to the\ninventory on a source date\nShow 1 - 2 of 2", "Location\tTotal\nvalue"],
+    ["schedule", "Scheduled\ncoffees\nSummary per\ngreen lot\nShow 1 - 2 of 2", "To\nroast"],
+    ["prices", "Green\nInventory\n1-25 of 38 items", "ID-Tag\nPrice"],
+    ["blend", "Blend\ncomponents", "%\nof\nblend"],
+    ["profile", "Components /\nGreen lots", "Blend\n%\tGreen\nweight"],
+  ];
+  try {
+    globalThis.location = { origin: "https://c-sar.cropster.com", pathname: "/synthetic" };
+    for (const [kind, body, headings] of cases) {
+      globalThis.document = {
+        body: { innerText: body }, readyState: "complete",
+        querySelector: selector => selector === 'input[type="password"]' || selector.includes('iframe[') ? null : {},
+        querySelectorAll: selector => selector === "table thead" ? [{ innerText: headings }] : selector === "table" ? [{}] : [],
+      };
+      assert.equal(renderedViewReady(kind), true, `${kind} must accept whitespace-wrapped rendered labels`);
+      const diagnostics = viewDiagnostics({ kind, expectedPath: "/synthetic" });
+      assert.equal(diagnostics.expectedBody, true, kind);
+      assert.equal(diagnostics.expectedHeaders, true, kind);
+    }
+  } finally { globalThis.document = originalDocument; globalThis.location = originalLocation; }
+});
+
 test("stock readiness accepts both observed inventory-date phrasings", () => {
   const originalDocument = globalThis.document;
   try {

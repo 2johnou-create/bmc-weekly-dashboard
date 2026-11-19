@@ -1,9 +1,10 @@
 // Passed to page.evaluate. It reads rendered DOM only; no app state, cookies,
 // storage, request interception, or Cropster data endpoints are inspected.
 export function renderedViewReady(kind) {
-  const body = document.body?.innerText || "";
+  const compact = value => (value || "").replace(/\s+/g, " ").trim();
+  const body = compact(document.body?.innerText);
   if (document.querySelector('input[type="password"]')) return true;
-  const headings = Array.from(document.querySelectorAll("table thead")).map(item => item.innerText).join(" ");
+  const headings = compact(Array.from(document.querySelectorAll("table thead")).map(item => item.innerText).join(" "));
   if (kind === "blend") return /Blend components/.test(body) && /% of blend/.test(headings) && Boolean(document.querySelector('table tbody a[href*="/profile-groups/"]'));
   if (kind === "group") return /Associated profiles/.test(body) && /Green inventory/.test(body) && Boolean(document.querySelector('a[href*="/apps/roast/profiles/"]'));
   if (kind === "profile") return /Components\s*\/\s*Green lots/i.test(body) && /Blend %/.test(headings) && /Green weight/.test(headings) && Boolean(document.querySelector('table tbody a[href*="/lots/"]'));
@@ -20,8 +21,9 @@ export function renderedViewReady(kind) {
 // Structural failure evidence only. Never return titles, URLs, body strings,
 // field values or any source quantities from this diagnostic.
 export function viewDiagnostics({ kind, expectedPath }) {
-  const body = document.body?.innerText || "";
-  const headings = Array.from(document.querySelectorAll("table thead")).map(item => item.innerText).join(" ");
+  const compact = value => (value || "").replace(/\s+/g, " ").trim();
+  const body = compact(document.body?.innerText);
+  const headings = compact(Array.from(document.querySelectorAll("table thead")).map(item => item.innerText).join(" "));
   const sameOrigin = location.origin === "https://c-sar.cropster.com";
   const urlClass = sameOrigin && location.pathname === "/app/login" ? "login"
     : sameOrigin && location.pathname === expectedPath ? "expected" : "other";
