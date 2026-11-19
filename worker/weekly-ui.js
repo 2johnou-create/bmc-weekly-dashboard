@@ -661,10 +661,10 @@ export const weeklyPage = String.raw`<!doctype html>
       const jobId = state.jobId;
       if (state.status === 'running') onProgress();
       while (state.status === 'running') {
-        const remaining = 210000 - (Date.now() - startedAt);
+        const remaining = 660000 - (Date.now() - startedAt);
         if (remaining <= 0) throw new Error('The Cropster update took too long. Previous figures are still shown.');
         await sourceSyncPause(signal, Math.min(2000, remaining));
-        if (Date.now() - startedAt >= 210000) throw new Error('The Cropster update took too long. Previous figures are still shown.');
+        if (Date.now() - startedAt >= 660000) throw new Error('The Cropster update took too long. Previous figures are still shown.');
         const query = new URLSearchParams({ jobId, week: targetWeek });
         state = await readState(await fetch('/api/source-sync?' + query, options));
         if (signal.aborted) throw new DOMException('Source update stopped.', 'AbortError');
@@ -1165,7 +1165,7 @@ export const weeklyPage = String.raw`<!doctype html>
       controller.fresh = fresh;
       currentRequest = controller;
       const weekToLoad = requestedWeek;
-      const timeout = setTimeout(() => controller.abort(), fresh ? 240000 : 30000);
+      const timeout = setTimeout(() => controller.abort(), fresh ? 720000 : 30000);
       el('report').setAttribute('aria-busy', 'true');
       el('previous').disabled = true;
       el('next').disabled = true;

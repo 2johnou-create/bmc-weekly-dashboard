@@ -50,7 +50,7 @@ export function validateCropsterObservation(input, weekStart, now = new Date()) 
       field === "mondayObservedAt" && input.mondayRoastedKg == null ||
       field === "previousProductionObservedAt" && input.previousProduction == null;
     const time = input[field] === undefined || optionalSection && input[field] === null ? observedAt : Date.parse(input[field]);
-    if (!Number.isFinite(time) || time > observedAt || time < observedAt - 210_000) throw new Error("Invalid section capture time.");
+    if (!Number.isFinite(time) || time > observedAt || time < observedAt - 660_000) throw new Error("Invalid section capture time.");
     times[field] = new Date(time);
   }
   let previousProduction = null;
@@ -189,7 +189,7 @@ async function captureAndSave({ config, env, weekStart, now, fetcher, jobId, sup
       if (part === "recipes") report = await mergeRecipeAssignments(env.DB, report, env);
       const partTime = typeof observation.labCapturedAt[part] === "string" ? new Date(observation.labCapturedAt[part]) : observation.observedAt;
       if (!Number.isFinite(partTime.getTime()) || partTime > observation.observedAt ||
-        partTime.getTime() < observation.observedAt.getTime() - 210_000) throw new Error();
+        partTime.getTime() < observation.observedAt.getTime() - 660_000) throw new Error();
       await saveLabCropster(env.DB, { [part]: report }, partTime);
       // D1 upserts may retain a newer capture; verify that a usable part survived.
       const stored = await env.DB.prepare("SELECT recorded_at FROM dashboard_roastery_lab_cropster WHERE part = ?").bind(part).first();

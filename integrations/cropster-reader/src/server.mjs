@@ -18,9 +18,9 @@ export function readConfiguration(env) {
   if (typeof email !== "string" || email.length > 254 || !/^[^\s@]+@[^\s@]+$/.test(email)
     || typeof password !== "string" || !password.length || password.length > 1024
     || typeof token !== "string" || !/^[A-Za-z0-9_-]{32,256}$/.test(token)) throw new ReaderError("CONFIGURATION_REQUIRED");
-  const timeoutMs = Number(env.CROPSTER_READER_TIMEOUT_MS || 180000);
+  const timeoutMs = Number(env.CROPSTER_READER_TIMEOUT_MS || 600000);
   const port = Number(env.PORT || 10000);
-  if (!Number.isInteger(timeoutMs) || timeoutMs < 10000 || timeoutMs > 180000
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 10000 || timeoutMs > 600000
     || !Number.isInteger(port) || port < 1 || port > 65535
     || env.CHROMIUM_SANDBOX !== undefined && !["true", "false"].includes(env.CHROMIUM_SANDBOX)) throw new ReaderError("CONFIGURATION_REQUIRED");
   const profileKeys = { libertyBlend: "CROPSTER_LIBERTY_BLEND_ID", rhythmBlend: "CROPSTER_RHYTHM_BLEND_ID", ohGroup: "CROPSTER_OH_GROUP_ID", decafGroup: "CROPSTER_DECAF_GROUP_ID" };
@@ -174,7 +174,7 @@ export function startService(env = process.env) {
       outgoing.end('{"error":{"code":"CROPSTER_UNAVAILABLE"}}');
     }
   });
-  server.requestTimeout = 190000;
+  server.requestTimeout = 610000;
   server.headersTimeout = 10000;
   server.listen(configuration.port, "0.0.0.0", () => process.stdout.write('{"event":"reader_listening"}\n'));
   let closing = false;

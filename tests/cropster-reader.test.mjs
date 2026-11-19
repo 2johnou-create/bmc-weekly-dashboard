@@ -165,6 +165,18 @@ test("observations reject wrong weeks, scope, timestamps and quantities rather t
   assert.equal(validateCropsterObservation(zero, weekStart, now).production.scheduledKg, 0);
 });
 
+test("a slow background capture keeps each section's actual observation time", () => {
+  const value = fixture();
+  const sectionTime = new Date(Date.parse(value.observedAt) - 600_000).toISOString();
+  value.greenObservedAt = sectionTime;
+  value.mondayObservedAt = sectionTime;
+  const result = validateCropsterObservation(value, weekStart, now);
+  assert.equal(result.greenObservedAt.toISOString(), sectionTime);
+  assert.equal(result.mondayObservedAt.toISOString(), sectionTime);
+  value.greenObservedAt = new Date(Date.parse(value.observedAt) - 660_001).toISOString();
+  assert.throws(() => validateCropsterObservation(value, weekStart, now));
+});
+
 test("invalid bridge configuration and oversized replies do not change saved readings", async () => {
   const db = localDatabase(":memory:"); await seed(db);
   try {

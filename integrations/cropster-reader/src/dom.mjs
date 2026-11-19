@@ -17,6 +17,35 @@ export function renderedViewReady(kind) {
   return /Production report/.test(body) && /Amount of green/.test(headings) && /Show\s+\d+\s*-\s*\d+\s+of\s+\d+/.test(body);
 }
 
+// Structural failure evidence only. Never return titles, URLs, body strings,
+// field values or any source quantities from this diagnostic.
+export function viewDiagnostics({ kind, expectedPath }) {
+  const body = document.body?.innerText || "";
+  const headings = Array.from(document.querySelectorAll("table thead")).map(item => item.innerText).join(" ");
+  const sameOrigin = location.origin === "https://c-sar.cropster.com";
+  const urlClass = sameOrigin && location.pathname === "/app/login" ? "login"
+    : sameOrigin && location.pathname === expectedPath ? "expected" : "other";
+  let expectedBody, expectedHeaders;
+  if (kind === "blend") { expectedBody = /Blend components/.test(body); expectedHeaders = /% of blend/.test(headings); }
+  else if (kind === "group") { expectedBody = /Associated profiles/.test(body) && /Green inventory/.test(body); expectedHeaders = false; }
+  else if (kind === "profile") { expectedBody = /Components\s*\/\s*Green lots/i.test(body); expectedHeaders = /Blend %/.test(headings) && /Green weight/.test(headings); }
+  else if (kind === "prices") { expectedBody = /Green Inventory/i.test(body); expectedHeaders = /ID-Tag/.test(headings) && /Price/.test(headings); }
+  else if (kind === "stock") { expectedBody = /Values refer to (?:the )?inventory on/.test(body); expectedHeaders = /Location/.test(headings) && /Total value/.test(headings); }
+  else if (kind === "schedule") { expectedBody = /Scheduled coffees/.test(body) && /Summary per green lot/.test(body); expectedHeaders = /To roast/.test(headings); }
+  else { expectedBody = /Production report/.test(body); expectedHeaders = /Amount of green/.test(headings); }
+  return {
+    urlClass, sameOrigin,
+    readyState: document.readyState,
+    passwordInput: Boolean(document.querySelector('input[type="password"]')),
+    expectedBody, expectedHeaders,
+    pager: /Show\s+\d+\s*-\s*\d+\s+of\s+\d+|\d+\s*-\s*\d+\s+of\s+\d+\s+items/.test(body),
+    tableCount: Math.min(document.querySelectorAll("table").length, 30),
+    emptySchedule: ["No coffees scheduled", "No profiles scheduled", "No green lots scheduled"].every(marker => body.includes(marker)),
+    challenge: Boolean(document.querySelector('iframe[src*="recaptcha"],iframe[src*="hcaptcha"]')) || /checking your browser|verify you are human/i.test(body),
+    accessDenied: /access denied|you have been blocked|not authorized|forbidden/i.test(body),
+  };
+}
+
 export function captureDocument() {
   const text = element => (element?.innerText || "").replace(/\r/g, "").trim();
   const headings = Array.from(document.querySelectorAll("h1,h2,h3,h4,h5,h6"));

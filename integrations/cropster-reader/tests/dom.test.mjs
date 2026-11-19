@@ -1,6 +1,33 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { captureDocument, renderedViewReady } from "../src/dom.mjs";
+import { captureDocument, renderedViewReady, viewDiagnostics } from "../src/dom.mjs";
+import { safeProgress } from "../src/progress.mjs";
+
+test("timeout diagnostics return only structural classifications and bounded flags", () => {
+  const originalDocument = globalThis.document, originalLocation = globalThis.location;
+  try {
+    globalThis.document = {
+      title: "private title must not be returned", readyState: "complete",
+      body: { innerText: "Production report private quantities and passwords Amount of green Show 1 - 2 of 2" },
+      querySelector: () => null,
+      querySelectorAll: selector => selector === "table thead" ? [{ innerText: "Amount of green" }] : selector === "table" ? [{}, {}] : [],
+    };
+    globalThis.location = { origin: "https://c-sar.cropster.com", pathname: "/apps/roast/production-report/profile-group" };
+    const flags = viewDiagnostics({ kind: "production", expectedPath: location.pathname });
+    assert.equal(flags.urlClass, "expected");
+    assert.equal(flags.expectedBody, true);
+    assert.equal(flags.expectedHeaders, true);
+    assert.equal(flags.pager, true);
+    assert.equal(flags.tableCount, 2);
+    assert.doesNotMatch(JSON.stringify(flags), /private|quantities|passwords|https:|\/apps\//);
+    const safe = safeProgress({ stage: "weekly_production_before", state: "failed", phase: "ready", diagnostics: { ...flags, title: "private title", body: "private body", url: "https://private.test", tableCount: 100000 } });
+    assert.equal(safe.diagnostics.urlClass, "expected");
+    assert.equal(safe.diagnostics.tableCount, undefined);
+    assert.doesNotMatch(JSON.stringify(safe), /private|title|body|https:/);
+    location.pathname = "/app/login";
+    assert.equal(viewDiagnostics({ kind: "production", expectedPath: "/apps/roast/production-report/profile-group" }).urlClass, "login");
+  } finally { globalThis.document = originalDocument; globalThis.location = originalLocation; }
+});
 
 test("stock readiness accepts both observed inventory-date phrasings", () => {
   const originalDocument = globalThis.document;

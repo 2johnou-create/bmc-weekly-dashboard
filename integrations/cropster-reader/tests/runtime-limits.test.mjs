@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createLimiter, settlesWithin } from "../src/runtime-limits.mjs";
-import { createBrowserReader, captureTimestamps } from "../src/browser.mjs";
+import { createBrowserReader, captureTimestamps, requireCredentialOrigin } from "../src/browser.mjs";
 import { ReaderError } from "../src/errors.mjs";
 
 const now = () => new Date("2026-02-05T00:00:00Z");
@@ -13,6 +13,13 @@ test("final section and overall timestamps share one instant even when the clock
   assert.equal(calls, 1);
   assert.equal(timestamps.productionObservedAt, timestamps.observedAt);
   assert.ok(Date.parse(timestamps.productionObservedAt) <= Date.parse(timestamps.observedAt));
+});
+
+test("credentials may only be typed into the exact HTTPS Cropster login origin and path", () => {
+  assert.doesNotThrow(() => requireCredentialOrigin("https://c-sar.cropster.com/app/login?redirectPath=report"));
+  for (const address of ["https://untrusted.example.test/app/login", "https://c-sar.cropster.com.example.test/app/login", "http://c-sar.cropster.com/app/login", "https://name:pass@c-sar.cropster.com/app/login", "https://c-sar.cropster.com/app/", "invalid"]) {
+    assert.throws(() => requireCredentialOrigin(address), /CROPSTER_AUTH_REQUIRED/);
+  }
 });
 
 test("cancelled limiters reject queued work immediately without starting it", async () => {

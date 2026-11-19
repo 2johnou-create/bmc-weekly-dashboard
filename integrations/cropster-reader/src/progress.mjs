@@ -6,6 +6,16 @@ export function safeProgress(input, now = () => new Date()) {
   if (!input || !stagePattern.test(input.stage) || !states.has(input.state) || !phases.has(input.phase)) return null;
   const event = { stage: input.stage, state: input.state, phase: input.phase, at: now().toISOString() };
   if (typeof input.code === "string" && /^[A-Z][A-Z0-9_]{0,79}$/.test(input.code)) event.code = input.code;
+  if (input.diagnostics && typeof input.diagnostics === "object") {
+    const flags = {};
+    for (const key of ["sameOrigin", "passwordInput", "expectedBody", "expectedHeaders", "pager", "emptySchedule", "challenge", "accessDenied", "inspectionTimedOut"]) {
+      if (typeof input.diagnostics[key] === "boolean") flags[key] = input.diagnostics[key];
+    }
+    if (["login", "expected", "other"].includes(input.diagnostics.urlClass)) flags.urlClass = input.diagnostics.urlClass;
+    if (["loading", "interactive", "complete"].includes(input.diagnostics.readyState)) flags.readyState = input.diagnostics.readyState;
+    if (Number.isInteger(input.diagnostics.tableCount) && input.diagnostics.tableCount >= 0 && input.diagnostics.tableCount <= 30) flags.tableCount = input.diagnostics.tableCount;
+    if (Object.keys(flags).length) event.diagnostics = flags;
+  }
   return event;
 }
 

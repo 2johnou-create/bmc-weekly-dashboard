@@ -129,7 +129,7 @@ for (const view of views) {
       return response(fixtureReport(view));
     }, clock(), view.kind === "weekly" ? week : "");
     await app.load(true, { fresh: true });
-    assert.deepEqual(app.timer.durations, [240000, 2000, 2000]);
+    assert.deepEqual(app.timer.durations, [720000, 2000, 2000]);
     assert.equal(app.calls.length, 4);
     assert.ok(app.calls.every(call => call.options.signal === app.calls[0].options.signal));
     assert.ok(app.statuses.includes("Updating Cropster…"));
@@ -167,7 +167,7 @@ for (const view of views) {
     });
     await app.load(true, {fresh: true});
     assert.equal(app.calls.length, 2);
-    assert.deepEqual(app.timer.durations, [240000]);
+    assert.deepEqual(app.timer.durations, [720000]);
     assert.equal(app.state.rendered, 1);
     assert.match(app.el("status").textContent, /All connected sources were updated\./);
   });
@@ -184,7 +184,7 @@ for (const view of views) {
     });
     await app.load(true, {fresh: true});
     assert.equal(app.calls.length, 2);
-    assert.deepEqual(app.timer.durations, [240000]);
+    assert.deepEqual(app.timer.durations, [720000]);
     assert.equal(app.state.rendered, 1);
   });
 
@@ -247,10 +247,10 @@ test("mismatched poll results cannot be applied to the selected report", async (
   assert.equal(app.state.rendered, 0);
 });
 
-test("source polling is bounded to210seconds and retains the last report when it expires", async () => {
+test("source polling is bounded to660seconds and retains the last report when it expires", async () => {
   const app = runtime(views[0], async () => response({status: "running", jobId, weekStart: week}));
   await app.load(true, {fresh: true});
-  assert.equal(app.calls.length, 105);
+  assert.equal(app.calls.length, 330);
   assert.equal(app.state.rendered, 0);
   assert.match(app.el("status").textContent, /took too long.*last loaded figures/);
 });

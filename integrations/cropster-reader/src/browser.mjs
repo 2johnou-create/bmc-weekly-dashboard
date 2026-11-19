@@ -1,6 +1,6 @@
 import { ReaderError } from "./errors.mjs";
 import { addDays, completedMonths, sydneyDate, weekRange } from "./dates.mjs";
-import { captureDocument, renderedViewReady } from "./dom.mjs";
+import { captureDocument, renderedViewReady, viewDiagnostics } from "./dom.mjs";
 import { createLimiter, settlesWithin } from "./runtime-limits.mjs";
 import { browserFailureCode, safeProgress } from "./progress.mjs";
 import {
@@ -9,12 +9,18 @@ import {
   parseBlend, parseProfileGroup, parseProfileInputs, assembleRecipes, blendLoss, sameSchedules, previousProduction,
 } from "./parse.mjs";
 
-const PAGE_LIMIT = 2;
-const SOURCE_TIMEOUT = 14000;
+const PAGE_LIMIT = 1;
+const SOURCE_TIMEOUT = 45000;
 
 export function captureTimestamps(now = () => new Date()) {
   const capturedAt = now().toISOString();
   return { observedAt: capturedAt, productionObservedAt: capturedAt };
+}
+
+export function requireCredentialOrigin(address) {
+  let url;
+  try { url = new URL(address); } catch { throw new ReaderError("CROPSTER_AUTH_REQUIRED"); }
+  if (url.origin !== CROPSTER_ORIGIN || url.pathname !== "/app/login" || url.username || url.password) throw new ReaderError("CROPSTER_AUTH_REQUIRED");
 }
 
 function paths(range) {
@@ -72,17 +78,9 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
           locale: "en-US", timezoneId: "Australia/Sydney", acceptDownloads: false,
           serviceWorkers: "block", viewport: { width: 1440, height: 1000 },
         });
-        await candidateContext.route("**/*", route => {
-        const request = route.request();
-        if (["image", "font", "media"].includes(request.resourceType())) return route.abort();
-        // Main documents cannot navigate to arbitrary hosts. The application's
-        // own ordinary network requests remain managed by the Cropster website.
-        if (request.isNavigationRequest() && request.frame() === request.frame().page().mainFrame()) {
-          try { if (new URL(request.url()).origin !== CROPSTER_ORIGIN) return route.abort(); }
-          catch { return route.abort(); }
-        }
-        return route.continue();
-        });
+        // Request routing disables Chromium's HTTP cache. Keep it off so repeated
+        // website views can reuse static assets on the constrained host. All
+        // navigations originate from fixed URLs; parsers verify final origins.
         if (closed || expected !== generation) {
           void settlesWithin(() => candidate.close(), cleanupTimeoutMs);
           throw new ReaderError("CROPSTER_UNAVAILABLE");
@@ -125,11 +123,13 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
       if (await candidate.count() === 1 && await candidate.isVisible()) { email = candidate; break; }
     }
     if (!email) throw new ReaderError("CROPSTER_AUTH_REQUIRED");
+    requireCredentialOrigin(page.url());
     await email.fill(configuration.email, { timeout });
+    requireCredentialOrigin(page.url());
     await page.locator('input[type="password"]').fill(configuration.password, { timeout });
     await page.getByRole("button", { name: "Login", exact: true }).click({ timeout });
     try {
-      await page.waitForURL(url => url.origin === CROPSTER_ORIGIN && url.pathname !== "/app/login", { timeout });
+      await page.waitForURL(url => url.origin === CROPSTER_ORIGIN && url.pathname !== "/app/login", { timeout, waitUntil: "domcontentloaded" });
     } catch { throw new ReaderError("CROPSTER_AUTH_REQUIRED"); }
   }
 
@@ -143,8 +143,8 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
     const limit = createLimiter(PAGE_LIMIT);
     const jobPages = new Set();
     let timedOut = false, abortError = null, rejectAbort;
-    const emit = (stage, state, phase, code) => {
-      const progress = safeProgress({ stage, state, phase, ...(code ? { code } : {}) }, now);
+    const emit = (stage, state, phase, code, diagnostics) => {
+      const progress = safeProgress({ stage, state, phase, ...(code ? { code } : {}), ...(diagnostics ? { diagnostics } : {}) }, now);
       if (progress && typeof onProgress === "function") { try { onProgress(progress); } catch { /* Diagnostics never stop a capture. */ } }
     };
     const aborted = new Promise((_, reject) => { rejectAbort = reject; });
@@ -192,6 +192,16 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
       await page.waitForFunction(renderedViewReady, kind, { timeout: remaining() });
       if (new URL(page.url()).pathname === "/app/login") throw new ReaderError("CROPSTER_AUTH_REQUIRED");
     };
+    const diagnose = async (page, kind, path) => {
+      if (!page) return undefined;
+      let timer;
+      try {
+        return await Promise.race([
+          page.evaluate(viewDiagnostics, { kind, expectedPath: new URL(path, CROPSTER_ORIGIN).pathname }).catch(() => ({ inspectionTimedOut: true })),
+          new Promise(resolve => { timer = setTimeout(() => resolve({ inspectionTimedOut: true }), 2000); }),
+        ]);
+      } finally { clearTimeout(timer); }
+    };
     const expandLegacy = async page => {
       const buttons = page.getByRole("button", { name: "100", exact: true });
       const count = await buttons.count();
@@ -236,7 +246,7 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
         return result;
       } catch (error) {
         const code = browserFailureCode(error);
-        emit(stage, "failed", phase, code);
+        emit(stage, "failed", phase, code, await diagnose(page, kind, path));
         throw error instanceof ReaderError ? error : new ReaderError(code);
       } finally { if (page) await closePage(page); }
     });
@@ -275,7 +285,7 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
         throw new ReaderError("CROPSTER_TABLE_INCOMPLETE");
       } catch (error) {
         const code = browserFailureCode(error);
-        emit("inventory", "failed", phase, code);
+        emit("inventory", "failed", phase, code, await diagnose(page, "prices", sourcePaths.prices));
         throw error instanceof ReaderError ? error : new ReaderError(code);
       } finally { if (page) await closePage(page); }
     });

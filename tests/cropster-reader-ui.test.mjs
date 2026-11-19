@@ -139,7 +139,7 @@ for (const [name, page, kind] of [["Steam Room", weeklyPage, "weekly"], ["Wareho
     const calls = [];
     const app = runtime(page, kind, (url, options) => { calls.push({ url, options }); return pending.promise; }, timers, el);
     const completion = app.load(true, { fresh: true });
-    assert.deepEqual(timers, [240000]);
+    assert.deepEqual(timers, [720000]);
     assert.equal(el("status").textContent, "Reading Cropster…");
     assert.equal(el("refresh").disabled, true);
     assert.equal(el("figures").hidden, false);
