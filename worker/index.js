@@ -221,7 +221,7 @@ export default {
         summary.message = summary.status === "complete" ? "Cropster, Dispatch and workbook sources saved. Stock Take rechecks when the dashboard opens." :
           "Some sources need attention. Verified readings retain their actual capture times.";
         await saveSourceSyncLog(env.DB, input.jobId, week.start, summary, now);
-        return json({ ok: true, status: summary.status });
+        return json({ ok: true, status: summary.status, sourceSync: summary });
       }
       if (url.pathname === "/api/source-sync") {
         if (!["GET", "POST"].includes(request.method)) return json({ error: "Method not allowed." }, 405, { Allow: "GET, POST" });

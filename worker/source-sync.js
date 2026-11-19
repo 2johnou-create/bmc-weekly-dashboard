@@ -22,7 +22,7 @@ export function sourceSyncSummary({ weekly, lab, packing, weather }, { historica
       ["recorded", "stale"].includes(metrics.expenses?.status) ? "not-connected" : "failed", metrics.expenses?.asOf, metrics.expenses?.note),
   ] : [];
   if (!lab && metrics.expenses?.greenForecast) sources.push(source("planning", "Green buy forecast workbook",
-    state(readable(metrics.expenses.greenForecast)), metrics.expenses.greenForecast.asOf));
+    metricState(metrics.expenses.greenForecast), metrics.expenses.greenForecast.asOf, metrics.expenses.greenForecast.note));
   if (lab) {
     for (const part of ["inventory", "recipes", "use", "loss"]) {
       const item = cropster.labParts?.[part];
@@ -30,7 +30,17 @@ export function sourceSyncSummary({ weekly, lab, packing, weather }, { historica
         historical ? "archive" : item?.status === "updated" ? "updated" : cropster.mode === "saved-readings" ? "not-connected" : cropster.status === "pending" ? "pending" : cropster.status === "saved" ? "saved" : "failed",
         item?.asOf || lab.source?.partAsOf?.[part] || null));
     }
-    sources.push(source("planning", "Green buy, purchases and contracts workbook", state(readable(lab.purchases) && readable(lab.purchases?.contracts) && readable(lab.purchases?.greenForecast)), lab.purchases?.asOf));
+    const planning = [
+      ["Purchase calendar", lab.purchases], ["Contract calendar", lab.purchases?.contracts],
+      ["Monthly forecast", lab.purchases?.greenForecast],
+    ];
+    const planningStatus = planning.some(([, metric]) => !readable(metric) && metric?.status !== "partial") ? "failed" :
+      planning.some(([, metric]) => metric?.status === "partial") ? "partial" : "updated";
+    const planningNote = planning.filter(([, metric]) => !readable(metric)).map(([label, metric]) => label + ": " +
+      (label === "Purchase calendar" && metric?.status === "partial"
+        ? "Calendar loaded; rows with missing or invalid order dates are excluded."
+        : metric?.note || "This part of the planning workbook is unavailable.")).join(" ");
+    sources.push(source("planning", "Green buy, purchases and contracts workbook", planningStatus, lab.purchases?.asOf, planningNote));
     sources.push(source("coffee-c", "Coffee C market quote", state(readable(lab.coffeeC)), lab.coffeeC?.asOf));
     sources.push(source("qa-releases", "QA notes and release plan", state(Boolean(lab.settings) && lab.settings.status !== "unavailable"), lab.settings?.updatedAt));
   }

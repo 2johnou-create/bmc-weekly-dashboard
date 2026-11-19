@@ -278,7 +278,10 @@ test("a server callback persists source sections without a visitor cookie and ac
       authorization: "Bearer " + writeToken, body });
     const first = await send();
     assert.equal(first.status, 200);
-    assert.deepEqual(first.body, { ok: true, status: "partial" });
+    assert.equal(first.body.ok, true);
+    assert.equal(first.body.status, "partial");
+    assert.equal(first.body.sourceSync.jobStatus, "complete");
+    assert.ok(first.body.sourceSync.sources.every(item => Object.keys(item).every(key => ["id", "label", "status", "asOf", "note"].includes(key))));
     const before = await db.prepare("SELECT * FROM dashboard_cropster_readings WHERE week_start = ?").bind(week()).first();
     assert.equal(before.scheduled_kg, 25);
     assert.equal(before.recorded_at, Date.parse(result.productionObservedAt));
@@ -319,7 +322,9 @@ test("a callback preserves legacy planned replacements when their provenance can
       authorization: "Bearer " + writeToken,
       body: { schemaVersion: "1.0", jobId: state.jobId, weekStart: week(), result: incoming } });
     assert.equal(saved.status, 200);
-    assert.deepEqual(saved.body, { ok: true, status: "partial" });
+    assert.equal(saved.body.ok, true);
+    assert.equal(saved.body.status, "partial");
+    assert.equal(saved.body.sourceSync.jobStatus, "complete");
     const after = await db.prepare("SELECT data_json, recorded_at FROM dashboard_roastery_lab_cropster WHERE part = ?").bind("recipes").first();
     assert.deepEqual(after, before);
     assert.deepEqual(JSON.parse(after.data_json).runoutProfiles[0].lotIds, ["PG-0001", "PG-0002"]);
