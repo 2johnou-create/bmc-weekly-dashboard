@@ -571,16 +571,19 @@ export const warehousePage = String.raw`<!doctype html>
     }
     function forecastsSection() {
       const c = data?.lab?.consumption || {};
-      const rows = (c.forecasts || []).map((row) => {
-        const label = node("span", row.name);
+      const pools = [...new Map((c.runoutPools || []).map(pool => [pool.poolId, pool])).values()];
+      const rows = pools.map((row) => {
+        const label = node("span", (row.profileNames || []).join(" / ") || "Profile lot pool");
         if (row.locations?.length) label.append(node("p", row.locations.map((place) => place.name + " " + kg(place.kg)).join(" · "), "locations"));
-        return [label, num(row.kg), num(row.avgMonthlyKg), month(row.depletionMonth)];
+        if (row.status === "partial") label.append(node("p", "Partial coverage · quantity estimate", "locations"));
+        const finish = ["recorded", "partial"].includes(row.status) && Number.isFinite(row.totalKg) && row.totalKg >= 0 && Number.isFinite(row.avgMonthlyKg) && row.avgMonthlyKg > 0 ? row.depletionMonth : null;
+        return [label, num(row.totalKg), num(row.avgMonthlyKg), month(finish)];
       });
       return section(
-        "Estimated stock depletion",
+        "Projected runout by lot pool",
         metrics([["Inventory, all locations", kg(c.stockTotalKg)], ["Inventory as of", date(c.stockAsOf) || "—"]]),
-        table(["Coffee", "Stock kg", "kg / mo", "Finish"], rows, "Coffee depletion estimates"),
-        note(c.forecastNote)
+        table(["Profile lot pool", "Stock + contracts kg", "kg / mo", "Finish"], rows, "Profile lot-pool runout estimates"),
+        note("Includes every verified related lot across all warehouses and supplier-held contracts. Shared stock is shown once. Estimates use three completed months of consumption; contract arrival timing is not guaranteed.")
       );
     }
     function greenPanel() {

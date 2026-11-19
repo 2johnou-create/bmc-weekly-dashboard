@@ -141,6 +141,30 @@ export const roasteryLabPage = String.raw`<!doctype html>
     .origin-table th:first-child { width:22%; }
     .origin-table td:nth-child(4) { text-align:left; width:23%; }
     .origin-table thead th:nth-child(4) { text-align:left; }
+    .runout-pools { display:grid; gap:.45rem; margin-top:.65rem; }
+    .runout-pool { border:1px solid var(--line); border-radius:.3rem; }
+    .runout-pool > summary { position:relative; display:block; padding:.6rem .7rem .6rem 1.55rem; cursor:pointer; }
+    .runout-pool > summary::-webkit-details-marker { display:none; }
+    .runout-pool > summary::marker { content:""; }
+    .runout-pool > summary::before { content:'›'; position:absolute; left:.55rem; top:.65rem; font-weight:750; }
+    .runout-pool[open] > summary::before { transform:rotate(90deg); }
+    .pool-summary { display:grid; grid-template-columns:minmax(12rem,2fr) repeat(3,minmax(7rem,1fr)); gap:.4rem .8rem; align-items:start; font-size:.875rem; }
+    .pool-summary small { display:block; font-size:.75rem; color:var(--muted); }
+    .pool-summary strong { display:block; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+    .pool-summary .pool-coverage { grid-column:1 / -1; color:var(--caution); font-size:.8125rem; }
+    .pool-details { border-top:1px solid var(--line); padding:.7rem; font-size:.875rem; overflow-wrap:anywhere; }
+    .runout-inputs { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:.4rem .7rem; margin:.5rem 0; }
+    .runout-inputs div { min-width:0; }
+    .runout-inputs dt { font-size:.75rem; color:var(--muted); }
+    .runout-inputs dd { margin:0; font-weight:700; font-variant-numeric:tabular-nums; }
+    .runout-lots { margin-top:.5rem; }
+    .runout-lots > summary { min-height:32px; cursor:pointer; font-weight:650; }
+    .runout-lot-list { list-style:none; margin:.4rem 0 0; padding:0; }
+    .runout-lot-list li { padding:.4rem 0; border-top:1px solid var(--line); }
+    .runout-lot-list strong { display:block; }
+    .runout-lot-list .location-list li { border:0; padding:.1rem 0; }
+    .pool-details .location-list,.coverage-cell .location-list { font-size:.875rem; }
+    @media (max-width:48rem) { .pool-summary { grid-template-columns:repeat(2,minmax(0,1fr)); } .pool-summary > strong { grid-column:1 / -1; } }
     .sr-only { position:absolute; width:1px; height:1px; margin:-1px; padding:0; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
     .release-fields { display: grid; gap: .7rem; }
     .release-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(7.8rem, .6fr) auto; align-items: end; gap: .35rem .5rem; }
@@ -316,7 +340,7 @@ export const roasteryLabPage = String.raw`<!doctype html>
             </section>
             <section aria-labelledby="coverageTitle">
               <div class="coverage-controls"><h2 id="coverageTitle">Green coffee contract calendar</h2><label for="coverageYear">Year <select id="coverageYear" disabled></select></label></div>
-              <div class="coverage-legend"><span><i class="coverage-key contracted" aria-hidden="true"></i>✓ Contracted</span><span><i class="coverage-key gap" aria-hidden="true"></i>Gap · uncontracted</span><span><i class="coverage-key unknown" aria-hidden="true"></i>? Unknown</span><span><i class="coverage-key stock-runout-key" aria-hidden="true"></i>Stock-only runout</span></div>
+              <div class="coverage-legend"><span><i class="coverage-key contracted" aria-hidden="true"></i>✓ Contracted</span><span><i class="coverage-key gap" aria-hidden="true"></i>Gap · uncontracted</span><span><i class="coverage-key unknown" aria-hidden="true"></i>? Unknown</span><span><i class="coverage-key stock-runout-key" aria-hidden="true"></i>Projected runout</span></div>
               <p id="coverageAverageNote" class="coverage-average-note"></p>
               <p id="coverageStatus" class="note" hidden></p>
               <p id="coverageEmpty" class="note" hidden>Contract coverage is unavailable.</p>
@@ -330,15 +354,20 @@ export const roasteryLabPage = String.raw`<!doctype html>
               <p id="coverageNote" class="note" hidden></p>
               <a id="coverageLink" class="cropster-link" target="_blank" rel="noopener noreferrer" hidden>Open contract plan</a>
             </section>
+            <section aria-labelledby="runoutPoolsTitle">
+              <h2 id="runoutPoolsTitle">Projected runout by lot pool</h2>
+              <p class="note">Each shared pool appears once. Quantity estimates use linked lots across all warehouses and additional linked contract quantities, with coverage notes in the details.</p>
+              <p id="runoutPoolsEmpty" class="note" hidden>Verified profile lot-pool inputs are unavailable.</p>
+              <div id="runoutPools" class="runout-pools"></div>
+            </section>
             <section aria-labelledby="originsTitle">
               <h2 id="originsTitle">Actual use and stock by coffee</h2>
               <p id="stockAsOf" class="note"></p>
-              <p class="note">Stock-only runout uses current holding and each coffee’s average monthly use.</p>
               <p id="originNote" class="note" hidden></p>
               <p id="originsEmpty" class="note" hidden>Actual coffee consumption and stock figures are unavailable.</p>
-              <div id="originsScroll" class="origin-scroll" role="region" aria-label="Actual coffee use, recipe shares and stock-only runout. Scroll horizontally for all columns." tabindex="0" hidden>
+              <div id="originsScroll" class="origin-scroll" role="region" aria-label="Actual coffee use, recipe shares and stock. Scroll horizontally for all columns." tabindex="0" hidden>
                 <table class="table origin-table" aria-labelledby="originsTitle">
-                  <thead><tr><th scope="col">Coffee · all locations</th><th id="originAverageLabel" scope="col">3-month avg kg</th><th id="originLastMonthLabel" scope="col">Last month kg</th><th scope="col">Used for · recipe share</th><th scope="col">Stock kg</th><th scope="col">Stock-only runout</th></tr></thead>
+                  <thead><tr><th scope="col">Coffee · all locations</th><th id="originAverageLabel" scope="col">3-month avg kg</th><th id="originLastMonthLabel" scope="col">Last month kg</th><th scope="col">Used for · recipe share</th><th scope="col">Stock kg</th></tr></thead>
                   <tbody id="originRows"></tbody>
                 </table>
               </div>
@@ -764,6 +793,90 @@ export const roasteryLabPage = String.raw`<!doctype html>
       locations.append(node('summary', row.name), list);
       return locations;
     }
+    function projectedPoolMonth(pool) {
+      return pool && ['recorded', 'partial'].includes(pool.status) && Number.isFinite(pool.totalKg) && pool.totalKg >= 0
+        && Number.isFinite(pool.avgMonthlyKg) && pool.avgMonthlyKg > 0 && /^\d{4}-(0[1-9]|1[0-2])$/.test(pool.depletionMonth || '')
+        ? pool.depletionMonth : null;
+    }
+    function poolLocations(locations) {
+      const list = node('ul', undefined, 'location-list');
+      for (const location of Array.isArray(locations) ? locations : []) list.append(node('li', location.name + ' · ' + withUnit(location.kg, 'kg')));
+      return list;
+    }
+    function poolInputDetails(pool, { lotsOpen = false } = {}) {
+      const root = node('div');
+      if (!pool) { root.append(node('p', 'A verified profile-group lot pool is needed for this projection.', 'note')); return root; }
+      root.append(node('p', pool.status === 'partial' ? 'Partial coverage · quantity estimate'
+        : pool.status === 'recorded' ? 'Recorded quantity inputs' : 'Projection unavailable', pool.status === 'recorded' ? 'note' : 'note warning'));
+      const inputs = node('dl', undefined, 'runout-inputs');
+      for (const [label, value] of [
+        ['Total pooled quantity', withUnit(pool.totalKg, 'kg')],
+        ['Inventory · all warehouses', withUnit(pool.inventoryKg, 'kg')],
+        ['Additional contract quantity', withUnit(pool.additionalContractKg, 'kg')],
+        ['3-month average use', withUnit(pool.avgMonthlyKg, 'kg/month')],
+        ['2-month average use', withUnit(pool.twoMonthAverageKg, 'kg/month')],
+        ['Linked lots', Number.isInteger(pool.lotCount) && pool.lotCount >= 0 ? numbers.format(pool.lotCount) : missing],
+        ['Projected runout', monthText(projectedPoolMonth(pool)) || missing],
+      ]) {
+        const item = node('div'); item.append(node('dt', label), node('dd', value)); inputs.append(item);
+      }
+      root.append(inputs, node('p', 'Runout uses the last three completed months of pooled green use across linked lots. Recipe percentages do not allocate this shared quantity or consumption.', 'note'));
+      if (pool.note) root.append(node('p', pool.note, 'note'));
+      if (pool.profileNames?.length) root.append(node('p', 'Profile groups · ' + pool.profileNames.join(' · '), 'note'));
+      if (pool.profileGroupIds?.length) root.append(node('p', 'Profile-group IDs · ' + pool.profileGroupIds.join(', '), 'note'));
+      const inputDateOnly = typeof pool.asOf === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(pool.asOf);
+      const timestamp = dateText(pool.asOf, inputDateOnly ? releaseFormat : timeFormat);
+      root.append(node('p', timestamp ? 'Inputs as of ' + timestamp + (inputDateOnly ? '.' : ' Sydney time.') : 'Input date unavailable.', 'note'));
+      if (Array.isArray(pool.locations) && pool.locations.length) {
+        root.append(node('p', 'Warehouse balances', 'note'), poolLocations(pool.locations));
+      } else root.append(node('p', 'Warehouse breakdown unavailable.', 'note'));
+      const lots = node('details', undefined, 'runout-lots');
+      lots.dataset.poolId = pool.poolId;
+      lots.open = lotsOpen;
+      lots.append(node('summary', 'Related lot IDs and balances'));
+      const rows = Array.isArray(pool.lotRows) ? pool.lotRows : [];
+      if (rows.length) {
+        const list = node('ul', undefined, 'runout-lot-list');
+        for (const lot of rows) {
+          const item = node('li');
+          item.append(node('strong', (lot.lotId || 'Lot ID unavailable') + ' · ' + (lot.name || 'Lot name unavailable')), node('span', withUnit(lot.kg, 'kg')));
+          if (Array.isArray(lot.locations) && lot.locations.length) item.append(poolLocations(lot.locations));
+          list.append(item);
+        }
+        lots.append(list);
+      } else lots.append(node('p', 'Related lot balances are unavailable.', 'note'));
+      root.append(lots);
+      return root;
+    }
+    function renderRunoutPools(pools) {
+      const open = new Set([...el('runoutPools').children].filter(item => item.open).map(item => item.dataset.poolId).filter(Boolean));
+      const lotsOpen = new Set([...el('runoutPools').querySelectorAll('details.runout-lots[open]')].map(item => item.dataset.poolId));
+      const unique = [...new Map((Array.isArray(pools) ? pools : []).map(pool => [pool.poolId, pool])).values()];
+      el('runoutPoolsEmpty').hidden = Boolean(unique.length);
+      el('runoutPools').replaceChildren(...unique.map(pool => {
+        const details = node('details', undefined, 'runout-pool');
+        details.dataset.poolId = pool.poolId;
+        details.open = open.has(pool.poolId);
+        const summary = node('summary');
+        const grid = node('span', undefined, 'pool-summary');
+        const names = [...(pool.usedFor || []), ...(pool.profileNames || [])].filter(Boolean).join(' · ');
+        grid.append(node('strong', names || 'Profile lot pool'));
+        for (const [label, value] of [['Total pool', withUnit(pool.totalKg, 'kg')], ['3-month avg use', withUnit(pool.avgMonthlyKg, 'kg/mo')], ['Projected runout', monthText(projectedPoolMonth(pool)) || missing]]) {
+          const item = node('span'); item.append(node('small', label), node('strong', value)); grid.append(item);
+        }
+        if (pool.status !== 'recorded') grid.append(node('span', pool.status === 'partial' ? 'Partial coverage · quantity estimate' : 'Projection unavailable', 'pool-coverage'));
+        summary.append(grid); details.append(summary);
+        let populated = false;
+        const populate = () => {
+          if (populated || !details.open) return;
+          populated = true;
+          const body = node('div', undefined, 'pool-details'); body.append(poolInputDetails(pool, { lotsOpen: lotsOpen.has(pool.poolId) })); details.append(body);
+        };
+        details.addEventListener('toggle', populate);
+        populate();
+        return details;
+      }));
+    }
     function renderCoverageCalendar() {
       const groups = (coverageData?.groups || []).filter(group => Array.isArray(group.columns) && group.columns.length);
       const columns = groups.flatMap(group => group.columns.map(column => ({ ...column, group: group.name })));
@@ -777,6 +890,7 @@ export const roasteryLabPage = String.raw`<!doctype html>
       }
       const left = el('coverageScroll').scrollLeft, top = el('coverageScroll').scrollTop;
       const open = new Set([...el('coverageMonths').querySelectorAll('details[open]')].map(item => item.dataset.coverageKey));
+      const lotsOpen = new Set([...el('coverageMonths').querySelectorAll('details.runout-lots[open]')].map(item => item.dataset.poolId));
       const focused = document.activeElement?.closest('.coverage-cell')?.dataset.coverageKey;
       const groupRow = node('tr', undefined, 'coverage-group');
       const monthHeader = node('th', 'Month', 'month-corner');
@@ -793,9 +907,10 @@ export const roasteryLabPage = String.raw`<!doctype html>
           const shortLabel = fullLabel.replace(/\s*\([^)]*\)/g, '').trim() || fullLabel;
           const origin = node('th', shortLabel, last ? 'group-end' : '');
           origin.scope = 'col';
-          origin.title = [fullLabel, column.rateLabel, column.stockDepletionMonth && 'Stock-only runout ' + (monthText(column.stockDepletionMonth) || column.stockDepletionMonth), column.sourceColumn && 'Source column ' + column.sourceColumn].filter(Boolean).join(' · ');
-          const average = node('span', format(column.twoMonthAverageKg) + ' kg/mo', 'coverage-average');
-          average.title = 'Cropster average of the last two completed months' + (column.coffee ? ' · ' + column.coffee : '') + '. Total coffee use across all blends; no recipe allocation.';
+          const runoutMonth = projectedPoolMonth(column.runout);
+          origin.title = [fullLabel, column.rateLabel, runoutMonth && 'Projected runout ' + monthText(runoutMonth), column.sourceColumn && 'Source column ' + column.sourceColumn].filter(Boolean).join(' · ');
+          const average = node('span', format(column.runout?.twoMonthAverageKg) + ' kg/mo', 'coverage-average');
+          average.title = 'Two-month average pooled green use across verified related lots and profiles.';
           origin.append(average);
           if (column.coverageThrough) origin.append(node('span', 'Through ' + (monthText(column.coverageThrough) || column.coverageThrough), 'coverage-rate'));
           if (column.firstGapMonth) origin.append(node('span', 'Gap ' + (monthText(column.firstGapMonth) || column.firstGapMonth), 'coverage-rate'));
@@ -816,7 +931,7 @@ export const roasteryLabPage = String.raw`<!doctype html>
           const cell = column.cells?.find(cell => cell.month === month);
           const state = ['contracted', 'gap'].includes(cell?.state) ? cell.state : 'unknown';
           const stateLabel = state === 'contracted' ? 'Contracted' : state === 'gap' ? 'Uncontracted gap' : 'Unknown coverage';
-          const stockRunout = month === column.stockDepletionMonth;
+          const stockRunout = month === projectedPoolMonth(column.runout);
           const prefix = state === 'contracted' ? '✓ ' : state === 'gap' ? 'Gap · ' : '? ';
           const display = cell?.text?.trim() || (state === 'contracted' ? 'Contracted' : state === 'gap' ? 'No contract' : 'Unknown');
           const td = node('td', undefined, state + (stockRunout ? ' stock-runout' : '') + (columnIndex === group.columns.length - 1 ? ' group-end' : ''));
@@ -830,13 +945,20 @@ export const roasteryLabPage = String.raw`<!doctype html>
             badge.setAttribute('aria-hidden', 'true');
             summary.append(badge);
           }
-          summary.setAttribute('aria-label', label + ' ' + coverageYear + ', ' + group.name + ', ' + (column.label || 'Origin unavailable') + '. ' + stateLabel + '. ' + (stockRunout ? 'Stock-only runout. ' : '') + display);
-          summary.title = stateLabel + ' · ' + display + (stockRunout ? ' · Stock-only runout' : '');
+          summary.setAttribute('aria-label', label + ' ' + coverageYear + ', ' + group.name + ', ' + (column.label || 'Origin unavailable') + '. ' + stateLabel + '. ' + (stockRunout ? 'Projected runout estimate. ' : '') + display);
+          summary.title = stateLabel + ' · ' + display + (stockRunout ? ' · Projected runout estimate' : '');
           details.append(summary, node('p', stateLabel), node('p', cell?.text || 'No further plan details are recorded.'));
           details.append(node('p', 'Plan origin · ' + (column.label || 'Origin unavailable')));
           if (column.rateLabel) details.append(node('p', 'Plan rate · ' + column.rateLabel));
           if (column.coffee) details.append(node('p', 'Current recipe coffee · ' + column.coffee));
-          if (column.stockDepletionMonth) details.append(node('p', 'Stock-only runout · ' + (monthText(column.stockDepletionMonth) || column.stockDepletionMonth) + '. Current stock uses the three-month average consumption. Future contracts are excluded from this estimate.'));
+          let populated = false;
+          const populate = () => {
+            if (populated || !details.open) return;
+            populated = true;
+            details.append(poolInputDetails(column.runout, { lotsOpen: lotsOpen.has(column.runout?.poolId) }));
+          };
+          details.addEventListener('toggle', populate);
+          populate();
           if (cell?.sourceCell) details.append(node('p', 'Source cell ' + cell.sourceCell));
           td.append(details); row.append(td);
         });
@@ -851,7 +973,7 @@ export const roasteryLabPage = String.raw`<!doctype html>
     function renderCoverage(coverage, consumption) {
       coverageData = coverage || {};
       const averageMonths = (coverageData.twoMonthAverageMonths || []).map(monthText).filter(Boolean);
-      el('coverageAverageNote').textContent = 'Cropster 2-month average: ' + (averageMonths.length === 2 ? averageMonths.join(' and ') : 'last two completed months') + ', in kg/month. Shared coffee totals repeat across blends.';
+      el('coverageAverageNote').textContent = 'Pooled Cropster 2-month average: ' + (averageMonths.length === 2 ? averageMonths.join(' and ') : 'last two completed months') + ', in kg/month. Shared pool rates repeat across blends. Projected runout uses the 3-month average.';
       const years = [...new Set((coverageData.years || []).filter(Number.isInteger))].sort((a, b) => a - b);
       if (!years.includes(coverageYear)) coverageYear = years.includes(coverageData.currentYear) ? coverageData.currentYear : years.at(0) ?? null;
       const year = el('coverageYear');
@@ -877,7 +999,7 @@ export const roasteryLabPage = String.raw`<!doctype html>
       const origins = Array.isArray(coverageData.origins) ? coverageData.origins : [];
       el('originRows').replaceChildren(...origins.map(origin => {
         const uses = (origin.usedFor || []).map(use => use.name + (Number.isFinite(use.percent) ? ' ' + percent(use.percent) : '')).join(' · ') || 'Recipe link unavailable';
-        return makeTableRow(forecastName(origin, open), format(origin.avgMonthlyKg), format(origin.lastMonthKg), uses, format(origin.kg), monthText(origin.depletionMonth) || missing);
+        return makeTableRow(forecastName(origin, open), format(origin.avgMonthlyKg), format(origin.lastMonthKg), uses, format(origin.kg));
       }));
       el('originsScroll').hidden = !origins.length;
       el('originsEmpty').hidden = Boolean(origins.length);
@@ -887,6 +1009,7 @@ export const roasteryLabPage = String.raw`<!doctype html>
       const last = monthText(months.at(-1)?.month);
       el('originLastMonthLabel').textContent = last ? last + ' kg' : 'Last month kg';
       el('originAverageLabel').textContent = '3-month avg kg';
+      renderRunoutPools(consumption.runoutPools);
     }
     function renderConsumption(consumption = {}) {
       const months = consumption.months || [];
@@ -1087,7 +1210,7 @@ export const roasteryLabPage = String.raw`<!doctype html>
       dirty.clear();
       setBusy(false);
       el('board').hidden = true;
-      for (const id of ['blendHighlights', 'blendDetails', 'otherPriceRows', 'monthRows', 'lastMonthRows', 'originRows', 'coverageHeaders', 'coverageMonths', 'coverageYear', 'releaseRows', 'latestReleases', 'purchaseDays', 'selectedPurchases', 'upcomingPurchases', 'purchaseTotalRows']) el(id).replaceChildren();
+      for (const id of ['blendHighlights', 'blendDetails', 'otherPriceRows', 'monthRows', 'lastMonthRows', 'originRows', 'runoutPools', 'coverageHeaders', 'coverageMonths', 'coverageYear', 'releaseRows', 'latestReleases', 'purchaseDays', 'selectedPurchases', 'upcomingPurchases', 'purchaseTotalRows']) el(id).replaceChildren();
       for (const id of ['releasePreview', 'qaPreview', 'latestQa', 'stockAsOf', 'coverageStatus', 'coverageAverageNote', 'coverageSource', 'coverageNote', 'originNote', 'originAverageLabel', 'originLastMonthLabel', 'sourceNote', 'status', 'consumptionNote', 'lastMonthTitle', 'consumptionWindow', 'priceDates', 'lossNote', 'coffeeCChange', 'coffeeCContract', 'coffeeCTiming', 'coffeeCAsOf', 'coffeeCNote', 'purchasePreview', 'purchaseNote', 'purchaseAsOf', 'purchaseMonth', 'selectedPurchaseDate', 'selectedPurchaseEmpty', 'upcomingPurchaseEmpty']) el(id).textContent = '';
       for (const id of ['avgKg', 'avgBags', 'coffeeCPrice']) el(id).textContent = missing;
       for (const id of ['coffeeCSource', 'purchaseSource', 'coverageLink']) safeSourceLink(id, undefined);

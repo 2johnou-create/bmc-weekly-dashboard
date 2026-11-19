@@ -1,6 +1,7 @@
 import { HttpError } from "./auth.js";
 import { sydneyDate, validDate } from "./metrics.js";
 import { readLabSettings } from "./roastery-lab-settings.js";
+import { buildRunoutPools } from "./profile-runout.js";
 
 const signatureNames = ["Liberty", "Rhythm", "OH"];
 const parts = ["inventory", "recipes", "use", "loss"];
@@ -30,6 +31,16 @@ function optionalAmount(value, maximum) {
   return value == null ? null : amount(value, maximum);
 }
 
+function identifier(value) {
+  if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/.test(value)) fail("Use an exact Cropster lot or profile group ID.");
+  return value;
+}
+
+function optionalBoolean(value) {
+  if (value !== undefined && typeof value !== "boolean") fail("Use a true or false report coverage flag.");
+  return value === true;
+}
+
 function date(value, today) {
   if (!validDate(value) || value > today) fail("Use a valid Cropster report date on or before today.");
   return value;
@@ -50,11 +61,13 @@ function rows(value, maximum, parse, identity) {
 function inventory(data, today) {
   return {
     asOf: date(data.asOf, today),
+    allLocationsComplete: optionalBoolean(data.allLocationsComplete),
     totalKg: optionalAmount(data.totalKg),
     rows: rows(data.rows, 1_200, item => ({
       name: name(item.name),
       location: name(item.location),
       lotId: item.lotId == null ? null : name(item.lotId),
+      ...(item.positionId == null ? {} : { positionId: identifier(item.positionId) }),
       kg: amount(item.kg),
       pricePerKg: optionalAmount(item.pricePerKg, 10_000),
     }), row => JSON.stringify([key(row.lotId ?? row.name), key(row.location)])),
@@ -62,16 +75,32 @@ function inventory(data, today) {
     prices: rows(data.prices ?? [], 600, item => ({
       name: name(item.name), pricePerKg: amount(item.pricePerKg, 10_000),
     }), row => key(row.name)),
+    contracts: rows(data.contracts ?? [], 1_200, item => {
+      const remainingKg = amount(item.remainingKg), includedInventoryKg = optionalAmount(item.includedInventoryKg);
+      if (includedInventoryKg !== null && includedInventoryKg > remainingKg) fail("A contract’s included stock cannot exceed its remaining kilograms.");
+      if (item.availableFrom != null && !validDate(item.availableFrom)) fail("Use a valid contract availability date or leave it unknown.");
+      return { id: identifier(item.id), lotId: identifier(item.lotId), remainingKg, includedInventoryKg, availableFrom: item.availableFrom ?? null };
+    }, row => row.id),
   };
 }
 
 function recipes(data, today) {
   return {
     asOf: date(data.asOf, today),
+    decafProfileGroupId: data.decafProfileGroupId == null ? null : identifier(data.decafProfileGroupId),
+    runoutProfiles: rows(data.runoutProfiles ?? [], 300, item => {
+      if (!Array.isArray(item.lotIds) || item.lotIds.length > 1_200) fail("Record all related Cropster lot IDs for each profile group.");
+      const lotIds = item.lotIds.map(identifier);
+      if (new Set(lotIds).size !== lotIds.length) fail("A profile group contains duplicate lot IDs.");
+      if (item.note != null && (typeof item.note !== "string" || item.note.length > 1_000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/.test(item.note))) fail("Use a short source note for profile eligibility.");
+      return { id: identifier(item.id), name: name(item.name), lotIds, linksComplete: optionalBoolean(item.linksComplete), note: item.note?.replace(/\s+/g, " ").trim() || "" };
+    }, row => row.id),
+    runoutLotNames: rows(data.runoutLotNames ?? [], 2_400, item => ({ lotId: identifier(item.lotId), name: name(item.name) }), row => JSON.stringify([row.lotId, key(row.name)])),
     rows: rows(data.rows, 150, item => {
       const components = rows(item.components, 20, component => ({
         name: name(component.name),
         coffee: component.coffee == null ? null : name(component.coffee),
+        ...(component.profileGroupId == null ? {} : { profileGroupId: identifier(component.profileGroupId) }),
         percent: amount(component.percent, 100),
       }), row => key(row.name));
       if (!components.length || components.some(component => component.percent === 0) ||
@@ -98,7 +127,8 @@ function use(data, today) {
         bags: optionalAmount(month.bags),
         rows: rows(month.rows ?? [], 1_200, item => ({
           name: name(item.name), kg: amount(item.kg), bags: optionalAmount(item.bags),
-        }), row => key(row.name)),
+          ...(item.lotId == null ? {} : { lotId: identifier(item.lotId) }),
+        }), row => row.lotId ? "id:" + row.lotId : "name:" + key(row.name)),
       };
       if (reading.complete && reading.kg != null &&
           Math.abs(sum(reading.rows.map(row => row.kg)) - reading.kg) > 0.1) fail("The complete monthly rows must add up to the reported kilograms.");
@@ -262,9 +292,18 @@ export function mergeGreenCoverage(consumption = {}, prices = {}, contracts = {}
     sourceColumns.set(column.id, column);
   }
   const laneOrigins = new Map();
+  const laneProfileGroups = new Map();
+  const poolsByProfile = new Map(), ambiguousProfiles = new Set();
+  for (const pool of Array.isArray(consumption.runoutPools) ? consumption.runoutPools : []) {
+    for (const profileId of Array.isArray(pool?.profileGroupIds) ? pool.profileGroupIds : []) {
+      if (poolsByProfile.has(profileId)) ambiguousProfiles.add(profileId);
+      poolsByProfile.set(profileId, pool);
+    }
+  }
   for (const group of coverageGroups) for (const sourceColumn of group.columns) {
     let origin = null;
     if (group.name === "Decaf") {
+      laneProfileGroups.set(`${group.name.toLowerCase()}-${sourceColumn}`, consumption.decafProfileGroupId ?? null);
       const source = duplicateColumns.has(sourceColumn) ? null : sourceColumns.get(sourceColumn);
       if (/\bcolombia\b/i.test(source?.origin ?? "")) {
         const candidates = [...observed.values()].filter(item => /decaf/i.test(item.name) && /\bcolombia\b/i.test(item.name));
@@ -276,6 +315,7 @@ export function mergeGreenCoverage(consumption = {}, prices = {}, contracts = {}
       const profile = coverageProfiles[group.name]?.[sourceColumn];
       let matches = components.filter(component => typeof component.name === "string" && key(component.name) === key(profile));
       if (group.name === "OH" && matches.length === 0 && components.length === 1 && components[0].percent === 100) matches = components;
+      if (matches.length === 1 && typeof matches[0].profileGroupId === "string") laneProfileGroups.set(`${group.name.toLowerCase()}-${sourceColumn}`, matches[0].profileGroupId);
       if (matches.length === 1 && typeof matches[0].coffee === "string") {
         const id = key(matches[0].coffee);
         if (!duplicateOrigins.has(id)) origin = observed.get(id) ?? null;
@@ -283,7 +323,8 @@ export function mergeGreenCoverage(consumption = {}, prices = {}, contracts = {}
     }
     laneOrigins.set(`${group.name.toLowerCase()}-${sourceColumn}`, origin);
   }
-  const forecastYears = [...laneOrigins.values()].filter(origin => monthKey(origin?.depletionMonth)).map(origin => Number(origin.depletionMonth.slice(0, 4)));
+  const lanePools = new Map([...laneProfileGroups].map(([lane, profileId]) => [lane, ambiguousProfiles.has(profileId) ? null : poolsByProfile.get(profileId) ?? null]));
+  const forecastYears = [...lanePools.values()].filter(pool => monthKey(pool?.depletionMonth)).map(pool => Number(pool.depletionMonth.slice(0, 4)));
   const years = [...new Set([...(contracts.years ?? []), currentYear, ...forecastYears].filter(year => Number.isInteger(year) && year >= 1900 && year <= 9999))].sort((a, b) => a - b);
   const allMonths = years.flatMap(year => Array.from({ length: 12 }, (_, index) => `${year}-${String(index + 1).padStart(2, "0")}`));
   const groups = coverageGroups.map(group => ({
@@ -314,13 +355,16 @@ export function mergeGreenCoverage(consumption = {}, prices = {}, contracts = {}
       }
       const id = `${group.name.toLowerCase()}-${sourceColumn}`;
       const origin = laneOrigins.get(id);
+      const runout = lanePools.get(id) ?? null;
       return {
         id, sourceColumn,
         label: coverageText(source?.origin, 160) || "Origin unavailable",
         rateLabel: coverageText(source?.rateLabel, 256),
         coffee: origin?.name ?? null,
-        twoMonthAverageKg: knownQuantity(origin?.twoMonthAverageKg),
-        stockDepletionMonth: monthKey(origin?.depletionMonth) ? origin.depletionMonth : null,
+        twoMonthAverageKg: knownQuantity(runout?.twoMonthAverageKg),
+        stockDepletionMonth: monthKey(runout?.depletionMonth) ? runout.depletionMonth : null,
+        runout,
+        runoutNote: runout?.note ?? "Verified complete profile-to-lot links and an all-location inventory are needed for this runout estimate.",
         coverageThrough,
         firstGapMonth: future.find(cell => cell.state === "gap")?.month ?? null,
         cells,
@@ -369,8 +413,8 @@ export function mergeGreenCoverage(consumption = {}, prices = {}, contracts = {}
     note: coverageText(contracts.note) || "The CONTRACTS planning calendar is unavailable. Unknown months are left unconfirmed.",
     years, currentYear, currentMonth,
     twoMonthAverageMonths: validDate(today) ? previousMonths(today).slice(-2) : [],
-    groups, origins,
-    originNote: "Observed green use is reported once per actual Cropster coffee across all recorded locations, not allocated to blends. Recipe percentages describe use; shared Brazil also serves other coffees. Stock-only finish estimates exclude future contracts. All recorded coffees explicitly named Decaf or Decaffeinated are shown separately; their recipe shares are not recorded and the contract plan does not allocate their use.",
+    groups, origins, runoutPools: Array.isArray(consumption.runoutPools) ? consumption.runoutPools : [],
+    originNote: "Observed green use is reported once per actual Cropster coffee across all recorded locations, not allocated to blends. Recipe percentages describe use; shared Brazil also serves other coffees. Projected runout uses verified linked-lot pools and explicitly captured additional contracts without counting supplier stock twice. All recorded coffees explicitly named Decaf or Decaffeinated are shown separately; their recipe shares are not recorded and the contract plan does not allocate their use.",
   };
 }
 
@@ -390,10 +434,11 @@ export function labReport(data = {}, today = sydneyDate()) {
   const latestRows = months.at(-1)?.rows ?? [];
   const sumKg = totalIfKnown(summary.map(month => month.kg));
   const sumBags = totalIfKnown(summary.map(month => month.bags));
-  const monthlyUse = months.map(month => ({
-    complete: month?.complete === true,
-    coffees: new Map((month?.rows ?? []).map(coffee => [key(coffee.name), coffee.kg])),
-  }));
+  const monthlyUse = months.map(month => {
+    const coffees = new Map();
+    for (const coffee of month?.rows ?? []) coffees.set(key(coffee.name), (coffees.get(key(coffee.name)) ?? 0) + coffee.kg);
+    return { complete: month?.complete === true, coffees };
+  });
   const stockAsOf = data.inventory?.asOf ?? null;
   const originNames = new Map([...stock].map(([id, coffee]) => [id, coffee.name]));
   for (const month of months) for (const coffee of month?.rows ?? []) {
@@ -441,6 +486,8 @@ export function labReport(data = {}, today = sydneyDate()) {
       stockTotalKg: data.inventory?.totalKg ?? (stockAsOf && stock.size > 0 ? round(sum([...stock.values()].map(coffee => coffee.kg))) : null),
       forecasts,
       origins,
+      runoutPools: buildRunoutPools(data, today),
+      decafProfileGroupId: data.recipes?.decafProfileGroupId ?? null,
       twoMonthAverageMonths: period.slice(-2),
       note: sumKg === null ? "Three completed Cropster months are needed for the average." :
         sumBags === null ? "Bag counts need recorded bag sizes or counts from Cropster." : "",

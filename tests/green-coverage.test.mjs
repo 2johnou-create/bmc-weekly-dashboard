@@ -108,7 +108,7 @@ test("stock-only depletion stays independent of contract continuity and unknown 
   assert.equal(mergeGreenCoverage(report.consumption, report.prices, noCurrent, today).groups[0].columns[0].coverageThrough, null);
 });
 
-test("calendar runout markers use verified current profile aliases, share Brazil and link only the Colombian Decaf", () => {
+test("legacy selected-coffee aliases remain visible but cannot stand in for verified all-lot runout pools", () => {
   const report = labReport(fixture(), today);
   report.consumption.origins.push({ name: "Brazil Santos Decaf NY2/3 SC14/16 Coficom", kg: null, avgMonthlyKg: 10.5, lastMonthKg: 0, locations: [], depletionMonth: null });
   report.consumption.origins.find(origin => origin.name === names.brazil).depletionMonth = "2028-03";
@@ -124,12 +124,12 @@ test("calendar runout markers use verified current profile aliases, share Brazil
   assert.equal(lanes["rhythm-G"].coffee, names.uganda);
   assert.equal(lanes["oh-H"].coffee, names.oh, "a single verified 100% component does not need the OH Peru profile alias");
   assert.equal(lanes["decaf-I"].coffee, names.decaf);
-  assert.equal(lanes["decaf-I"].stockDepletionMonth, report.consumption.origins.find(origin => origin.name === names.decaf).depletionMonth);
-  assert.equal(lanes["liberty-D"].stockDepletionMonth, "2028-03");
-  assert.equal(lanes["rhythm-D"].stockDepletionMonth, "2028-03");
+  assert.equal(lanes["decaf-I"].stockDepletionMonth, null);
+  assert.equal(lanes["liberty-D"].stockDepletionMonth, null);
+  assert.equal(lanes["rhythm-D"].stockDepletionMonth, null);
   assert.equal(lanes["rhythm-G"].stockDepletionMonth, null, "unrecorded stock has no runout marker");
-  assert.deepEqual(result.years, [2026, 2027, 2028]);
-  assert.equal(lanes["liberty-D"].cells.find(cell => cell.month === "2028-03").state, "unknown");
+  assert.deepEqual(result.years, [2026, 2027]);
+  assert.equal(lanes["liberty-D"].runout, null);
   assert.equal(lanes["liberty-D"].coverageThrough, "2026-11");
   assert.equal(result.origins.filter(origin => origin.usedFor.some(use => use.name === "Decaf")).length, 2);
 });
@@ -248,12 +248,9 @@ test("two-month labels use actual origin green input independently of three-mont
   assert.equal(origin.avgMonthlyKg, 400);
   assert.equal(origin.twoMonthAverageKg, 150);
   assert.equal(origin.depletionMonth, "2027-01");
-  assert.equal(lanes["liberty-D"].twoMonthAverageKg, 150);
-  assert.equal(lanes["rhythm-D"].twoMonthAverageKg, 150);
-  assert.equal(lanes["liberty-C"].twoMonthAverageKg, 100, "Honduras profile resolves the actual Colombian coffee");
-  assert.equal(lanes["rhythm-F"].twoMonthAverageKg, 120, "China profile resolves the actual Peruvian coffee");
-  assert.equal(lanes["rhythm-G"].twoMonthAverageKg, 80, "unrecorded stock does not hide known origin use");
-  assert.equal(lanes["decaf-I"].twoMonthAverageKg, 75);
+  for (const id of ["liberty-D", "rhythm-D", "liberty-C", "rhythm-F", "rhythm-G", "decaf-I"]) {
+    assert.equal(lanes[id].twoMonthAverageKg, null, "a selected origin's use does not prove total use for every related lot");
+  }
   assert.equal(result.origins.find(item => item.name === historicalDecaf).twoMonthAverageKg, 10);
   assert.deepEqual(result.twoMonthAverageMonths, ["2026-09", "2026-10"]);
   assert.deepEqual(report.consumption.twoMonthAverageMonths, result.twoMonthAverageMonths);
@@ -301,7 +298,7 @@ test("Sydney New Year rolls the two-month period from October–November to Nove
   assert.equal(after.consumption.origins.find(origin => origin.name === names.brazil).twoMonthAverageKg, 25);
   const result = mergeGreenCoverage(after.consumption, after.prices, contracts(), afterDate);
   assert.deepEqual(result.twoMonthAverageMonths, ["2026-11", "2026-12"]);
-  assert.equal(result.groups[0].columns[2].twoMonthAverageKg, 25);
+  assert.equal(result.groups[0].columns[2].twoMonthAverageKg, null, "origin use remains available, but all-lot profile links are still unverified");
   const missing = mergeGreenCoverage(labReport({}, afterDate).consumption, {}, {}, afterDate);
   assert.deepEqual(missing.twoMonthAverageMonths, ["2026-11", "2026-12"]);
 });
