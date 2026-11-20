@@ -1,4 +1,5 @@
 import { page } from "./ui.js";
+import { buildUiDocument } from "./ui-build.js";
 import { weeklyPage } from "./weekly-ui.js";
 import { roasteryLabPage } from "./roastery-lab-ui.js";
 import { warehousePage } from "./warehouse-ui.js";
@@ -122,14 +123,14 @@ async function roasteryReport(env, { fresh = false, jobId = null, syncWebsite = 
 function notesUnavailable() { return { status: "unavailable", source: "Entered issue notes", asOf: null, note: "Customer issue notes could not be loaded. Please try again.", count: null, items: [] }; }
 function onlineUnavailable() { return { status: "unavailable", source: "Online orders folder", asOf: null, note: "The online orders folder could not be read. Please try again.", orders: null, value: null, currency: "AUD", url: ONLINE_ORDERS_FOLDER_URL }; }
 const pageHeaders = new Map();
-async function htmlHeaders(document) {
+async function htmlHeaders(document, allowModules = false) {
   if (!pageHeaders.has(document)) {
     const scripts = [...document.matchAll(/<script>([\s\S]*?)<\/script>/g)];
     const hashes = await Promise.all(scripts.map(async ([, script]) => {
       const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(script)));
       return `'sha256-${btoa(String.fromCharCode(...bytes))}'`;
     }));
-    const modules = document === warehousePage ? "'self' " : "";
+    const modules = allowModules ? "'self' " : "";
     pageHeaders.set(document, { ...commonHeaders, "Content-Type": "text/html; charset=utf-8", "Content-Security-Policy": `default-src 'self'; script-src ${modules}${hashes.join(" ")}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'self' https://chatgpt.com https://*.chatgpt.com` });
   }
   return pageHeaders.get(document);
@@ -142,8 +143,8 @@ export default {
     const skipWebsiteSync = url.searchParams.get("sourceSyncCheckUnavailable") === "1";
     try {
       if (documents.has(url.pathname) && ["GET", "HEAD"].includes(request.method)) {
-        const document = documents.get(url.pathname);
-        return new Response(request.method === "HEAD" ? null : document, { headers: await htmlHeaders(document) });
+        const { document } = await buildUiDocument(documents.get(url.pathname));
+        return new Response(request.method === "HEAD" ? null : document, { headers: await htmlHeaders(document, url.pathname === "/warehouse") });
       }
       if (url.pathname === "/warehouse-scene.js" && ["GET", "HEAD"].includes(request.method)) {
         if (!warehouseAsset) return json({ error: "Build the warehouse scene before opening this preview." }, 503);
@@ -160,6 +161,12 @@ export default {
       if (url.pathname === "/robots.txt" && request.method === "GET") return new Response("User-agent: *\nDisallow: /\n", { headers: { ...commonHeaders, "Content-Type": "text/plain" } });
       if (url.pathname === "/online-orders-template.csv" && request.method === "GET") return new Response(ONLINE_ORDERS_CSV_HEADERS, { headers: { ...commonHeaders, "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": 'attachment; filename="online-orders-template.csv"' } });
       if (url.pathname === "/api/health" && request.method === "GET") return json({ ok: true });
+      if (url.pathname === "/api/ui-build" && request.method === "GET") {
+        const path = new Map([["steam-room", "/"], ["roastery-lab", "/roastery-lab"], ["warehouse", "/warehouse"], ["details", "/details"]]).get(url.searchParams.get("view"));
+        if (!path) return json({error: "Choose a dashboard view."}, 400);
+        const {buildId} = await buildUiDocument(documents.get(path));
+        return json({buildId});
+      }
       if (url.pathname === "/api/auth") {
         if (request.method === "GET") return json({ authenticated: Boolean(await readSession(request, env)) });
         if (request.method === "POST") return json({ authenticated: true }, 200, { "Set-Cookie": await signIn(request, env) });
@@ -243,8 +250,22 @@ export default {
         const policy = readings.refresh;
         if (policy.status === "pending") return json({ status: "running", jobId: policy.jobId, weekStart: week.start, note: policy.note }, 202);
         if (jobId && policy.status === "failed" && !policy.readerStatus) throw new HttpError("The background update could not be checked. It will be checked again shortly.", 503);
-        const sourceSync = await finishSourceSync(env, session, readings, week, policy.jobId || jobId, now);
-        return json({ status: policy.status === "refreshed" ? "complete" : policy.status === "not-connected" ? "not-connected" : "failed",
+        const terminalStatus = policy.status === "refreshed" ? "complete" : policy.status === "not-connected" ? "not-connected" : "failed";
+        let sourceSync;
+        try { sourceSync = await finishSourceSync(env, session, readings, week, policy.jobId || jobId, now); }
+        catch (error) {
+          // A verified Reader outcome must not become an unknown/running job
+          // merely because a different feed failed during the finishing pass.
+          if ([401, 403].includes(error?.status)) throw error;
+          sourceSync = sourceSyncSummary({ weekly: { week, generatedAt: now.toISOString(), cropsterRefresh: policy,
+            metrics: { production: readings.production, green: readings.green } } });
+          sourceSync.jobStatus = terminalStatus === "complete" ? "complete" : "failed";
+          sourceSync.message = terminalStatus === "complete"
+            ? "Cropster finished. Other dashboard sources could not all be checked; saved figures retain their capture times."
+            : "The Cropster update failed. Last verified figures are retained. Other dashboard sources could not all be checked.";
+          if (policy.jobId || jobId) await saveSourceSyncLog(env.DB, policy.jobId || jobId, week.start, sourceSync, now);
+        }
+        return json({ status: terminalStatus,
           ...(policy.jobId || jobId ? { jobId: policy.jobId || jobId } : {}), weekStart: week.start, note: policy.note, sourceSync });
       }
       const issueMatch = url.pathname.match(/^\/api\/issues\/([A-Za-z0-9-]{1,80})$/);

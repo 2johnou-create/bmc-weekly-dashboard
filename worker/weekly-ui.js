@@ -91,6 +91,12 @@ export const weeklyPage = String.raw`<!doctype html>
     .headline { display: block; margin-block: .2rem .35rem; }
     .metric-figure { display: block; font-size: clamp(2.25rem, 4.1vw, 4rem); line-height: 1.05; font-weight: 750; letter-spacing: -.055em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
     .demand .metric-figure { font-size: clamp(3rem, 5.7vw, 5rem); }
+    .production-primary .metric-figure { font-size: clamp(2rem, 3.5vw, 3.25rem); margin-top: .3rem; }
+    .production-primary.single { grid-template-columns: 1fr; }
+    .production-capture { display: block; margin-top: .85rem; font-size: .78rem; line-height: 1.4; color: var(--green-light); }
+    .production-capture[data-state="failed"] { color: #ffe0d9; border-left: 3px solid #ff9e8d; padding-left: .6rem; }
+    .production-capture[data-state="pending"], .production-capture[data-state="unknown"] { color: #f6dfb7; }
+    .ui-update { display: flex; gap: .7rem; align-items: center; flex-wrap: wrap; margin: .8rem 0; padding: .8rem; border: 1px solid var(--line); border-radius: .7rem; }
     .production-headline { display: flex; flex-wrap: wrap; gap: .4rem .85rem; align-items: baseline; margin-top: .35rem; }
     .production-headline .metric-secondary { margin-top: 0; }
     .production-total-label { margin-top: .3rem; }
@@ -243,6 +249,7 @@ export const weeklyPage = String.raw`<!doctype html>
       </nav>
     </div>
     <div class="report-status"><p id="status" role="status"></p><p id="refreshPolicy" hidden>Cropster uses saved readings.</p></div>
+    <div id="uiUpdate" class="ui-update" role="status" hidden><span id="uiUpdateText"></span><button id="uiReload" class="button" type="button">Reload dashboard</button></div>
     <div id="figures" class="report-grid" hidden>
       <details class="meeting-card featured demand">
         <summary>
@@ -270,20 +277,19 @@ export const weeklyPage = String.raw`<!doctype html>
       <details class="meeting-card featured production">
         <summary>
           <span class="card-head"><span id="productionCardTitle" class="card-title">Roasted &amp; scheduled</span><span class="disclosure" aria-hidden="true"></span></span>
-          <span class="production-headline">
-            <span id="productionKg" class="metric-figure">—</span>
-            <span id="productionValue" class="metric-secondary">—</span>
+          <span id="productionPair" class="card-pair production-primary">
+            <span><span class="metric-label">Roasted · actual output</span><span id="roastedKg" class="metric-figure">—</span></span>
+            <span id="scheduledPrimary"><span class="metric-label">Scheduled to roast</span><span id="scheduledKg" class="metric-figure">—</span><span id="scheduledBatchCount" class="metric-label" hidden></span></span>
           </span>
-          <span id="productionTotalLabel" class="metric-label production-total-label">Combined production</span>
+          <span id="productionValue" class="metric-secondary">—</span>
+          <span id="productionCostLabel" class="metric-label">Green cost · roasted + scheduled estimate</span>
           <span id="productionChange" class="comparison production-comparison"></span>
-          <span id="productionPair" class="card-pair">
-            <span><span class="metric-label">Roasted</span><span id="roastedKg" class="metric-secondary">—</span></span>
-            <span><span class="metric-label">Scheduled to roast</span><span id="scheduledKg" class="metric-secondary">—</span><span id="scheduledBatchCount" class="metric-label" hidden></span></span>
-          </span>
+          <span id="productionCapture" class="production-capture" hidden></span>
           <span id="productionFlag" class="status-flag" hidden></span>
         </summary>
         <div class="card-body">
           <dl class="breakdown" id="productionDetails" hidden>
+            <div id="expectedOutputRow"><dt id="productionTotalLabel">Expected roasted output this week</dt><dd id="productionKg">—</dd></div>
             <div><dt>Roasted</dt><dd id="roastedDetailKg">—</dd></div>
             <div id="scheduledGreenRow"><dt>Scheduled to roast (green)</dt><dd id="scheduledGreenDetailKg">—</dd></div>
             <div id="scheduledBatchRow"><dt>Pending scheduled batches</dt><dd id="scheduledBatchDetailCount">—</dd></div>
@@ -501,6 +507,7 @@ export const weeklyPage = String.raw`<!doctype html>
     <footer class="links"><p>Sydney reporting week · expenses use $ as recorded</p><a href="/details">Operations details and issue notes</a></footer>
   </main>
   <script>
+    const uiBuildId = "__BMC_UI_BUILD_ID__";
     const el = id => document.getElementById(id);
     const amount = new Intl.NumberFormat('en-AU', { maximumFractionDigits: 1 });
     const detailKg = new Intl.NumberFormat('en-AU', { maximumFractionDigits: 2 });
@@ -540,11 +547,11 @@ export const weeklyPage = String.raw`<!doctype html>
       set(id, value || '');
       el(id).hidden = !value;
     }
-    function weightHeadline(id, value, formatter = amount) {
+    function weightHeadline(id, value, formatter = amount, unitText = ' kg') {
       if (!Number.isFinite(value)) { set(id, unavailable); return; }
       const unit = document.createElement('span');
       unit.className = 'unit';
-      unit.textContent = ' kg';
+      unit.textContent = unitText;
       el(id).replaceChildren(formatter.format(value), unit);
     }
     function plural(value, singular) { return amount.format(value) + ' ' + singular + (value === 1 ? '' : 's'); }
@@ -776,35 +783,43 @@ export const weeklyPage = String.raw`<!doctype html>
         (production.scheduledGreenKg === 0) === (production.scheduledBatchCount === 0)
         ? {greenKg: production.scheduledGreenKg, batches: production.scheduledBatchCount} : null;
     }
-    function renderProduction(production, week, previousRange) {
+    function renderProduction(production, week, previousRange, report = {}, sync) {
       const historical = !week.isCurrent;
       const hasTotal = !historical && Number.isFinite(production.totalKg);
       const hasRoasted = Number.isFinite(production.roastedKg);
       const value = historical ? production.roastedValue : production.value;
       set('productionCardTitle', historical ? 'Roasted Monday to Friday' : 'Roasted & scheduled');
-      weightHeadline('productionKg', hasTotal ? production.totalKg : production.roastedKg);
+      set('productionKg', hasTotal ? weight(production.totalKg, detailKg) : 'Unavailable');
+      el('expectedOutputRow').hidden = historical;
       set('productionValue', Number.isFinite(value) ? (historical ? format(value, detailCurrency) : money(value)) : '$ unavailable');
-      const outputLabel = hasTotal ? 'Expected roasted output this week' : hasRoasted ? 'Recorded roast output' : 'Production weight';
-      set('productionTotalLabel', historical ? 'Completed roasts and green cost' : outputLabel);
-      el('productionPair').hidden = historical;
-      set('roastedKg', weight(production.roastedKg));
+      set('productionTotalLabel', 'Expected roasted output this week');
+      set('productionCostLabel', historical ? 'Green cost · roasted' : 'Green cost · roasted + scheduled estimate');
+      el('productionPair').hidden = false;
+      el('productionPair').classList.toggle('single', historical);
+      el('scheduledPrimary').hidden = historical;
+      weightHeadline('roastedKg', production.roastedKg);
       const scheduled = scheduledBatchValues(production);
-      set('scheduledKg', scheduled ? weight(scheduled.greenKg) + ' green' : 'Unavailable');
-      showText('scheduledBatchCount', scheduled ? amount.format(scheduled.batches) + (scheduled.batches === 1 ? ' pending batch' : ' pending batches') : '');
+      weightHeadline('scheduledKg', scheduled?.greenKg, amount, ' kg green');
+      showText('scheduledBatchCount', scheduled ? amount.format(scheduled.batches) + (scheduled.batches === 1 ? ' pending batch' : ' pending batches') : 'Scheduled batch data unavailable');
       set('scheduledGreenDetailKg', weight(scheduled?.greenKg, detailKg));
       set('scheduledBatchDetailCount', format(scheduled?.batches, amount));
       el('scheduledGreenRow').hidden = historical;
       el('scheduledBatchRow').hidden = historical;
       el('scheduledSourceNote').hidden = historical;
       el('cropsterScheduleLink').hidden = historical;
-      const weightChange = hasTotal ? comparison(production.changePercent, 'Weight') : comparison(production.roastedChangePercent, 'Roasted kg');
+      const weightChange = comparison(production.roastedChangePercent, 'Roasted kg');
       const valueChange = comparison(production.valueChangePercent, 'value');
       const fallback = hasTotal || hasRoasted ? 'Previous week comparison unavailable' : 'Production comparison unavailable';
       renderComparison('productionChange', [weightChange, valueChange].filter(Boolean).join(' · '), fallback);
-      const productionFlag = historical ? (hasRoasted ? 'Friday archive' : 'Friday Cropster figures unavailable') : statusText(production, 'Cropster reading needed') || 'Saved Cropster reading';
+      const productionFlag = historical ? (hasRoasted ? 'Friday archive' : 'Friday Cropster figures unavailable')
+        : production.status === 'partial' && !production.stale && hasRoasted && scheduled
+          && [production.scheduledKg, production.roastedValue, production.scheduledValue].some(value => !Number.isFinite(value))
+          ? 'Optional output estimate or green cost incomplete'
+          : statusText(production, 'Cropster reading needed') || 'Saved Cropster reading';
       showText('productionFlag', productionFlag);
+      renderProductionCapture(production, week, report, sync);
       set('roastedDetailKg', weight(production.roastedKg, detailKg));
-      set('scheduledDetailKg', weight(production.scheduledKg, detailKg));
+      set('scheduledDetailKg', Number.isFinite(production.scheduledKg) ? weight(production.scheduledKg, detailKg) : 'Unavailable');
       set('roastedValue', format(production.roastedValue, detailCurrency));
       set('scheduledValue', format(production.scheduledValue, detailCurrency));
       el('scheduledDetailRow').hidden = historical;
@@ -821,11 +836,27 @@ export const weeklyPage = String.raw`<!doctype html>
       el('previousScheduledRow').hidden = historical || !Number.isFinite(production.previousScheduledKg);
       const notes = [];
       if (!Number.isFinite(value)) notes.push('Green cost is unavailable.');
-      if (!historical && !Number.isFinite(production.scheduledKg)) notes.push('Scheduled kilograms are unavailable.');
-      if (weightChange && !hasTotal) notes.push('The percentage compares recorded roast output between weeks.');
+      if (!historical && !Number.isFinite(production.scheduledKg)) notes.push('The optional remaining roasted-output estimate is unavailable.' + (scheduled ? ' Verified scheduled green kilograms are shown separately.' : ' Scheduled batch data is also unavailable.'));
+      if (weightChange) notes.push('The percentage compares recorded roast output between weeks.');
       showText('productionComparisonNote', notes.join(' '));
       showText('productionSource', sourceText(production, 'Cropster'));
       showText('productionNote', production.note);
+    }
+    function renderProductionCapture(production, week, report = {}, sync) {
+      const captured = formatTimestamp(production.asOf);
+      const stamp = captured ? 'Captured ' + captured + ' Sydney time' : 'Capture time unavailable';
+      const refresh = report.cropsterRefresh || {};
+      const productionSource = report.sourceSync?.sources?.find(source => source.id === 'production');
+      let state = 'saved', message = stamp;
+      if (!week.isCurrent) message = 'Friday archive · ' + stamp;
+      else if (sync?.checkUnavailable) { state = 'unknown'; message = 'Cropster update could not be checked · ' + stamp; }
+      else if (sync?.status === 'failed' || refresh.status === 'failed' && refresh.fetched !== true || productionSource?.status === 'failed') {
+        state = 'failed'; message = 'Cropster update failed · ' + (captured ? 'previous reading shown · ' + stamp : 'no saved production reading available');
+      } else if (sync?.status === 'running' || refresh.status === 'pending' || report.sourceSync?.jobStatus === 'running') {
+        state = 'pending'; message = 'Cropster updating in background · ' + stamp;
+      }
+      showText('productionCapture', message);
+      el('productionCapture').dataset.state = state;
     }
     function renderGreen(green, week) {
       const isMarrickville = green.location === 'Marrickville';
@@ -1079,6 +1110,7 @@ export const weeklyPage = String.raw`<!doctype html>
       const message = needsReview && !state.needsReload ? 'The saved note changed. Review the saved points above, then choose whether to keep your draft.' : state.message;
       showText('weekNoteFeedback', message);
       el('weekNoteFeedback').classList.toggle('error', state.error || Boolean(needsReview));
+      renderUiUpdate();
     }
     function clearWeekNotes() {
       for (const state of weekNotes.values()) state.reading?.abort();
@@ -1127,13 +1159,13 @@ export const weeklyPage = String.raw`<!doctype html>
       showText('loginMessage', 'Your session has ended. Sign in again.');
       el('password').focus();
     }
-    function render(data, { fresh = false } = {}) {
+    function render(data, { fresh = false, sync } = {}) {
       const { week, metrics } = data;
       const previousStart = changeWeek(week.start, -7);
       const previousRange = weekRange(previousStart, changeWeek(previousStart, week.isCurrent ? 6 : 4));
       set('dates', (week.isCurrent ? 'This week · ' : 'Monday to Friday · ') + week.label);
       renderDemand(metrics.demand, week, previousRange);
-      renderProduction(metrics.production, week, previousRange);
+      renderProduction(metrics.production, week, previousRange, data, sync);
       renderGreen(metrics.green, week);
       renderStock(metrics.stock, week);
       loadedWholesale = metrics.wholesale;
@@ -1177,6 +1209,8 @@ export const weeklyPage = String.raw`<!doctype html>
       el('actions').hidden = !active;
       el('login').hidden = active;
       if (active) return;
+      availableUiBuild = null;
+      el('uiUpdate').hidden = true;
       clearPendingSourceSync();
       stopDispatchPoll();
       loadedWholesale = null;
@@ -1227,6 +1261,59 @@ export const weeklyPage = String.raw`<!doctype html>
       loadedCropsterRefresh = null;
     }
     async function readJson(response) { return response.json().catch(() => ({})); }
+    const uiResumeKey = 'bmc-dashboard-ui-refresh-v1';
+    let availableUiBuild = null, checkingUiBuild = false;
+    function hasUnsavedDashboardEdits() {
+      if ([...weekNotes.values()].some(state => state.saving || noteWasChanged(state))) return true;
+      return ['captureForm', 'mondayCaptureForm', 'greenCaptureForm', 'fridayCaptureForm', 'expensesCaptureForm'].some(id =>
+        [...el(id).querySelectorAll('input, textarea')].some(input => input.value.trim() !== ''));
+    }
+    function renderUiUpdate() {
+      const dirty = hasUnsavedDashboardEdits();
+      el('uiUpdate').hidden = !availableUiBuild;
+      el('uiReload').disabled = dirty;
+      if (availableUiBuild) set('uiUpdateText', dirty
+        ? 'A dashboard update is ready. Save your notes and entered readings before reloading. Your drafts are still here.'
+        : 'A dashboard update is ready. Reload to use the latest view.');
+    }
+    function reloadUpdatedDashboard() {
+      if (!availableUiBuild || hasUnsavedDashboardEdits()) { renderUiUpdate(); return false; }
+      try { sessionStorage.setItem(uiResumeKey, JSON.stringify({buildId: availableUiBuild, at: Date.now()})); } catch {}
+      location.reload();
+      return true;
+    }
+    function consumeUiRefreshIntent() {
+      try {
+        const raw = sessionStorage.getItem(uiResumeKey);
+        sessionStorage.removeItem(uiResumeKey);
+        if (!raw) return false;
+        const value = JSON.parse(raw);
+        return value?.buildId === uiBuildId && Number.isFinite(value.at) && value.at <= Date.now() && Date.now() - value.at < 120000;
+      } catch { return false; }
+    }
+    async function manualRefresh() {
+      if (!signedIn || checkingUiBuild) return;
+      checkingUiBuild = true;
+      el('refresh').disabled = true;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 4000);
+      try {
+        if (/^[a-f0-9]{64}$/.test(uiBuildId)) {
+          const response = await fetch('/api/ui-build?view=steam-room', {cache: 'no-store', signal: controller.signal});
+          const result = response.ok ? await readJson(response) : null;
+          if (signedIn && /^[a-f0-9]{64}$/.test(result?.buildId) && result.buildId !== uiBuildId) {
+            availableUiBuild = result.buildId;
+            renderUiUpdate();
+            if (!hasUnsavedDashboardEdits() && reloadUpdatedDashboard()) return;
+          }
+        }
+      } catch {} finally {
+        clearTimeout(timer);
+        checkingUiBuild = false;
+        if (!currentRequest) el('refresh').disabled = false;
+      }
+      if (signedIn) return load(true, {fresh: true});
+    }
     async function load(announce = true, { fresh = false } = {}) {
       if (!signedIn) return;
       if (currentRequest && !fresh) return;
@@ -1270,7 +1357,7 @@ export const weeklyPage = String.raw`<!doctype html>
         const data = await readJson(response);
         if (currentRequest !== controller || !signedIn) return;
         if (!response.ok) throw new Error(data.error || 'The report could not be loaded.');
-        const noteRequest = render(data, { fresh });
+        const noteRequest = render(data, { fresh, sync });
         if (fresh || sync) {
           const noteChecked = await noteRequest;
           if (currentRequest !== controller || !signedIn) return;
@@ -1319,7 +1406,9 @@ export const weeklyPage = String.raw`<!doctype html>
       load();
     });
     el('currentWeek').addEventListener('click', () => { requestedWeek = ''; load(); });
-    el('refresh').addEventListener('click', () => load(true, { fresh: true }));
+    el('refresh').addEventListener('click', manualRefresh);
+    el('uiReload').addEventListener('click', reloadUpdatedDashboard);
+    el('report').addEventListener('input', renderUiUpdate);
     el('weekNoteInput').addEventListener('input', event => {
       if (!loadedWeek) return;
       const weekStart = loadedWeek.start;
@@ -1621,7 +1710,7 @@ export const weeklyPage = String.raw`<!doctype html>
     });
     fetch('/api/auth', { cache: 'no-store' }).then(readJson).then(data => {
       showSession(data.authenticated === true);
-      if (signedIn) load();
+      if (signedIn) load(true, {fresh: consumeUiRefreshIntent()});
     }).catch(() => showSession(false));
     document.addEventListener('visibilitychange', () => { if (signedIn && !document.hidden && !currentRequest) load(false); });
     setInterval(() => { if (signedIn && !document.hidden && !currentRequest) load(false); }, 60000);

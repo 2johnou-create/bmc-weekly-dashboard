@@ -166,3 +166,37 @@ for (const [name, page, kind] of [["Steam Room", weeklyPage, "weekly"], ["Wareho
     assert.equal(el("weekNoteInput").value, "Keep this meeting draft");
   });
 }
+
+function productionCapture(production, week, report, sync) {
+  const source = script(weeklyPage);
+  const start = source.indexOf('    function renderProductionCapture(');
+  const end = source.indexOf('    function renderGreen(', start);
+  const node = {textContent: '', dataset: {}};
+  const render = new Function('el', 'showText', 'formatTimestamp', source.slice(start, end) + '; return renderProductionCapture;')(
+    () => node, (_id, text) => {node.textContent = text;}, value => typeof value === 'string' ? value : '');
+  render(production, week, report, sync);
+  return node;
+}
+
+test('the production card shows its original capture and distinguishes failed, pending, and unknown refresh outcomes', () => {
+  const production = {asOf: captured, roastedKg: 200, scheduledGreenKg: 120, scheduledBatchCount: 4};
+  const week = {isCurrent: true};
+  const failed = productionCapture(production, week, {generatedAt: checked, cropsterRefresh: {status: 'failed', fetched: false}});
+  assert.equal(failed.dataset.state, 'failed');
+  assert.match(failed.textContent, /update failed · previous reading shown/);
+  assert.ok(failed.textContent.includes(captured));
+  assert.ok(!failed.textContent.includes(checked));
+  const pending = productionCapture(production, week, {}, {status: 'running'});
+  assert.equal(pending.dataset.state, 'pending');
+  assert.match(pending.textContent, /updating in background/);
+  const unknown = productionCapture(production, week, {cropsterRefresh: {status: 'failed'}}, {status: 'running', checkUnavailable: true});
+  assert.equal(unknown.dataset.state, 'unknown');
+  assert.match(unknown.textContent, /could not be checked/);
+  assert.doesNotMatch(unknown.textContent, /update failed/);
+  const estimateOnly = productionCapture(production, week, {cropsterRefresh: {status: 'refreshed', fetched: true}, sourceSync: {status: 'partial', sources: [{id: 'production', status: 'partial'}]}});
+  assert.equal(estimateOnly.dataset.state, 'saved');
+  assert.doesNotMatch(estimateOnly.textContent, /failed/);
+  const archive = productionCapture(production, {isCurrent: false}, {cropsterRefresh: {status: 'failed'}}, {status: 'running'});
+  assert.match(archive.textContent, /^Friday archive/);
+  assert.equal(archive.dataset.state, 'saved');
+});

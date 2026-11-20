@@ -33,9 +33,8 @@ export function validateCropsterObservation(input, weekStart, now = new Date(), 
   if (!Number.isFinite(observedAt) || !/T.*(?:Z|[+-]\d\d:\d\d)$/.test(input.observedAt) ||
     observedAt > now.getTime() + 120_000 || observedAt < now.getTime() - maximumPublicationAge) throw new Error("Invalid source capture time.");
   const production = input.production;
-  for (const key of ["roastedKg", "scheduledKg"]) {
-    if (!boundedAmount(production[key], 1_000_000)) throw new Error("Invalid production weight.");
-  }
+  if (!boundedAmount(production.roastedKg, 1_000_000) ||
+      !boundedAmount(production.scheduledKg, 1_000_000, true)) throw new Error("Invalid production weight.");
   for (const key of ["roastedValue", "scheduledValue"]) {
     if (!boundedAmount(production[key], 100_000_000, true)) throw new Error("Invalid production cost.");
   }
@@ -56,6 +55,7 @@ export function validateCropsterObservation(input, weekStart, now = new Date(), 
     times[field] = new Date(time);
   }
   const scheduledBatches = validateCropsterScheduledBatches(input.scheduledBatches, weekStart, times.productionObservedAt);
+  if (production.scheduledKg === null && !scheduledBatches) throw new Error("A missing output estimate requires verified pending green batches.");
   let previousProduction = null;
   if (input.previousProduction != null) {
     const value = input.previousProduction;
@@ -284,8 +284,11 @@ async function readBackCropster({ env, weekStart, followingWeekStart, now, refre
   const matchedScheduled = scheduledBatches?.asOf === readings.production.asOf ? scheduledBatches : null;
   readings.production.scheduledGreenKg = matchedScheduled?.greenKg ?? null;
   readings.production.scheduledBatchCount = matchedScheduled?.batches ?? null;
+  if (matchedScheduled && readings.production.scheduledKg === null) {
+    readings.production.note += " Pending scheduled green input and batch count were verified for this capture.";
+  }
   if (refresh.fetched && (!Number.isFinite(readings.production.roastedKg) ||
-    !Number.isFinite(readings.production.scheduledKg) ||
+    !Number.isFinite(readings.production.scheduledKg) && !(readings.production.scheduledKg === null && matchedScheduled) ||
     Date.parse(readings.production.asOf) < Date.parse(refresh.productionCapturedAt) || !readings.production.asOf)) {
     refresh = { ...refresh, status: "failed", fetched: false,
       note: "The fresh Cropster reading was saved but could not be loaded. Try Refresh again." };

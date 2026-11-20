@@ -683,7 +683,7 @@ export const warehousePage = String.raw`<!doctype html>
           metrics([
             ["Pending scheduled batches", num(scheduled?.batches)],
             ["Expected roasted output this week", kg(production.totalKg)],
-            ["Remaining roasted output · estimate", kg(production.scheduledKg)],
+            ["Remaining roasted output · estimate", Number.isFinite(production.scheduledKg) ? kg(production.scheduledKg) : "Unavailable"],
             ["Green cost", money(production.value)],
             ["Roasted green cost", money(production.roastedValue)],
             ["Scheduled cost estimate", money(production.scheduledValue)],

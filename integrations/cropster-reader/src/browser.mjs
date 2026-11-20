@@ -501,18 +501,30 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
               optional(() => view(sourcePaths.cost, "production", snapshot => parseRoastedCost(snapshot, range, before.greenKg), "weekly_roasted_cost"), "ROASTED_COST_UNAVAILABLE"),
             ]);
             const verifiedSchedules = await readSchedules(true, reading.kind === "days");
-            if (!sameScheduleReads(reading, verifiedSchedules)) throw new ReaderError("CROPSTER_CHANGED_DURING_READ");
+            let coherentReading = reading;
+            if (!sameScheduleReads(reading, verifiedSchedules)) {
+              if (!sameScheduleReads(reading, verifiedSchedules, { ignoreOutputEstimate: true })) throw new ReaderError("CROPSTER_CHANGED_DURING_READ");
+              // Every core weight, count, lot and ownership/status must match.
+              // A changing/unavailable optional factor becomes unknown instead
+              // of blocking those verified core readings.
+              coherentReading = reading.kind === "week" ? { ...reading, week: { ...reading.week, roastedKg: null } }
+                : { ...reading, days: reading.days.map(day => ({ ...day, roastedKg: null })) };
+            }
             const after = await view(sourcePaths.production, "production", snapshot => parseRoastedOutput(snapshot, range), "weekly_production_after");
             if (!sameProduction(before, after)) throw new ReaderError("CROPSTER_CHANGED_DURING_READ");
             weekRange(weekStart, now());
-            schedules = reading;
-            scheduleAssignments = reading.kind === "week" ? reading.week.profileAssignments : null;
-            const scheduled = aggregateScheduleRead(reading, freshInventory ? inventoryPrices(freshInventory) : null, range);
+            schedules = coherentReading;
+            scheduleAssignments = schedules.kind === "week" ? schedules.week.profileAssignments : null;
+            const scheduled = aggregateScheduleRead(schedules, freshInventory ? inventoryPrices(freshInventory) : null, range);
+            if (scheduled.scheduledKg === null) {
+              warnings.push("SCHEDULED_OUTPUT_ESTIMATE_UNAVAILABLE");
+              emit("capture", "running", "parse", "SCHEDULED_OUTPUT_ESTIMATE_UNAVAILABLE");
+            }
             if (scheduled.scheduledValue === null) warnings.push("SCHEDULED_COST_UNAVAILABLE");
             if (roastedValue === null) warnings.push("ROASTED_COST_UNAVAILABLE");
             if (scope === "all" && freshInventory) { lab.inventory = freshInventory; labObservedAt.inventory = inventoryObservedAt; }
             const timestamps = captureTimestamps(now);
-            const pendingReadings = reading.kind === "week" ? [reading.week] : reading.days;
+            const pendingReadings = schedules.kind === "week" ? [schedules.week] : schedules.days;
             const scheduledBatches = { greenKg: Math.round(pendingReadings.reduce((sum, row) => sum + row.greenKg, 0) * 100) / 100,
               batches: pendingReadings.reduce((sum, row) => sum + row.pendingBatchCount, 0) };
             observation = {

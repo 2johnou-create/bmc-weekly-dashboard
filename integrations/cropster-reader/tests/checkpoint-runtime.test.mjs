@@ -254,3 +254,32 @@ test("an explicit request at the final checkpoint cannot be lost before job comp
   assert.equal(control.isAccepting(), false);
   await reader.close();
 });
+
+test("missing estimated-output columns cannot block actual roasted or verified pending batch checkpoints", async () => {
+  const source = simulatedBrowser({ fastWeek: true, legacyInventory: true, transformWeek(snapshot) { snapshot.tables[0].headers[4] = "Output unavailable"; } });
+  const checkpoints = [];
+  const reader = createBrowserReader({ timeoutMs: 1800000, chromiumSandbox: false }, { now: () => new Date("2026-02-05T00:00:00Z"), launch: async () => source.browser });
+  const result = await reader.read("2026-02-02", { onCapture: capture => checkpoints.push(capture) });
+  assert.equal(result.production.roastedKg, 8.5);
+  assert.equal(result.production.scheduledKg, null);
+  assert.equal(result.production.scheduledValue, 230);
+  assert.deepEqual(result.scheduledBatches, { greenKg: 20, batches: 2 });
+  assert.ok(result.warnings.includes("SCHEDULED_OUTPUT_ESTIMATE_UNAVAILABLE"));
+  assert.equal(checkpoints[0].production.scheduledKg, null);
+  assert.deepEqual(checkpoints[0].scheduledBatches, result.scheduledBatches);
+  await reader.close();
+});
+
+test("an optional output factor changing between reads becomes unknown while matching core quantities still refresh", async () => {
+  let captures = 0;
+  const source = simulatedBrowser({ fastWeek: true, legacyInventory: true, transformWeek(snapshot) { if (++captures % 2 === 0) snapshot.tables[0].headers[4] = "Output unavailable"; } });
+  const reader = createBrowserReader({ timeoutMs: 1800000, chromiumSandbox: false }, { now: () => new Date("2026-02-05T00:00:00Z"), launch: async () => source.browser });
+  const result = await reader.read("2026-02-02");
+  assert.equal(captures, 2, "Only optional uncertainty must not restart the full core capture");
+  assert.equal(result.production.roastedKg, 8.5);
+  assert.equal(result.production.scheduledKg, null);
+  assert.equal(result.production.scheduledValue, 230);
+  assert.deepEqual(result.scheduledBatches, { greenKg: 20, batches: 2 });
+  assert.ok(result.warnings.includes("SCHEDULED_OUTPUT_ESTIMATE_UNAVAILABLE"));
+  await reader.close();
+});

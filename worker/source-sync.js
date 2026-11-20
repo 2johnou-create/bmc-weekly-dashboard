@@ -8,10 +8,19 @@ export function sourceSyncSummary({ weekly, lab, packing, weather }, { historica
   const metricState = metric => metric?.status === "partial" ? "partial" : state(readable(metric));
   const cropsterState = flag => historical ? "archive" : flag ? "updated" :
     cropster.mode === "saved-readings" ? "not-connected" : cropster.status === "pending" ? "pending" : cropster.status === "saved" ? "saved" : "failed";
+  const production = metrics.production;
+  const verifiedBatches = Number.isFinite(production?.scheduledGreenKg) && production.scheduledGreenKg >= 0 &&
+    Number.isSafeInteger(production?.scheduledBatchCount) && production.scheduledBatchCount >= 0 &&
+    (production.scheduledGreenKg === 0) === (production.scheduledBatchCount === 0);
+  const productionCore = Number.isFinite(production?.roastedKg) && (verifiedBatches || Number.isFinite(production?.scheduledKg));
+  const productionComplete = [production?.scheduledKg, production?.roastedValue, production?.scheduledValue].every(Number.isFinite);
+  const productionState = !historical && cropster.fetched && productionCore
+    ? productionComplete ? "updated" : "partial" : cropsterState(false);
+  const productionNote = productionState === "partial"
+    ? [cropster.note, production?.note].filter(Boolean).join(" ") : cropster.note;
   const sources = Object.keys(metrics).length ? [
     source("demand", "Roast tally", state(readable(metrics.demand)), metrics.demand?.asOf, metrics.demand?.note),
-    source("production", "Cropster production and schedule", cropsterState(cropster.fetched &&
-      [metrics.production?.roastedKg, metrics.production?.scheduledKg, metrics.production?.roastedValue, metrics.production?.scheduledValue].every(Number.isFinite)), metrics.production?.asOf, cropster.note),
+    source("production", "Cropster production and schedule", productionState, production?.asOf, productionNote),
     source("monday", "Cropster Monday output", cropsterState(cropster.mondayFetched), null),
     source("previous-production", "Cropster previous-week comparison", cropsterState(cropster.previousFetched), cropster.previousAsOf || null),
     source("green", "Cropster Marrickville stock", cropsterState(cropster.greenFetched &&

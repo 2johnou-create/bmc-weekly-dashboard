@@ -121,13 +121,17 @@ test("partly completed post-roast blends apply each component's own output ratio
   assert.equal(parseScheduleDay(snapshot, "2026-02-06", range).roastedKg, 24.5);
   snapshot.tables[0].rows[0][3] = "10 kg\nComponent A: 10 kg";
   snapshot.tables[1].rows[1][1] = "";
+  snapshot.tables[2].rows[1][2] = "";
+  snapshot.tables[2].rows[1][3] = "40 kg";
   snapshot.calendarDay.states = snapshot.calendarDay.tiles.map((text, index) => text.includes("PG-0902") ? "roasted" : snapshot.calendarDay.states[index]);
   assert.equal(parseScheduleDay(snapshot, "2026-02-06", range).roastedKg, 8.5);
 });
 
 test("ambiguous schedule components, missing output and unmatched lot inputs fail closed", () => {
   const missing = schedule("2026-02-06", { estimated: "" });
-  assert.throws(() => parseScheduleDay(missing, "2026-02-06", range), /CROPSTER_SCHEDULE_AMBIGUOUS/);
+  const verified = parseScheduleDay(missing, "2026-02-06", range);
+  assert.equal(verified.greenKg, 20);
+  assert.equal(verified.roastedKg, null);
   const mismatch = schedule("2026-02-06", { lotRows: [["[PG-0901] Example", "19 kg", "40 kg"]] });
   assert.throws(() => parseScheduleDay(mismatch, "2026-02-06", range), /CROPSTER_SCHEDULE_AMBIGUOUS/);
   const post = schedule("2026-02-06", { type: "Post-roast blend" });

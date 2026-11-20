@@ -55,7 +55,7 @@ export function cropsterProduction(reading = null, now = new Date()) {
     const value = total(reading.roasted_value, reading.scheduled_value);
     const previousValue = total(reading.previous_roasted_value, reading.previous_scheduled_value);
     const complete = [totalKg, previousKg, value, previousValue].every(amount => amount !== null);
-    const note = scheduledKg === null ? "Cost covers green coffee. Outstanding scheduled kilograms are unavailable in this reading." :
+    const note = scheduledKg === null ? "The remaining roasted-output estimate is unavailable. Pending scheduled green input and batch count are reported separately when verified. Cost covers green coffee." :
       "Scheduled output and cost are estimates from Cropster. Cost covers green coffee.";
     return {
       ...captureMetadata(reading, now, complete ? "live" : "partial", note),

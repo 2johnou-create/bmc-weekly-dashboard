@@ -99,18 +99,25 @@ export function parseRoastedCost(snapshot, range, expectedGreenKg) {
   return value !== null && rows.every(value => value !== null) && close(value, sum(rows)) ? value : null;
 }
 
-function quantityBreakdown(cell) {
+function quantityBreakdown(cell, allowBlankComponents = false) {
   const lines = trim(cell).split(/\n+/).map(trim).filter(Boolean);
   const total = kilograms(lines.shift() || "");
   const components = new Map();
+  const blankComponents = new Set();
   for (const line of lines) {
     const match = line.match(new RegExp("^(.+):\\s*(" + numeric + ")\\s*kg$"));
+    const blank = allowBlankComponents && !match ? line.match(/^(.+):\s*$/) : null;
+    if (blank) {
+      const name = trim(blank[1]);
+      if (!name || components.has(name)) throw new ReaderError("CROPSTER_SCHEDULE_AMBIGUOUS");
+      components.set(name, 0); blankComponents.add(name); continue;
+    }
     if (!match || components.has(trim(match[1]))) throw new ReaderError("CROPSTER_SCHEDULE_AMBIGUOUS");
     components.set(trim(match[1]), number(match[2]));
   }
   if (total === null || [...components.values()].some(value => value === null)
     || components.size && !close(total, sum([...components.values()]))) throw new ReaderError("CROPSTER_SCHEDULE_AMBIGUOUS");
-  return { total, components };
+  return { total, components, blankComponents };
 }
 
 function remainingOutput(remaining, total, estimated, type) {
@@ -149,12 +156,12 @@ export function parseScheduleDay(snapshot, day, range) {
   }
   const displayedDay = `${Number(day.slice(5, 7))}/${Number(day.slice(8, 10))}/${day.slice(0, 4)}`;
   const remainingHeader = `${displayedDay} to roast`, totalHeader = `${displayedDay} total`, outputHeader = `${displayedDay} estimated output`;
-  const batches = batchRows(snapshot.calendarDay?.tiles, snapshot.calendarDay?.states);
+  const batches = batchRows(snapshot.calendarDay?.tiles, snapshot.calendarDay?.states, day);
   const pending = parsePendingTables(snapshot, remainingHeader, totalHeader, outputHeader, batches);
   return { day, ...pending };
 }
 
-function batchRows(tiles, states) {
+function batchRows(tiles, states, date) {
   if (!Array.isArray(tiles) || !Array.isArray(states) || tiles.length !== states.length) throw new ReaderError("CROPSTER_BATCH_STATUS_UNVERIFIED");
   return tiles.map((tile, index) => {
     const status = states[index];
@@ -164,26 +171,45 @@ function batchRows(tiles, states) {
     const kg = weight ? number(weight[2]) : null;
     const ids = lines.map(line => line.match(/^\[(PG-\d+)\]\s+.+$/)?.[1]);
     if (!(kg > 0) || !ids.length || ids.some(id => !id) || new Set(ids).size !== ids.length) throw new ReaderError("CROPSTER_SCHEDULE_AMBIGUOUS");
-    return { kg, status, lotIds: ids, profileName: weight[1] };
+    return { kg, status, lotIds: ids, profileName: weight[1], date };
   });
 }
 
 function parsePendingTables(snapshot, remainingHeader, totalHeader, outputHeader, batches) {
-  const coffees = tableWith(snapshot, ["profile", "type", remainingHeader, totalHeader, outputHeader]);
+  const coffees = tableWith(snapshot, ["profile", "type", remainingHeader, totalHeader]);
   const lots = tableWith(snapshot, ["lot", remainingHeader, totalHeader]);
   if (!completeTable(snapshot, coffees) || !completeTable(snapshot, lots)) throw new ReaderError("CROPSTER_TABLE_INCOMPLETE");
-  let greenKg = 0, roastedKg = 0;
-  const componentKg = new Map();
+  let greenKg = 0, roastedKg = 0, estimateAvailable = true;
+  const componentKg = new Map(), datedComponentKg = new Map();
   for (const row of coffees.rows) {
     const remainingCell = trim(row[coffees.index(remainingHeader)]);
     if (!remainingCell) continue; // Cropster's blank To-roast cell means that schedule is fully completed.
-    const remaining = quantityBreakdown(remainingCell);
+    const remaining = quantityBreakdown(remainingCell, true);
     if (remaining.total === 0) continue;
-    const total = quantityBreakdown(row[coffees.index(totalHeader)]);
-    const estimated = quantityBreakdown(row[coffees.index(outputHeader)]);
-    if (/post-roast blend/i.test(trim(row[coffees.index("type")]))) for (const [name, kg] of remaining.components) componentKg.set(name, (componentKg.get(name) || 0) + kg);
+    if (/post-roast blend/i.test(trim(row[coffees.index("type")]))) {
+      if (!remaining.components.size) throw new ReaderError("CROPSTER_SCHEDULE_AMBIGUOUS");
+      const selectedDate = trim(row[coffees.index("scheduled on")]).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+      const date = selectedDate ? `${selectedDate[3]}-${selectedDate[1].padStart(2, "0")}-${selectedDate[2].padStart(2, "0")}` : null;
+      if (remaining.blankComponents.size && !date) throw new ReaderError("CROPSTER_SCHEDULE_AMBIGUOUS");
+      for (const [name, kg] of remaining.components) {
+        componentKg.set(name, (componentKg.get(name) || 0) + kg);
+        if (date) {
+          const key = JSON.stringify([date, name]);
+          datedComponentKg.set(key, (datedComponentKg.get(key) || 0) + kg);
+        }
+      }
+    }
     greenKg += remaining.total;
-    roastedKg += remainingOutput(remaining, total, estimated, trim(row[coffees.index("type")]));
+    // Output factors are optional. Their absence must not discard independently
+    // verified actual production or pending batch weights/counts/raw cost.
+    try {
+      const total = quantityBreakdown(row[coffees.index(totalHeader)]);
+      const estimated = quantityBreakdown(row[coffees.index(outputHeader)]);
+      roastedKg += remainingOutput(remaining, total, estimated, trim(row[coffees.index("type")]));
+    } catch (error) {
+      if (!(error instanceof ReaderError)) throw error;
+      estimateAvailable = false;
+    }
   }
   const lotKg = new Map();
   for (const row of lots.rows) {
@@ -203,6 +229,13 @@ function parsePendingTables(snapshot, remainingHeader, totalHeader, outputHeader
   const profiles = tableWith(snapshot, ["profile", "# of batches", remainingHeader, totalHeader]);
   if (!completeTable(snapshot, profiles)) throw new ReaderError("CROPSTER_TABLE_INCOMPLETE");
   const profileTotal = profiles.rows.map(row => kilograms(row[profiles.index(totalHeader)]));
+  const profilePending = new Map();
+  for (const row of profiles.rows) {
+    const name = compact(row[profiles.index("profile")]).replace(/\s+\(\d+(?:\.\d+)?\)(?:\s*-\s*[^()]+)?$/, "");
+    const pendingText = trim(row[profiles.index(remainingHeader)]), pendingKg = pendingText ? kilograms(pendingText) : 0;
+    if (!name || pendingKg === null) throw new ReaderError("CROPSTER_SCHEDULE_AMBIGUOUS");
+    profilePending.set(name, (profilePending.get(name) || 0) + pendingKg);
+  }
   const summaryCounts = profiles.rows.map(row => {
     const counts = trim(row[profiles.index("# of batches")]).split(/\n+/).map(line => compact(line).match(new RegExp("^(\\d+)\\s*x\\s*" + numeric + "\\s*kg$"))?.[1]);
     return counts.some(count => count === undefined) ? null : sum(counts.map(Number));
@@ -211,12 +244,18 @@ function parsePendingTables(snapshot, remainingHeader, totalHeader, outputHeader
     || profileTotal.some(kg => kg === null) || !close(sum(profileTotal), totalGreenKg)
     || summaryTotal.some(kg => kg === null) || !close(sum(summaryTotal), totalGreenKg) || !close(greenKg, batchGreenKg)) throw new ReaderError("CROPSTER_SCHEDULE_AMBIGUOUS");
   const pending = batches.filter(row => row.status !== "roasted"), known = new Map();
+  for (const [name, kg] of profilePending) if (!close(kg, sum(pending.filter(row => row.profileName === name).map(row => row.kg)))) throw new ReaderError("CROPSTER_SCHEDULE_AMBIGUOUS");
+  if (pending.some(row => !profilePending.has(row.profileName))) throw new ReaderError("CROPSTER_SCHEDULE_AMBIGUOUS");
   for (const [name, kg] of componentKg) if (!close(kg, sum(pending.filter(row => row.profileName === name).map(row => row.kg)))) throw new ReaderError("CROPSTER_SCHEDULE_AMBIGUOUS");
+  for (const [key, kg] of datedComponentKg) {
+    const [date, name] = JSON.parse(key);
+    if (!close(kg, sum(pending.filter(row => row.date === date && row.profileName === name).map(row => row.kg)))) throw new ReaderError("CROPSTER_SCHEDULE_AMBIGUOUS");
+  }
   for (const row of pending) if (row.lotIds.length === 1) known.set(row.lotIds[0], (known.get(row.lotIds[0]) || 0) + row.kg);
   const multi = pending.filter(row => row.lotIds.length > 1);
   for (const [id, kg] of known) if (!lotKg.has(id) || kg > lotKg.get(id) + 0.06) throw new ReaderError("CROPSTER_SCHEDULE_AMBIGUOUS");
   for (const [id, kg] of lotKg) if (kg - (known.get(id) || 0) > 0.06 && !multi.some(row => row.lotIds.includes(id))) throw new ReaderError("CROPSTER_SCHEDULE_AMBIGUOUS");
-  return { greenKg: batchGreenKg, roastedKg, lotKg, pendingBatchCount: pending.length };
+  return { greenKg: batchGreenKg, roastedKg: estimateAvailable ? roastedKg : null, lotKg, pendingBatchCount: pending.length };
 }
 
 export function parseScheduleWeek(snapshot, range) {
@@ -249,7 +288,7 @@ export function parseScheduleWeek(snapshot, range) {
     if (!Array.isArray(machine.tiles) || !Array.isArray(machine.states) || machine.tiles.length !== 7 || machine.states.length !== 7) throw new ReaderError("CROPSTER_BATCH_STATUS_UNVERIFIED");
     return machine.tiles.flatMap((tiles, day) => {
       if (tiles.length !== machine.batchCounts[day]) throw new ReaderError("CROPSTER_BATCH_STATUS_UNVERIFIED");
-      return batchRows(tiles, machine.states[day]);
+      return batchRows(tiles, machine.states[day], grid.dates[day]);
     });
   });
   const pending = parsePendingTables(snapshot, `${prefix} to roast`, `${prefix} total`, `${prefix} estimated output`, batches);
@@ -322,12 +361,12 @@ function parseCalendarAssignments(snapshot, range, prefix) {
   return { complete: true, weekStart: range.weekStart, periodEnd: range.periodEnd, rows };
 }
 
-export function sameScheduleReads(first, second) {
+export function sameScheduleReads(first, second, { ignoreOutputEstimate = false } = {}) {
   if (first.kind !== second.kind) return false;
-  if (first.kind === "days") return sameSchedules(first.days, second.days);
+  if (first.kind === "days") return sameSchedules(first.days, second.days, { ignoreOutputEstimate });
   if (first.kind !== "week" || first.week.weekStart !== second.week.weekStart || first.week.periodEnd !== second.week.periodEnd) return false;
   const assigned = week => week.profileAssignments?.complete ? JSON.stringify(week.profileAssignments.rows.map(row => [row.date, row.machineId, row.profileUrl, row.greenKg, [...row.lotIds].sort(), row.status]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))) : null;
-  return sameSchedules([{ ...first.week, day: first.week.weekStart }], [{ ...second.week, day: second.week.weekStart }]) && assigned(first.week) === assigned(second.week);
+  return sameSchedules([{ ...first.week, day: first.week.weekStart }], [{ ...second.week, day: second.week.weekStart }], { ignoreOutputEstimate }) && assigned(first.week) === assigned(second.week);
 }
 
 export function parseInventory(snapshots, asOf) {
@@ -493,7 +532,7 @@ function aggregatePendingRows(days, prices) {
   }
   const greenKg = sum(days.map(day => day.greenKg));
   return {
-    scheduledKg: round(sum(days.map(day => day.roastedKg))),
+    scheduledKg: days.every(day => Number.isFinite(day.roastedKg)) ? round(sum(days.map(day => day.roastedKg))) : null,
     scheduledValue: greenKg === 0 ? 0 : completeCost ? round(value) : null,
   };
 }
@@ -628,11 +667,12 @@ export function parseProfileInputs(snapshot) {
   return { lotIds };
 }
 
-export function sameSchedules(first, second) {
+export function sameSchedules(first, second, { ignoreOutputEstimate = false } = {}) {
   if (first.length !== second.length) return false;
   return first.every((day, index) => {
     const other = second[index];
-    return day.day === other.day && day.pendingBatchCount === other.pendingBatchCount && close(day.greenKg, other.greenKg, 0.00001) && close(day.roastedKg, other.roastedKg, 0.00001)
+    return day.day === other.day && day.pendingBatchCount === other.pendingBatchCount && close(day.greenKg, other.greenKg, 0.00001)
+      && (ignoreOutputEstimate || day.roastedKg === null && other.roastedKg === null || close(day.roastedKg, other.roastedKg, 0.00001))
       && day.lotKg.size === other.lotKg.size && [...day.lotKg].every(([id, kg]) => close(kg, other.lotKg.get(id), 0.00001));
   });
 }

@@ -64,6 +64,8 @@ async function harness(action) {
       return Response.json({ schemaVersion: "1.0", status: state.readerStatus || "complete", jobId: state.jobId, weekStart: week(), result: state.observation });
     }
     if (url.hostname === "bmc-stockroom.misty-jelly-1931.chatgpt.site" && url.pathname === "/api/inventory") {
+      state.inventoryReads = (state.inventoryReads || 0) + 1;
+      if (state.inventoryReads > 1 && state.inventoryFailureAfterAuth) return Response.json({}, {status: state.inventoryFailureAfterAuth});
       return Response.json(state.revoked ? {} : { items: [] }, { status: state.revoked ? 401 : 200 });
     }
     // Unavailable external feeds must produce a partial result rather than a false all-updated announcement.
@@ -102,6 +104,29 @@ test("source sync rejects unsigned, revoked and wrong-origin starts before conta
     assert.equal(state.starts, 0);
     assert.equal(state.polls, 0);
     assert.equal(state.addresses[0].pathname, "/api/inventory");
+  });
+});
+
+test("a verified terminal reader outcome survives a finishing feed outage instead of leaving the client polling", async () => {
+  for (const status of ["complete", "failed"]) await harness(async ({ state, request }) => {
+    state.readerStatus = status;
+    state.inventoryFailureAfterAuth = 503;
+    const reply = await request("/api/source-sync?week=" + week() + "&jobId=" + state.jobId);
+    assert.equal(reply.status, 200);
+    assert.equal(reply.body.status, status);
+    assert.equal(reply.body.sourceSync.jobStatus, status);
+    assert.equal(reply.body.sourceSync.status, "partial");
+    assert.match(reply.body.sourceSync.message, /Other dashboard sources could not all be checked/);
+    assert.equal(state.polls, 1);
+  });
+});
+
+test("a finishing pass still reports revoked Stock Take access as authentication failure", async () => {
+  await harness(async ({ state, request }) => {
+    state.inventoryFailureAfterAuth = 401;
+    const reply = await request("/api/source-sync?week=" + week() + "&jobId=" + state.jobId);
+    assert.equal(reply.status, 401);
+    assert.notEqual(reply.body.status, "complete");
   });
 });
 
