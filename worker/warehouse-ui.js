@@ -80,6 +80,19 @@ export const warehousePage = String.raw`<!doctype html>
     .john-reasons { border-top:1px solid var(--line); padding-top:.35rem; font-size:.75rem; }
     .john-reasons summary { min-height:32px; cursor:pointer; font-weight:650; color:var(--green); }
     .john-reasons p { margin-top:.35rem; overflow-wrap:anywhere; }
+    .team-layer { position:absolute; inset:0; z-index:6; pointer-events:none; overflow:hidden; }
+    .team-badge { position:absolute; left:0; top:0; transform:translate(-50%,-100%); display:flex; align-items:center; gap:.35rem; min-height:44px; padding:.3rem .55rem; border:1px solid #91a9a2; border-radius:.45rem; background:rgb(250 255 252 / .96); color:#254c44; box-shadow:0 2px 7px rgb(26 47 34 / .12); pointer-events:auto; font-size:.875rem; font-weight:750; white-space:nowrap; text-align:left; }
+    .team-badge[data-person=angus] { border-color:#b79a83; color:#694630; background:rgb(255 248 240 / .96); }
+    .team-badge[data-person=milk] { border-color:#575b68; color:#fffdf5; background:rgb(43 47 59 / .96); }
+    .team-badge[aria-expanded=true] { outline:2px solid var(--green); outline-offset:2px; }
+    .team-badge .team-icon { font-size:1rem; }
+    .team-badge small { display:block; font-size:.8125rem; line-height:1.25; font-weight:500; }
+    .team-card { position:absolute; width:248px; max-width:calc(100% - 20px); padding:.65rem .75rem; border:1px solid #a6b8aa; border-radius:.6rem; background:#fffdf6; color:var(--ink); box-shadow:0 6px 20px rgb(26 47 34 / .18); pointer-events:auto; }
+    .team-card header { display:flex; align-items:center; justify-content:space-between; gap:.5rem; }
+    .team-card h3 { font-size:1.05rem; }
+    .team-card .team-close { min-height:44px; min-width:44px; padding:0; border:0; border-radius:.35rem; background:transparent; color:var(--muted); font-size:1.2rem; }
+    .team-card strong { display:block; font-size:.875rem; margin-top:.1rem; }
+    .team-card p { font-size:.875rem; line-height:1.45; margin-top:.3rem; }
     .cheer-pop { position:absolute; pointer-events:none; font-size:1.4rem; font-weight:900; color:#81530a; text-shadow:0 1px 0 white; }
     .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; border:0; }
     .scene-message { position:absolute; inset:0; z-index:2; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:.7rem; padding:2rem; text-align:center; color:var(--green); background:var(--sky); }
@@ -191,6 +204,7 @@ export const warehousePage = String.raw`<!doctype html>
     @media (prefers-reduced-motion:reduce) { .spinner { animation:none !important; } .high-five:active { transform:none; } }
     @media (max-width:650px) { .local-conditions { top:.65rem; right:.65rem; padding:.45rem .55rem; } .scene-caption { display:none; } }
     @media (max-width:650px) { .pin { max-width:185px; } .pin-extra { display:none; } }
+    @media (max-width:650px) { .team-card { width:calc(100% - 20px); padding:.5rem .65rem; } .team-card header { min-height:24px; padding-right:40px; } .team-card .team-close { position:absolute; top:.15rem; right:.2rem; } .team-card strong { margin-top:0; padding-right:40px; } .team-card p { margin-top:.2rem; } }
     @media print { .topbar,.scene-stage,.zone-nav,.page-actions,.footer { display:none; } .workspace { display:block; border:0; } .detail-panel { max-height:none; border:0; } .panel-body { overflow:visible; } body { background:white; } }
   </style>
 </head>
@@ -212,6 +226,15 @@ export const warehousePage = String.raw`<!doctype html>
       <div class="stage-column">
         <div id="sceneStage" class="scene-stage">
           <div id="sceneCanvas" role="group" aria-label="Interactive roastery illustration"></div>
+          <div id="teamLayer" class="team-layer" aria-label="Warehouse team">
+            <button id="emilyBadge" class="team-badge" data-person="emily" type="button" aria-label="Meet Emily" aria-expanded="false" aria-controls="teamCard" hidden><span class="team-icon" aria-hidden="true">🛒</span><span>Emily</span></button>
+            <button id="angusBadge" class="team-badge" data-person="angus" type="button" aria-label="Meet Angus, the boss" aria-expanded="false" aria-controls="teamCard" hidden><span class="team-icon" aria-hidden="true">💼</span><span>Angus</span></button>
+            <button id="milkBadge" class="team-badge" data-person="milk" type="button" aria-label="Meet Milk, I am rockstar" aria-expanded="false" aria-controls="teamCard" hidden><span class="team-icon" aria-hidden="true">😎</span><span>Milk<small>I am rockstar</small></span></button>
+            <section id="teamCard" class="team-card" role="region" aria-labelledby="teamTitle" hidden>
+              <header><h3 id="teamTitle"></h3><button id="teamClose" class="team-close" type="button" aria-label="Close team character">×</button></header>
+              <strong id="teamRole"></strong><p id="teamDescription"></p>
+            </section>
+          </div>
           <div id="johnLayer" class="john-layer">
             <button id="johnBadge" class="john-badge" type="button" aria-expanded="false" aria-controls="johnCard" hidden><span aria-hidden="true">🧢</span>John <small>Hi five</small></button>
             <section id="johnCard" class="john-card" aria-labelledby="johnTitle" hidden>
@@ -279,6 +302,12 @@ export const warehousePage = String.raw`<!doctype html>
     let weatherMinute = -1;
     let johnOpen = false, johnRect = null, johnCombo = 0, johnLastTap = 0, johnComboTimer = null, johnAnnounceTimer = null, johnRenderedWeek = null;
     let cheerPopIndex = 0, johnCoinReward = null;
+    const team = {
+      emily: { name: "Emily", role: "Keeping everyone on track", description: "Trolley rounds, keeping everyone working." },
+      angus: { name: "Angus", role: "The boss", description: "Always worrying. Always on the move." },
+      milk: { name: "Milk", role: "I am rockstar", description: "Cool, calm and ready to steal the show." }
+    };
+    let teamOpen = null, teamRects = [];
     const johnCheers = new Map();
     const johnCoins = new Map();
     const cheerPops = [];
@@ -1225,6 +1254,7 @@ export const warehousePage = String.raw`<!doctype html>
     }
     function openJohn(id = "john") {
       if (id !== "john" || !signedIn || sceneFailed) return;
+      closeTeam();
       selectZone("roasting");
       johnOpen = true;
       el("johnBadge").setAttribute("aria-expanded", "true");
@@ -1271,6 +1301,128 @@ export const warehousePage = String.raw`<!doctype html>
         card.style.top = top + "px";
         johnRect = { left: Math.min(johnRect.left, left - 5), right: Math.max(johnRect.right, left + card.offsetWidth + 5), top: Math.min(johnRect.top, top - 5), bottom: Math.max(johnRect.bottom, top + card.offsetHeight + 5) };
       }
+    }
+    function closeTeam(restoreFocus = false) {
+      const id = teamOpen;
+      teamOpen = null;
+      el("teamCard").hidden = true;
+      for (const key of Object.keys(team)) el(key + "Badge").setAttribute("aria-expanded", "false");
+      if (restoreFocus && id) {
+        const target = !el(id + "Badge").hidden ? el(id + "Badge") : el("reset");
+        if (signedIn && sceneVisible && !sceneFailed) target.focus({ preventScroll: true });
+      }
+    }
+    function openPerson(id) {
+      if (id === "john") { openJohn(); return; }
+      if (!Object.hasOwn(team, id) || !signedIn || sceneFailed || !sceneVisible || document.hidden) return;
+      closeJohn();
+      positionJohn();
+      closeTeam();
+      teamOpen = id;
+      el("teamTitle").textContent = team[id].name;
+      el("teamRole").textContent = team[id].role;
+      el("teamDescription").textContent = team[id].description;
+      el(id + "Badge").setAttribute("aria-expanded", "true");
+      positionTeam();
+      if (!el("teamCard").hidden) el("teamClose").focus({ preventScroll: true });
+    }
+    function overlapsRect(box, other) {
+      return box.left < other.right && box.right > other.left && box.top < other.bottom && box.bottom > other.top;
+    }
+    function stageRect(item, padding = 5) {
+      if (!item || item.hidden) return null;
+      const rect = item.getBoundingClientRect(), stage = el("sceneStage").getBoundingClientRect();
+      if (!rect.width || !rect.height) return null;
+      return { left: rect.left - stage.left - padding, right: rect.right - stage.left + padding,
+        top: rect.top - stage.top - padding, bottom: rect.bottom - stage.top + padding };
+    }
+    function positionTeam() {
+      const card = el("teamCard");
+      teamRects = [];
+      if (!scene || sceneFailed || !signedIn || !sceneVisible || document.hidden) {
+        for (const id of Object.keys(team)) el(id + "Badge").hidden = true;
+        card.hidden = true;
+        return;
+      }
+      const stage = el("sceneStage"), width = stage.clientWidth, height = stage.clientHeight;
+      const clock = stageRect(el("localConditions"), 8);
+      const occupied = [johnRect, clock].filter(Boolean);
+      const positions = {};
+      const order = Object.keys(team).sort((left, right) => Number(right === teamOpen) - Number(left === teamOpen));
+      for (const id of order) {
+        const badge = el(id + "Badge");
+        let person;
+        try { person = scene.projectPerson?.(id); } catch {}
+        const visible = person?.visible && Number.isFinite(person.x) && Number.isFinite(person.y);
+        badge.hidden = !visible;
+        if (!visible) continue;
+        positions[id] = person;
+        const badgeWidth = badge.offsetWidth, half = badgeWidth / 2, badgeHeight = badge.offsetHeight;
+        let placement;
+        for (const [dx, dy] of [[0, 0], [0, -52], [0, 52], [-64, 0], [64, 0], [0, -104], [0, 104]]) {
+          const x = Math.max(half + 8, Math.min(width - half - 8, person.x + dx));
+          const y = Math.max(badgeHeight + 12, Math.min(height - 62, person.y + dy));
+          const box = { left: x - half - 5, right: x + half + 5, top: y - badgeHeight - 5, bottom: y + 5 };
+          if (occupied.some(other => overlapsRect(box, other))) continue;
+          placement = { x, y, box };
+          break;
+        }
+        if (!placement && width <= 650) {
+          // A narrow overview has little room near the characters. Keep their
+          // names discoverable in free space above the activity controls.
+          const columns = Math.min(80, Math.max(2, Math.ceil((width - badgeWidth - 16) / 8) + 1));
+          for (let row = 0; row < 12 && !placement; row++) {
+            const y = height - 66 - row * (badgeHeight + 10);
+            if (y < badgeHeight + 12) break;
+            for (let column = 0; column < columns; column++) {
+              const x = half + 8 + (width - badgeWidth - 16) * column / (columns - 1);
+              const box = { left: x - half - 5, right: x + half + 5, top: y - badgeHeight - 5, bottom: y + 5 };
+              if (occupied.some(other => overlapsRect(box, other))) continue;
+              placement = { x, y, box };
+              break;
+            }
+          }
+        }
+        badge.hidden = !placement;
+        if (placement) {
+          badge.style.left = placement.x + "px";
+          badge.style.top = placement.y + "px";
+          occupied.push(placement.box);
+          teamRects.push(placement.box);
+        }
+      }
+      const person = positions[teamOpen];
+      card.hidden = !person;
+      if (!person) return;
+      const cardWidth = card.offsetWidth, cardHeight = card.offsetHeight;
+      const ownBadge = stageRect(el(teamOpen + "Badge"));
+      const obstacles = occupied.filter(box => !ownBadge || !overlapsRect(box, ownBadge));
+      let placement;
+      const candidates = width <= 650 ? [[10, height - cardHeight - 62]] :
+        [[person.x + 20, person.y - cardHeight - 14], [person.x - cardWidth - 20, person.y - cardHeight - 14],
+          [person.x - cardWidth / 2, person.y + 14], [10, height - cardHeight - 62], [10, 12]];
+      for (const [rawLeft, rawTop] of candidates) {
+        const left = Math.max(10, Math.min(width - cardWidth - 10, rawLeft));
+        const top = Math.max(10, Math.min(height - cardHeight - 62, rawTop));
+        const box = { left: left - 5, right: left + cardWidth + 5, top: top - 5, bottom: top + cardHeight + 5 };
+        if (obstacles.some(other => overlapsRect(box, other))) continue;
+        placement = { left, top, box };
+        break;
+      }
+      if (!placement) {
+        // Keep the selected character readable on narrow screens, below the clock.
+        const left = 10;
+        const top = Math.max(10, Math.min(height - cardHeight - 62, clock ? clock.bottom + 10 : 12));
+        placement = { left, top, box: { left: left - 5, right: left + cardWidth + 5, top: top - 5, bottom: top + cardHeight + 5 } };
+      }
+      card.style.left = placement.left + "px";
+      card.style.top = placement.top + "px";
+      for (const id of Object.keys(team)) {
+        const badge = el(id + "Badge");
+        const bounds = stageRect(badge, 0);
+        if (id !== teamOpen && bounds && overlapsRect(placement.box, bounds)) badge.hidden = true;
+      }
+      teamRects.push(placement.box);
     }
     function cheerPop() {
       if (motion.matches || paused || document.hidden || !sceneVisible) return;
@@ -1321,14 +1473,16 @@ export const warehousePage = String.raw`<!doctype html>
     function positionPins() {
       if (!scene || sceneFailed || !signedIn || !sceneVisible || document.hidden) return;
       positionJohn();
+      positionTeam();
       let positions;
       try {
         positions = scene.projectPins();
       } catch {
         return;
       }
-      const occupied = johnRect ? [johnRect] : [];
       const width = el("pins").clientWidth, height = el("pins").clientHeight;
+      const clock = stageRect(el("localConditions"), 8);
+      const occupied = [johnRect, clock, ...teamRects].filter(Boolean);
       const ordered = [...(positions || [])].sort((left, right) => Number(right.id === selected) - Number(left.id === selected));
       for (const position of ordered) {
         const button = el("pins").querySelector('[data-zone="' + position.id + '"]');
@@ -1366,6 +1520,7 @@ export const warehousePage = String.raw`<!doctype html>
     }
     function pauseState() {
       scene?.setPaused(paused || motion.matches || document.hidden || !sceneVisible || sceneFailed);
+      if (!sceneVisible || document.hidden || sceneFailed) { closeTeam(); positionTeam(); positionJohn(); }
       if (paused || motion.matches || document.hidden || !sceneVisible || sceneFailed) clearCheerEffects();
       el("pause").disabled = sceneFailed || motion.matches;
       el("pause").textContent = motion.matches ? "Reduced motion" : paused ? "Resume activity" : "Pause activity";
@@ -1384,6 +1539,8 @@ export const warehousePage = String.raw`<!doctype html>
       el("pause").disabled = true;
       el("reset").disabled = true;
       el("pins").querySelectorAll("button").forEach((button) => button.hidden = true);
+      closeTeam();
+      positionTeam();
       positionJohn();
       renderPinMetrics();
       pauseState();
@@ -1397,7 +1554,7 @@ export const warehousePage = String.raw`<!doctype html>
       el("sceneMessageTitle").textContent = "Opening the roastery";
       el("sceneMessageBody").textContent = "Your dashboard figures will appear alongside the scene.";
       el("pause").disabled = el("reset").disabled = false;
-      const current = import("/warehouse-scene.js?v=john-game-1");
+      const current = import("/warehouse-scene.js?v=warehouse-team-1");
       scenePromise = current;
       try {
         const { createWarehouseScene } = await current;
@@ -1408,7 +1565,7 @@ export const warehousePage = String.raw`<!doctype html>
           onSelect: (id) => {
             if (signedIn) selectZone(id, { focus: true, moveCamera: false });
           },
-          onPersonSelect: openJohn,
+          onPersonSelect: openPerson,
           onReady: () => {
             if (signedIn && generation === sessionGeneration && !sceneFailed) {
               el("sceneMessage").hidden = true;
@@ -1458,6 +1615,8 @@ export const warehousePage = String.raw`<!doctype html>
       johnLastTap = 0;
       johnRenderedWeek = null;
       closeJohn();
+      closeTeam();
+      positionTeam();
       el("johnBadge").hidden = true;
       el("johnCheerAnnouncement").textContent = "";
       renderJohn();
@@ -1663,6 +1822,13 @@ export const warehousePage = String.raw`<!doctype html>
     el("johnClose").addEventListener("click", () => closeJohn(true));
     el("johnHighFive").addEventListener("click", highFiveJohn);
     el("johnCard").addEventListener("keydown", event => { if (event.key === "Escape") { event.preventDefault(); closeJohn(true); } });
+    for (const id of Object.keys(team)) el(id + "Badge").addEventListener("click", () => {
+      if (teamOpen === id) closeTeam(true); else openPerson(id);
+    });
+    el("teamClose").addEventListener("click", () => closeTeam(true));
+    el("teamLayer").addEventListener("keydown", event => {
+      if (event.key === "Escape" && teamOpen) { event.preventDefault(); closeTeam(true); }
+    });
     el("signInForm").addEventListener("submit", async (event) => {
       event.preventDefault();
       el("signIn").disabled = true;
@@ -1745,6 +1911,8 @@ export const warehousePage = String.raw`<!doctype html>
       clearTimeout(johnComboTimer);
       clearTimeout(johnAnnounceTimer);
       clearCheerEffects();
+      closeTeam();
+      for (const id of Object.keys(team)) el(id + "Badge").hidden = true;
       scene?.dispose();
       scene = null;
       if (pinsFrame !== null) cancelAnimationFrame(pinsFrame);

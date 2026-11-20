@@ -96,6 +96,7 @@ export function createWarehouseScene({ container, onSelect, onPersonSelect, onRe
     window: material(0xadc8c8, { metalness: .16, roughness: .3 }), glass: material(0x425c62, { metalness: .3, roughness: .22 }),
     tire: material(0x30352f), skin: material(0xc88f69), skinLight: material(0xe1b490), skinDark: material(0x986846),
     navy: material(0x354c5b), cream: material(0xd7cbb6), apron: material(0x496954), hair: material(0x3d332c),
+    teal: material(0x398f87), greyHair: material(0xc6cbc4), gold: material(0xc8a45a, { metalness: .5, roughness: .4 }),
     coffee: material(0x553829), light: material(0xffe7b4, { emissive: 0xffe7b4, emissiveIntensity: .3 }),
   };
   const boxGeometry = geometry(new THREE.BoxGeometry(1, 1, 1));
@@ -472,18 +473,21 @@ export function createWarehouseScene({ container, onSelect, onPersonSelect, onRe
 
   const headGeometry = sphereGeometry;
   const capGeometry = geometry(new THREE.SphereGeometry(1, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2));
-  function createWorker({ path, zone, person, shirt = palette.cream, skin = palette.skin, offset = 0, apron = true }) {
+  function createWorker({ path, zone, person, shirt = palette.cream, skin = palette.skin, offset = 0, apron = true,
+    hair = palette.hair, hat = true, scale = 1 }) {
     const root = group(scene);
     root.userData.zone = zone;
     if (person) root.userData.person = person;
+    root.scale.setScalar(scale);
     const body = group(root);
     const torsoGeometry = geometry(new THREE.CylinderGeometry(.22, .27, .59, 10));
     mesh(torsoGeometry, shirt, body, [0, 1.03, 0]);
     cylinder(body, skin, .09, .12, [0, 1.39, 0]);
-    mesh(headGeometry, skin, body, [0, 1.62, .01], [.22, .245, .22]);
-    mesh(capGeometry, palette.hair, body, [0, 1.67, 0], [.23, .21, .23]);
-    box(body, person === 'john' || zone === 'dispatch' ? palette.red : palette.green, [.28, .045, .23], [0, 1.82, .15]);
-    for (const x of [-.073, .073]) sphere(body, palette.ink, .019, [x, 1.65, .215]);
+    const head = group(body, [0, 1.62, .01]);
+    mesh(headGeometry, skin, head, [0, 0, 0], [.22, .245, .22]);
+    mesh(capGeometry, hair, head, [0, .05, -.01], [.23, .21, .23]);
+    if (hat) box(head, person === 'john' || zone === 'dispatch' ? palette.red : palette.green, [.28, .045, .23], [0, .2, .14]);
+    for (const x of [-.073, .073]) sphere(head, palette.ink, .019, [x, .03, .205]);
     if (apron) {
       box(body, palette.apron, [.38, .48, .035], [0, .98, .235]);
       box(body, palette.woodLight, [.2, .15, .045], [0, .97, .26]);
@@ -503,17 +507,20 @@ export function createWarehouseScene({ container, onSelect, onPersonSelect, onRe
       arms.push(arm);
     }
     const curve = new THREE.CatmullRomCurve3(path.map(([x, z]) => new THREE.Vector3(x, 0, z)), true, 'centripetal');
-    const worker = { root, body, legs, arms, curve, zone, person, progress: offset, length: curve.getLength(), phase: offset * Math.PI * 10 };
+    const worker = { root, body, head, legs, arms, curve, zone, person, progress: offset, length: curve.getLength(), phase: offset * Math.PI * 10,
+      point: new THREE.Vector3(), direction: new THREE.Vector3() };
     workers.push(worker);
     moveWorker(worker, 0);
     return worker;
   }
   function moveWorker(worker, delta) {
-    const intensity = activities[worker.zone] || 0;
+    // These three personalities are illustrative, not measurements of staff work.
+    const personality = worker.person === 'emily' || worker.person === 'angus' || worker.person === 'milk';
+    const intensity = personality ? { emily: .72, angus: 1.75, milk: .4 }[worker.person] : activities[worker.zone] || 0;
     const cheering = worker.person === 'john' && cheerRemaining > 0;
     worker.progress = (worker.progress + (cheering ? 0 : delta) * intensity * 1.15 / worker.length) % 1;
-    const point = worker.curve.getPointAt(worker.progress);
-    const direction = worker.curve.getTangentAt(worker.progress);
+    const point = worker.curve.getPointAt(worker.progress, worker.point);
+    const direction = worker.curve.getTangentAt(worker.progress, worker.direction);
     worker.root.position.copy(point);
     worker.root.rotation.y = Math.atan2(direction.x, direction.z);
     const stride = cheering ? 0 : Math.sin(elapsed * 6 * intensity + worker.phase) * Math.min(1, intensity * 2);
@@ -525,6 +532,29 @@ export function createWarehouseScene({ container, onSelect, onPersonSelect, onRe
     worker.arms[1].rotation.z = .12;
     worker.body.rotation.z = 0;
     worker.body.position.y = Math.abs(stride) * .035;
+    if (worker.person === 'emily') {
+      worker.arms[0].rotation.x = worker.arms[1].rotation.x = -1.35;
+      worker.arms[0].rotation.z = -.16;
+      worker.arms[1].rotation.z = .16;
+      worker.body.rotation.x = -.045;
+      worker.head.rotation.y = Math.sin(elapsed * .8 + worker.phase) * .26;
+      // Wheel rotation is tied to actual path travel, including pause and still mode.
+      for (const wheel of worker.trolleyWheels || []) wheel.rotation.x += delta * intensity * 1.15 / .16;
+    } else if (worker.person === 'angus') {
+      worker.body.rotation.x = .14;
+      worker.body.rotation.z = Math.sin(elapsed * 10 + worker.phase) * .09;
+      worker.body.position.y = Math.abs(stride) * .1;
+      worker.head.rotation.y = Math.sin(elapsed * 3.5 + worker.phase) * .42;
+      worker.arms[0].rotation.x = -.85 - stride * .7;
+      worker.arms[1].rotation.x = -.85 + stride * .7;
+      worker.arms[0].rotation.z = -.65 - Math.abs(stride) * .25;
+      worker.arms[1].rotation.z = .65 + Math.abs(stride) * .25;
+    } else if (worker.person === 'milk') {
+      worker.body.rotation.z = Math.sin(elapsed * 2 + worker.phase) * .065;
+      worker.head.rotation.z = -.08;
+      worker.arms[1].rotation.x = -2.15;
+      worker.arms[1].rotation.z = .45 + Math.sin(elapsed * 2 + worker.phase) * .06;
+    }
   }
   const john = createWorker({ zone: 'roasting', person: 'john', offset: .18, shirt: palette.cream,
     path: [[2.8, 2.5], [3.8, .8], [3.3, -2.5], [2.3, -4.7], [3.2, -1.3]] });
@@ -538,6 +568,61 @@ export function createWarehouseScene({ container, onSelect, onPersonSelect, onRe
     path: [[-11.5, 7.1], [-9.3, 7.3], [-7.6, 6.6], [-9.5, 6.5]] });
   createWorker({ zone: 'dispatch', offset: .47, shirt: palette.navy, skin: palette.skinLight,
     path: [[9.6, 7], [12.5, 7], [13, 9.5], [11.8, 11.5], [10.7, 9.8]] });
+
+  const emily = createWorker({ zone: 'packing', person: 'emily', shirt: palette.teal, skin: palette.skinLight,
+    offset: .08, apron: false, hat: false, scale: 1.12,
+    path: [[-3.3, 4.9], [1, 5], [4.5, 5.8], [4.3, 8.3], [.2, 8.6], [-3.6, 7.5]] });
+  // Ponytail and a wheeled platform trolley give Emily a clear overview silhouette.
+  sphere(emily.head, palette.hair, .14, [0, .03, -.24], [1, 1.2, 1.2]);
+  sphere(emily.head, palette.hair, .12, [0, -.15, -.27], [.9, 1.5, .9]);
+  torus(emily.head, palette.gold, .075, [0, .02, -.29]);
+  box(emily.body, palette.white, [.15, .08, .025], [.1, 1.12, .235], false);
+  const emilyTrolley = group(emily.root);
+  box(emilyTrolley, palette.teal, [1.12, .13, 1.42], [0, .35, 1.4]);
+  for (const x of [-.44, .44]) pipe(emilyTrolley, palette.silver, [x, .36, .74], [x, 1.2, .5], .045);
+  pipe(emilyTrolley, palette.ink, [-.44, 1.2, .5], [.44, 1.2, .5], .055);
+  emily.trolleyWheels = [];
+  for (const x of [-.46, .46]) for (const z of [.88, 1.91]) {
+    const wheel = group(emilyTrolley, [x, .16, z]);
+    cylinder(wheel, palette.tire, .16, .11, [0, 0, 0]).rotation.z = Math.PI / 2;
+    cylinder(wheel, palette.silver, .07, .13, [0, 0, 0]).rotation.z = Math.PI / 2;
+    emily.trolleyWheels.push(wheel);
+  }
+  carton(emilyTrolley, [0, .42, 1.48], [.76, .57, .78]);
+  carton(emilyTrolley, [.08, .99, 1.52], [.57, .4, .55]);
+
+  const angus = createWorker({ zone: 'roasting', person: 'angus', shirt: palette.navy, skin: palette.skinLight,
+    offset: .46, apron: false, hat: false, scale: 1.13,
+    path: [[3.7, -5.3], [4.25, -3.2], [3.85, -.5], [4.5, 2.6], [2.9, 4], [3.2, 1.1], [3.4, -2.5]] });
+  // A bright tie, worried brows and raised elbows make the flustered boss readable.
+  box(angus.body, palette.cream, [.11, .45, .025], [0, 1.04, .247], false);
+  box(angus.body, palette.red, [.055, .31, .035], [0, 1.13, .27], false).rotation.z = -.1;
+  for (const side of [-1, 1]) {
+    const brow = box(angus.head, palette.hair, [.105, .025, .025], [side * .085, .105, .205], false);
+    brow.rotation.z = side * -.36;
+  }
+  torus(angus.head, palette.ink, .035, [0, -.1, .223], [0, 0, 0]);
+
+  const milk = createWorker({ zone: 'lab', person: 'milk', shirt: palette.ink, skin: palette.skin,
+    hair: palette.greyHair, offset: .22, apron: false, hat: false, scale: 1.12,
+    path: [[-5, 2.6], [-4.7, 4.2], [-2.9, 5.8], [-.7, 5.6], [-2.1, 4.1], [-4.2, 3.2]] });
+  // Silver swept-back hair, sunglasses and a raised rock salute for Milk.
+  sphere(milk.head, palette.greyHair, .13, [0, .16, -.14], [1.6, .8, 1.15]);
+  for (const side of [-1, 1]) {
+    box(milk.head, palette.glass, [.14, .09, .05], [side * .087, .03, .22]);
+    box(milk.head, palette.greyHair, [.055, .14, .06], [side * .19, -.035, .065]);
+  }
+  pipe(milk.head, palette.ink, [-.18, .045, .25], [.18, .045, .25], .017);
+  box(milk.body, palette.cream, [.15, .34, .035], [0, 1.08, .25], false);
+  for (const side of [-1, 1]) {
+    const lapel = box(milk.body, palette.silver, [.07, .22, .025], [side * .115, 1.2, .25], false);
+    lapel.rotation.z = side * -.32;
+  }
+  torus(milk.body, palette.gold, .075, [0, 1.16, .285], [0, 0, 0]);
+  // Two extended fingers complete the rock salute without extra moving parts.
+  for (const x of [-.045, .045]) cylinder(milk.arms[1], palette.skin, .018, .12, [x, -.65, .025]);
+
+  const people = new Map([john, emily, angus, milk].map(person => [person.person, person]));
 
   // The coin pool is a local game effect. Three instanced draw calls render
   // its edge and two faces, regardless of the number of rapid cheers.
@@ -821,10 +906,11 @@ export function createWarehouseScene({ container, onSelect, onPersonSelect, onRe
     });
   }
   function projectPerson(id) {
-    if (id !== 'john' || disposed || contextLost) return { visible: false };
+    const person = people.get(id);
+    if (!person || disposed || contextLost) return { visible: false };
     camera.updateMatrixWorld();
-    john.root.updateWorldMatrix(true, false);
-    projected.set(0, 2.05 + john.body.position.y, 0).applyMatrix4(john.root.matrixWorld).project(camera);
+    person.root.updateWorldMatrix(true, false);
+    projected.set(0, 2.05 + person.body.position.y, 0).applyMatrix4(person.root.matrixWorld).project(camera);
     const x = (projected.x + 1) / 2 * width;
     const y = (1 - projected.y) / 2 * height;
     return { id, x, y, visible: projected.z > -1 && projected.z < 1 && x >= 0 && x <= width && y >= 0 && y <= height };
@@ -935,7 +1021,7 @@ export function createWarehouseScene({ container, onSelect, onPersonSelect, onRe
     }
     if (!ready) { ready = true; queueMicrotask(() => { if (!disposed) onReady?.(); }); }
     const effectActive = !paused && (cheerRemaining > 0 || coinPool.some(coin => coin.active));
-    if (cameraTween || effectActive || animate && (!dataReceived || Object.values(activities).some(value => value > 0))) requestFrame();
+    if (cameraTween || effectActive || animate && (people.size > 1 || !dataReceived || Object.values(activities).some(value => value > 0))) requestFrame();
   }
   function onVisibilityChange() { if (isVisible()) requestFrame(); else stopFrame(); }
   function onContextLost(event) {
