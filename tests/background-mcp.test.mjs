@@ -81,3 +81,14 @@ test('a valid check of a failed job returns its status and cooldown as ordinary 
   assert.equal(result.structuredContent.safeCode,'READER_HTTP_429');
   assert.equal(result.structuredContent.retryAfterMs,600000);assert.notEqual(result.isError,true);
 });
+
+test('a completed reader reports independent source gaps without exposing values, notes or unknown input', async()=>{
+  const coordinate=async()=>({status:'complete',phase:'complete',jobId,weekStart:'2026-11-23',sourceSync:{sources:[
+    {id:'production',status:'updated',note:'PRIVATE_FINANCIAL_DETAIL'},{id:'expenses',status:'awaiting-data'},
+    {id:'dispatch',status:'partial'},{id:'private_label',status:'updated'},{id:'green',status:'PRIVATE_STATUS'},
+  ]}});
+  const reply=await handleDashboardMcp(make('tools/call',{name:'check_dashboard_sync',arguments:{jobId}},'2johnou@gmail.com'),{},{coordinate,now});
+  const result=(await reply.json()).result;
+  assert.deepEqual(result.structuredContent.sourceStates,{production:'updated',expenses:'awaiting-data',dispatch:'partial'});
+  assert.doesNotMatch(JSON.stringify(result),/PRIVATE_|private_label/);
+});
