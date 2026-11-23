@@ -13,7 +13,7 @@ function freshnessHelpers(page, followingFunction, formatter) {
   const start = source.indexOf("    function cropsterRefreshText(report) {");
   const end = source.indexOf("    function " + followingFunction, start);
   assert.ok(start >= 0 && end > start);
-  return new Function(formatter, source.slice(start, end) + "; return { notice: cropsterRefreshText, result: cropsterRefreshResultText, loading: cropsterRefreshLoadingText };")(formatTimestamp);
+  return new Function(formatter, source.slice(start, end) + "; return { notice: cropsterRefreshText, result: cropsterRefreshResultText, loading: cropsterRefreshLoadingText, poll: scheduleSourceSyncPoll };")(formatTimestamp);
 }
 
 const views = [
@@ -110,6 +110,7 @@ function runtime(page, kind, fetcher, timers, el) {
     const cropsterRefreshLoadingText = helpers.loading, cropsterRefreshResultText = helpers.result;
     const coordinateSourceSync = async () => ({status: 'not-connected', weekStart: '2026-11-16'});
     const pendingSourceSyncForWeek = () => null;
+    const scheduleSourceSyncPoll = helpers.poll;
     const sourceSyncResultText = (report, cropsterReport) => helpers.result(cropsterReport);
     const set = (id, value) => { el(id).textContent = value; };
     const setMessage = set, showText = set;
@@ -171,8 +172,9 @@ function productionCapture(production, week, report, sync) {
   const source = script(weeklyPage);
   const start = source.indexOf('    function renderProductionCapture(');
   const end = source.indexOf('    function renderGreen(', start);
+  const progress = source.slice(source.indexOf('    function sourceSyncProgressText('), source.indexOf('    function scheduleSourceSyncPoll('));
   const node = {textContent: '', dataset: {}};
-  const render = new Function('el', 'showText', 'formatTimestamp', source.slice(start, end) + '; return renderProductionCapture;')(
+  const render = new Function('el', 'showText', 'formatTimestamp', 'const latestSourceSyncPhase = null;\n' + progress + source.slice(start, end) + '; return renderProductionCapture;')(
     () => node, (_id, text) => {node.textContent = text;}, value => typeof value === 'string' ? value : '');
   render(production, week, report, sync);
   return node;
@@ -189,6 +191,10 @@ test('the production card shows its original capture and distinguishes failed, p
   const pending = productionCapture(production, week, {}, {status: 'running'});
   assert.equal(pending.dataset.state, 'pending');
   assert.match(pending.textContent, /updating in background/);
+  const warming = productionCapture(production, week, {}, {status: 'running', phase: 'warming'});
+  assert.equal(warming.dataset.state, 'pending');
+  assert.match(warming.textContent, /Waking Cropster connection/);
+  assert.ok(warming.textContent.includes(captured));
   const unknown = productionCapture(production, week, {cropsterRefresh: {status: 'failed'}}, {status: 'running', checkUnavailable: true});
   assert.equal(unknown.dataset.state, 'unknown');
   assert.match(unknown.textContent, /could not be checked/);

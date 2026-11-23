@@ -56,6 +56,21 @@ test("signature prices use raw scheduled-lot prices and recipe shares without in
   assert.deepEqual(blend.components.map(row => row.pricePerKg), [9.25, 20]);
 });
 
+test("a Monday rollover preserves the verified price but labels it as a saved previous-week schedule", async () => {
+  const db = localDatabase(":memory:");
+  try {
+    await saveLabCropster(db, {inventory, recipes: recipe(provenance)}, now);
+    const saved = await readRoasteryLab(db, new Date("2026-11-22T22:00:00Z"));
+    const blend = saved.prices.highlights[0];
+    assert.equal(blend.pricePerKg, 9.25, "Do not replace a valid saved price with guessed inventory pricing");
+    assert.equal(blend.pricingNote, "Saved previous-week schedule price");
+    assert.equal(blend.components[0].pricingStatus, "previous-week");
+    assert.equal(saved.source.status, "stale");
+    assert.equal(saved.source.partAsOf.recipes, now.toISOString(), "Rendering Monday must not freshen Friday's capture");
+    assert.equal(saved.source.partFreshness.recipes.previousWeek, true);
+  } finally {db.close();}
+});
+
 test("an explicit unknown or unverified current price stays unknown despite known same-name inventory prices", async () => {
   const db = localDatabase(":memory:");
   try {
@@ -159,16 +174,17 @@ test("the Lab renders fallback pricing on its headline and the exact lot/date be
   const start = script.indexOf("    function makeTableRow(");
   const end = script.indexOf("    function forecastName(", start);
   const render = new Function("deps", `
-    const {node, el} = deps, blendNames = ['Liberty', 'Rhythm', 'OH'], currency = {}, missing = '—';
+    const {node, el} = deps, blendNames = ['Liberty', 'Rhythm', 'OH'], currency = {}, timeFormat = {}, missing = '—';
     const format = value => Number.isFinite(value) ? String(value) : missing;
     const percent = value => Number.isFinite(value) ? value + '%' : missing;
     const dateText = value => value || '';
     ${script.slice(start, end)}
     return renderPrices;
   `)({node, el});
-  const prices = labReport({inventory, recipes: recipe({...provenance, pricingBasis: "default-profile", pricingDate: asOf})}, asOf).prices;
+  const prices = {...labReport({inventory, recipes: recipe({...provenance, pricingBasis: "default-profile", pricingDate: asOf})}, asOf).prices, recipeCapturedAt: "2026-11-19T02:05:00Z"};
   render(prices);
   assert.match(el("blendHighlights").textContent, /Default profile fallback/);
   assert.match(el("blendDetails").textContent, /Default profile fallback price.*2026-11-19.*PG-0001/);
   assert.match(el("priceDates").textContent, /Inventory prices as of 2026-11-19/);
+  assert.match(el("priceDates").textContent, /Prices captured 2026-11-19T02:05:00Z/);
 });

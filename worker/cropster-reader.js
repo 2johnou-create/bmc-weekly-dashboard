@@ -3,6 +3,7 @@ import { readCropsterReadings, saveCropsterGreenStock } from "./cropster.js";
 import { saveCropsterMonday } from "./cropster-monday.js";
 import { saveLabCropster } from "./roastery-lab.js";
 import { readCropsterScheduledBatches, saveCropsterScheduledBatches, validateCropsterScheduledBatches } from "./cropster-scheduled-batches.js";
+import { readSourceSyncLog } from "./source-sync.js";
 
 const DEADLINE_MS = 12_000;
 const MAX_BODY = 350_000;
@@ -12,7 +13,7 @@ const isObject = value => value !== null && typeof value === "object" && !Array.
 const boundedAmount = (value, limit, nullable = false) => nullable && value === null ||
   Number.isFinite(value) && value >= 0 && value <= limit;
 
-function connection(env) {
+export function cropsterReaderConnection(env) {
   const configured = Boolean(env.CROPSTER_READER_URL || env.CROPSTER_READER_TOKEN);
   if (!configured) return { configured: false, valid: false };
   try {
@@ -73,7 +74,7 @@ export function validateCropsterObservation(input, weekStart, now = new Date(), 
 
 export const validSyncJobId = value => typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
 
-async function websiteJob(config, env, weekStart, jobId, fetcher) {
+async function websiteJob(config, env, weekStart, jobId, fetcher, requestId = null) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), DEADLINE_MS);
   try {
@@ -81,7 +82,7 @@ async function websiteJob(config, env, weekStart, jobId, fetcher) {
     const response = await fetcher(config.url + (jobId ? "/" + jobId : ""), {
       method: jobId ? "GET" : "POST", redirect: "manual", cache: "no-store", signal: controller.signal,
       headers: { Authorization: `Bearer ${env.CROPSTER_READER_TOKEN}`, "Content-Type": "application/json", Accept: "application/json" },
-      ...(jobId ? {} : { body: JSON.stringify({ weekStart }) }),
+      ...(jobId ? {} : { body: JSON.stringify({ weekStart, ...(requestId ? { requestId } : {}) }) }),
     });
     if (jobId && response.status === 404) { const expired = new Error("The background job has expired."); expired.jobExpired = true; throw expired; }
     if (!response.ok) { const unavailable = new Error("Reader returned an unsuccessful response."); unavailable.safeCode = "READER_HTTP_" + response.status; throw unavailable; }
@@ -108,6 +109,48 @@ async function websiteJob(config, env, weekStart, jobId, fetcher) {
       !["running", "complete", "failed"].includes(state.status)) throw new Error();
     return state;
   } finally { clearTimeout(timer); }
+}
+
+export function safeReaderCode(error) {
+  if (/^(?:READER|CROPSTER)_[A-Z0-9_]{1,60}$/.test(error?.safeCode || "")) return error.safeCode;
+  if (error?.jobExpired) return "READER_JOB_EXPIRED";
+  if (error?.name === "AbortError" || error?.name === "TimeoutError") return "READER_TIMEOUT";
+  if (/cache.*(?:unsupported|not supported)|unsupported.*cache/i.test(error?.message || "")) return "READER_CACHE_MODE";
+  if (/redirect.*(?:unsupported|not supported)|unsupported.*redirect/i.test(error?.message || "")) return "READER_REDIRECT_MODE";
+  return "READER_FETCH_OR_PROTOCOL";
+}
+
+export async function requestCropsterWebsiteJob({ env, weekStart, jobId = null, requestId = null, fetcher = fetch }) {
+  const config = cropsterReaderConnection(env);
+  if (!config.valid || requestId !== null && !validSyncJobId(requestId)) {
+    const error = new Error("Reader configuration is unavailable."); error.safeCode = "READER_CONFIGURATION"; throw error;
+  }
+  try { return await websiteJob(config, env, weekStart, jobId, fetcher, requestId); }
+  catch (error) { error.safeCode = safeReaderCode(error); throw error; }
+}
+
+// A timed-out health GET still wakes Render. A later coordinator poll continues
+// readiness instead of treating a sleeping Free instance as a failed roast read.
+export async function probeCropsterReader({ env, fetcher = fetch }) {
+  const config = cropsterReaderConnection(env);
+  if (!config.valid) { const error = new Error("Reader configuration is unavailable."); error.safeCode = "READER_CONFIGURATION"; throw error; }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DEADLINE_MS);
+  try {
+    const response = await fetcher(new URL("/health", config.url).href, {
+      method: "GET", redirect: "manual", cache: "no-store", signal: controller.signal,
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) { const error = new Error("Reader readiness is unavailable."); error.safeCode = "READER_HTTP_" + response.status; throw error; }
+    const length = Number(response.headers.get("content-length"));
+    if (length > 1024 || !response.headers.get("content-type")?.includes("application/json")) throw new Error("Invalid readiness reply.");
+    const text = await response.text();
+    if (text.length > 1024) throw new Error("Invalid readiness reply.");
+    const state = JSON.parse(text);
+    if (state?.status !== "ok" || state?.service !== "cropster-website-reader") throw new Error("Invalid readiness reply.");
+    return true;
+  } catch (error) { error.safeCode = safeReaderCode(error); throw error; }
+  finally { clearTimeout(timer); }
 }
 
 async function mergeRecipeAssignments(db, fresh, env) {
@@ -160,7 +203,7 @@ async function captureAndSave({ config, env, weekStart, now, fetcher, jobId, sup
   catch (error) {
     if (state?.status === "running") return { status: "pending", readerStatus: "running", jobId: state.jobId, weekStart,
       fetched: false, greenFetched: false, note: "Cropster is still updating. The latest verified readings retain their capture times." };
-    return { status: "failed", ...(state?.status ? { readerStatus: state.status } : error.jobExpired ? { readerStatus: "expired" } : {}),
+    return { status: "failed", safeCode: safeReaderCode(error), ...(state?.status ? { readerStatus: state.status } : error.jobExpired ? { readerStatus: "expired" } : {}),
       fetched: false, greenFetched: false, note: "Cropster could not be read. Previous readings and their original capture times are shown. Try Refresh again." };
   }
   let productionFetched = false, productionAccepted = false;
@@ -233,7 +276,7 @@ async function captureAndSave({ config, env, weekStart, now, fetcher, jobId, sup
 }
 
 export async function readCurrentCropster({ env, weekStart, followingWeekStart, now = new Date(), fetcher = fetch, fresh = false, jobId = null }) {
-  const config = connection(env);
+  const config = cropsterReaderConnection(env);
   let refresh = {
     mode: config.configured ? "website-reader" : "saved-readings",
     status: config.valid ? "saved" : config.configured ? "failed" : "not-connected",
@@ -242,6 +285,10 @@ export async function readCurrentCropster({ env, weekStart, followingWeekStart, 
       : config.configured ? "The Cropster website reader needs configuration. Previous readings are shown."
       : "Cropster was not fetched again. Roasted, scheduled and green stock figures use saved readings.",
   };
+  const completed = jobId ? await readSourceSyncLog(env.DB, jobId, weekStart) : null;
+  if (fresh && ["complete", "failed"].includes(completed?.jobStatus)) {
+    return readSavedCropsterJob({env, weekStart, followingWeekStart, now, jobId, summary: completed});
+  }
   if (fresh && config.valid && env.DB?.prepare) {
     let jobs = activeReads.get(env.DB);
     if (!jobs) { jobs = new Map(); activeReads.set(env.DB, jobs); }
@@ -258,7 +305,7 @@ export async function readCurrentCropster({ env, weekStart, followingWeekStart, 
 }
 
 export async function verifyCropsterJob({ env, weekStart, jobId, fetcher = fetch }) {
-  const config = connection(env);
+  const config = cropsterReaderConnection(env);
   if (!config.valid || !validSyncJobId(jobId)) { const invalid = new Error("The source job cannot be verified."); invalid.safeCode = "READER_CONFIGURATION"; throw invalid; }
   try { return await websiteJob(config, env, weekStart, jobId, fetcher); }
   catch (error) {
@@ -266,6 +313,26 @@ export async function verifyCropsterJob({ env, weekStart, jobId, fetcher = fetch
       /redirect.*(?:unsupported|not supported)|unsupported.*redirect/i.test(error.message || "") ? "READER_REDIRECT_MODE" : "READER_FETCH_OR_PROTOCOL";
     throw error;
   }
+}
+
+export async function readSavedCropsterJob({env, weekStart, followingWeekStart = addDays(weekStart, 7), now = new Date(), jobId, summary, pending = false, phase = null, safeCode = null}) {
+  const sources = new Map((summary?.sources || []).map(source => [source.id, source]));
+  const updated = id => sources.get(id)?.status === "updated" || sources.get(id)?.status === "partial";
+  const refresh = {
+    mode: "website-reader", status: pending ? "pending" : summary?.jobStatus === "complete" ? "refreshed" : summary?.jobStatus === "failed" ? "failed" : "saved",
+    readerStatus: pending ? "running" : summary?.jobStatus || undefined,
+    fetched: updated("production"), greenFetched: updated("green"), mondayFetched: updated("monday"),
+    previousFetched: updated("previous-production"), previousAsOf: sources.get("previous-production")?.asOf || null,
+    labParts: Object.fromEntries(["inventory", "recipes", "use", "loss"].map(part => [part, {
+      status: sources.get("lab-" + part)?.status || (pending ? "pending" : "saved"), asOf: sources.get("lab-" + part)?.asOf || null,
+    }])),
+    ...(jobId ? {jobId} : {}), weekStart, ...(phase ? {phase} : {}), ...(safeCode ? {safeCode} : {}),
+    note: pending ? phase === "warming" ? "Waking the Cropster reader. Saved readings retain their capture times." : "Cropster is updating in the background. Saved readings retain their capture times."
+      : summary?.jobStatus === "complete" ? "The verified Cropster update finished and remains saved with its actual capture times."
+      : summary?.jobStatus === "failed" ? "The Cropster update stopped. Verified saved readings retain their actual capture times."
+      : "Saved Cropster readings retain their actual capture times.",
+  };
+  return readBackCropster({env, weekStart, followingWeekStart, now, refresh, configured: cropsterReaderConnection(env).configured});
 }
 
 export async function ingestCropsterSync({ env, weekStart, jobId, input, status = "complete", now = new Date() }) {

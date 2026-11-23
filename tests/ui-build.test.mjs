@@ -3,6 +3,8 @@ import test from 'node:test';
 import worker from '../worker/index.js';
 import {buildUiDocument} from '../worker/ui-build.js';
 import {weeklyPage} from '../worker/weekly-ui.js';
+import {roasteryLabPage} from '../worker/roastery-lab-ui.js';
+import {warehousePage} from '../worker/warehouse-ui.js';
 
 const origin = 'https://dashboard.test';
 test('UI fingerprints match the served script and its CSP, without exposing business data', async () => {
@@ -119,5 +121,70 @@ test('a reload refresh intent is consumed once and rejects malformed, expired, o
     app.storage.set(key, value);
     assert.equal(app.consumeUiRefreshIntent(), false);
     assert.equal(app.storage.size, 0);
+  }
+});
+
+function additionalViewRuntime(page, {draft = false, reading = '', match = false, fail = false} = {}) {
+  const source = page.match(/<script>([\s\S]*?)<\/script>/)[1];
+  const block = source.slice(source.indexOf('    const uiResumeKey'), source.indexOf('    async function load('));
+  const storage = new Map(), elements = new Map();
+  const state = {loads: [], reloads: 0, fetches: []};
+  const deps = {state, storage, draft, el: id => {
+    if (!elements.has(id)) elements.set(id, {value: id === 'cropsterInput' ? reading : '', disabled: false, textContent: ''});
+    return elements.get(id);
+  }, fetch: async (address, options) => {
+    state.fetches.push({address, options});
+    if (fail) throw Error('Connection unavailable');
+    return Response.json({buildId: (match ? 'a' : 'b').repeat(64)});
+  }};
+  const app = new Function('deps', `
+    const {el, state, storage, fetch} = deps;
+    const uiBuildId = 'a'.repeat(64), dirty = new Set(deps.draft ? ['qa'] : []);
+    let signedIn = true, busy = false, activeRequest = null;
+    const location = {reload: () => state.reloads++};
+    const sessionStorage = {getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key)};
+    const readJson = response => response.json();
+    const message = (id, text) => el(id).textContent = text, setMessage = message;
+    const load = async (...args) => {state.loads.push(args);};
+    ${block}
+    return {manualRefresh, consumeUiRefreshIntent};
+  `)(deps);
+  return {...app, ...deps};
+}
+
+for (const [name, page, view, path] of [['Lab', roasteryLabPage, 'roastery-lab', '/roastery-lab'], ['Warehouse', warehousePage, 'warehouse', '/warehouse']]) {
+  test(name + ' embeds its own build and reloads a changed clean view before a one-time fresh read', async () => {
+    const app = additionalViewRuntime(page);
+    await app.manualRefresh();
+    assert.equal(app.state.fetches[0].address, '/api/ui-build?view=' + view);
+    assert.equal(app.state.reloads, 1);
+    assert.equal(app.state.loads.length, 0);
+    assert.equal(JSON.parse([...app.storage.values()][0]).buildId, 'b'.repeat(64));
+    const meta = await worker.fetch(new Request(origin + '/api/ui-build?view=' + view), {});
+    const id = (await meta.json()).buildId;
+    const response = await worker.fetch(new Request(origin + path), {});
+    const document = await response.text();
+    assert.ok(document.includes("const uiBuildId = '" + id + "'"));
+    assert.doesNotMatch(document, /__BMC_UI_BUILD_ID__/);
+  });
+
+  test(name + ' keeps data refresh available when the build is unchanged or the version endpoint is unreachable', async () => {
+    for (const option of [{match: true}, {fail: true}]) {
+      const app = additionalViewRuntime(page, option);
+      await app.manualRefresh();
+      assert.equal(app.state.reloads, 0);
+      assert.deepEqual(app.state.loads, [[true, {fresh: true}]]);
+    }
+  });
+}
+
+test('Lab build updates preserve both settings drafts and entered Cropster readings', async () => {
+  for (const options of [{draft: true}, {reading: '{"inventory":'}]) {
+    const app = additionalViewRuntime(roasteryLabPage, options);
+    await app.manualRefresh();
+    assert.equal(app.state.reloads, 0);
+    assert.deepEqual(app.state.loads, [[true, {fresh: true}]]);
+    assert.match(app.el('status').textContent, /Your draft is still here/);
+    assert.equal(app.el('cropsterInput').value, options.reading || '');
   }
 });

@@ -1,12 +1,14 @@
 import { page } from "./ui.js";
 import { buildUiDocument } from "./ui-build.js";
+import { handleDashboardMcp } from "./background-mcp.js";
 import { weeklyPage } from "./weekly-ui.js";
 import { roasteryLabPage } from "./roastery-lab-ui.js";
 import { warehousePage } from "./warehouse-ui.js";
 import { collectWarehouse } from "./warehouse-report.js";
-import { collectWeeklyReport, readDispatchStatus } from "./weekly-report.js";
+import { collectWeeklyReport, readDispatchStatus, weeklyDemandComparison } from "./weekly-report.js";
 import { addDays, collectDashboard, dashboardWeek, fetchSourceJson, SOURCE_ORIGINS, sydneyDate } from "./metrics.js";
 import { readCurrentCropster, validSyncJobId, ingestCropsterSync, verifyCropsterJob } from "./cropster-reader.js";
+import { coordinateDashboardSync, findDashboardSyncJob, readCoordinatedCropster, acknowledgeDashboardSync } from "./source-coordinator.js";
 import { sourceSyncSummary, saveSourceSyncLog, readSourceSyncLog, mergeSourceSyncSummary } from "./source-sync.js";
 import { saveCropsterGreenStock, saveCropsterReading } from "./cropster.js";
 import { saveCropsterFriday } from "./cropster-friday.js";
@@ -86,6 +88,13 @@ function requestedSyncJob(url, weekStart) {
   return jobId;
 }
 
+async function coordinatedReportOptions(env, jobId, weekStart, syncWebsite = true, now = new Date()) {
+  const row=jobId ? await findDashboardSyncJob(env,jobId,weekStart) : null;
+  if (!row) return {sourceSyncJob:jobId,syncWebsite};
+  return {sourceSyncJob:row.reader_job_id || row.public_id || row.id,syncWebsite:false,
+    cropsterResult:() => readCoordinatedCropster({env,row,jobId,now})};
+}
+
 async function finishSourceSync(env, session, cropsterResult, week, jobId, now) {
   // A finished browser job also forces every sheet/feed used by the three dashboards.
   // This is shared by simultaneous staff refreshes; it never returns business values.
@@ -104,10 +113,11 @@ async function finishSourceSync(env, session, cropsterResult, week, jobId, now) 
   return task;
 }
 
-async function roasteryReport(env, { fresh = false, jobId = null, syncWebsite = fresh || Boolean(jobId) } = {}) {
+async function roasteryReport(env, { fresh = false, jobId = null, syncWebsite = fresh || Boolean(jobId), cropsterResult = null } = {}) {
   const now = new Date();
   const week = dashboardWeek(undefined, now);
-  const cropster = await readCurrentCropster({ env, weekStart: week.start, followingWeekStart: addDays(week.start, 7), now, fresh: syncWebsite, jobId });
+  const cropster = cropsterResult ? typeof cropsterResult === 'function' ? await cropsterResult() : cropsterResult :
+    await readCurrentCropster({ env, weekStart: week.start, followingWeekStart: addDays(week.start, 7), now, fresh: syncWebsite, jobId });
   const [data, coffeeC, purchases] = await Promise.all([
     readRoasteryLab(env.DB, now), readCoffeeC({ now, fresh }), readPurchases({ now, fresh }),
   ]);
@@ -139,6 +149,7 @@ async function htmlHeaders(document, allowModules = false) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+      if (url.pathname === "/mcp") return handleDashboardMcp(request, env);
     const fresh = url.searchParams.get("refresh") === "1";
     const skipWebsiteSync = url.searchParams.get("sourceSyncCheckUnavailable") === "1";
     try {
@@ -207,6 +218,7 @@ export default {
           summary.message = verified.status === "running" ? "Verified Cropster sections saved. Remaining reports are updating in the background." :
             "The background update stopped. Verified sections were saved with their actual capture times.";
           await saveSourceSyncLog(env.DB, input.jobId, week.start, summary, now);
+          await acknowledgeDashboardSync({env,readerJobId:input.jobId,weekStart:week.start,status:verified.status,safeCode:verified.error,summary,now});
           return json({ ok: true, status: "partial" });
         }
         // The server finishes source work even when the visitor has closed the page.
@@ -219,15 +231,15 @@ export default {
           readDispatchStatus({ weekStart: week.start, env, now }),
         ]);
         const summary = sourceSyncSummary({ weekly: { generatedAt: now.toISOString(), cropsterRefresh: readings.refresh,
-          metrics: { production: readings.production, green: readings.green, wholesale: dispatch.wholesale } }, lab: { ...lab, purchases, coffeeC } });
-        summary.sources = summary.sources.filter(source => !["demand", "stocktake", "expenses"].includes(source.id));
+          metrics: { production: readings.production, green: readings.green, wholesale: dispatch.wholesale,
+            demand:weeklyDemandComparison(demand,priorDemand),expenses } }, lab: { ...lab, purchases, coffeeC } });
+        summary.sources = summary.sources.filter(source => source.id !== "stocktake");
         summary.jobStatus = "complete";
-        summary.sources.push({ id: "demand", label: "Roast tallies", status: [demand, priorDemand].every(value => value.status === "live") ? "updated" : "failed", asOf: demand.asOf });
-        summary.sources.push({ id: "expenses", label: "Warehouse expenses sheet", status: expenses.status === "live" ? "updated" : "failed", asOf: expenses.asOf });
         summary.status = summary.sources.every(item => item.status === "updated") ? "complete" : "partial";
         summary.message = summary.status === "complete" ? "Cropster, Dispatch and workbook sources saved. Stock Take rechecks when the dashboard opens." :
           "Some sources need attention. Verified readings retain their actual capture times.";
         await saveSourceSyncLog(env.DB, input.jobId, week.start, summary, now);
+        await acknowledgeDashboardSync({env,readerJobId:input.jobId,weekStart:week.start,status:"complete",summary,now});
         return json({ ok: true, status: summary.status, sourceSync: summary });
       }
       if (url.pathname === "/api/source-sync") {
@@ -237,15 +249,32 @@ export default {
         let input = {};
         if (request.method === "POST") {
           input = await jsonInput(request, sourceSyncBody);
-          if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).some(key => key !== "weekStart")) throw new HttpError("Choose a valid reporting week.");
+          if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).some(key => !["weekStart","mode"].includes(key)) || input.mode !== undefined && !["auto","manual"].includes(input.mode)) throw new HttpError("Choose a valid reporting week.");
         }
         const now = new Date();
         const week = dashboardWeek(request.method === "GET" ? url.searchParams.get("week") || undefined : input.weekStart || undefined, now);
         if (!week.isCurrent) return json({ status: "archive", weekStart: week.start, note: "Historical Friday archives will be rechecked." });
         const jobId = request.method === "GET" ? url.searchParams.get("jobId") : null;
         if (request.method === "GET" && !validSyncJobId(jobId)) throw new HttpError("Choose a valid source sync job.");
-        const completed = jobId ? await readSourceSyncLog(env.DB, jobId, week.start) : null;
-        if (["complete", "failed"].includes(completed?.jobStatus) && completed.sources.some(item => item.id === "stocktake")) return json({ status: completed.jobStatus, jobId, weekStart: week.start, sourceSync: completed });
+        const managedJob = jobId ? await findDashboardSyncJob(env,jobId,week.start) : null;
+        const completed = jobId ? await readSourceSyncLog(env.DB, managedJob?.reader_job_id || jobId, week.start) : null;
+        if (["complete", "failed"].includes(completed?.jobStatus) && (!managedJob ||
+          ["complete","failed"].includes(managedJob.phase) && !managedJob.manual_request_id && completed.sources.some(source => source.id === "stocktake"))) {
+          return json({ status: completed.jobStatus, jobId, weekStart: week.start, sourceSync: completed });
+        }
+        const coordinated=await coordinateDashboardSync({env,weekStart:week.start,jobId,mode:request.method === "POST" ? input.mode || "manual" : "auto",now});
+        if (coordinated) {
+          if (coordinated.status === "running") return json(coordinated,202);
+          const managed=coordinated.jobId ? await findDashboardSyncJob(env,coordinated.jobId,week.start) : null;
+          if (managed && ["complete","failed"].includes(coordinated.status)) {
+            const readings=await readCoordinatedCropster({env,row:managed,jobId:coordinated.jobId,now});
+            try {
+              const sourceSync=await finishSourceSync(env,session,readings,week,managed.reader_job_id || managed.public_id || managed.id,now);
+              return json({...coordinated,sourceSync});
+            } catch (error) { if ([401,403].includes(error?.status)) throw error; }
+          }
+          return json(coordinated);
+        }
         const readings = await readCurrentCropster({ env, weekStart: week.start, followingWeekStart: addDays(week.start, 7), now, fresh: true, jobId });
         const policy = readings.refresh;
         if (policy.status === "pending") return json({ status: "running", jobId: policy.jobId, weekStart: week.start, note: policy.note }, 202);
@@ -324,7 +353,8 @@ export default {
         catch { throw new HttpError("Choose this week or an earlier Monday."); }
         const sourceSyncJob = requestedSyncJob(url, week.start);
         try {
-          return json(await collectWeeklyReport({ weekStart: week.start, stockroomCookie: session.stockroomCookie, env, fresh, sourceSyncJob, syncWebsite: !skipWebsiteSync }));
+          return json(await collectWeeklyReport({ weekStart: week.start, stockroomCookie: session.stockroomCookie, env, fresh,
+            ...await coordinatedReportOptions(env,sourceSyncJob,week.start,!skipWebsiteSync) }));
         } catch (error) {
           if ([401, 403].includes(error?.status)) throw new HttpError("Your Stockroom session has ended. Sign in again.", 401);
           throw new HttpError("Stockroom could not verify your access. Try Refresh.", 503);
@@ -343,7 +373,9 @@ export default {
         const session = await readSession(request, env);
         if (!session) throw new HttpError("Sign in with your Stock Take App password.", 401);
         try {
-          return json(await collectWarehouse({ env, stockroomCookie: session.stockroomCookie, fresh, sourceSyncJob: requestedSyncJob(url, dashboardWeek().start), syncWebsite: !skipWebsiteSync }));
+          const weekStart=dashboardWeek().start;
+          return json(await collectWarehouse({ env, stockroomCookie: session.stockroomCookie, fresh,
+            ...await coordinatedReportOptions(env,requestedSyncJob(url,weekStart),weekStart,!skipWebsiteSync) }));
         } catch (error) {
           if ([401, 403].includes(error?.status)) throw new HttpError("Your Stockroom session has ended. Sign in again.", 401);
           throw error;
@@ -385,7 +417,9 @@ export default {
         await activeSession(request, env);
         if (action === "settings") return json(await saveLabSettings(env.DB, await jsonInput(request, labSettingsBody)));
         if (action === "cropster") await saveLabCropster(env.DB, await jsonInput(request, labCropsterBody));
-        return json(await roasteryReport(env, { fresh: fresh || action === "cropster", syncWebsite: !skipWebsiteSync && (fresh || Boolean(url.searchParams.get("sourceSyncJob"))), jobId: requestedSyncJob(url, dashboardWeek().start) }));
+        const reportOptions=await coordinatedReportOptions(env,requestedSyncJob(url,dashboardWeek().start),dashboardWeek().start,
+          !skipWebsiteSync && (fresh || Boolean(url.searchParams.get("sourceSyncJob"))));
+        return json(await roasteryReport(env, { fresh: fresh || action === "cropster", ...reportOptions,jobId:reportOptions.sourceSyncJob }));
       }
       return json({ error: "Not found." }, 404);
     } catch (error) {

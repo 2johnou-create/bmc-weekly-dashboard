@@ -112,6 +112,23 @@ test("Missing report sections use blank figures instead of accidental zeros", ()
   assert.deepEqual(missing.consumption.months.map(month => month.kg), [null, null, null]);
 });
 
+test("aged live Lab inputs are stale while completed-month averages keep their historical period and values", async () => {
+  const db = localDatabase(":memory:");
+  try {
+    await saveLabCropster(db, report, now);
+    const monday = await readRoasteryLab(db, new Date("2026-11-22T22:00:00Z"));
+    assert.equal(monday.source.status, "stale");
+    assert.equal(monday.source.partFreshness.inventory.status, "stale");
+    assert.equal(monday.source.partFreshness.use.status, "recorded");
+    assert.equal(monday.source.partFreshness.loss.status, "recorded");
+    assert.deepEqual(monday.consumption.months.map(month => month.month), ["2026-08", "2026-09", "2026-10"]);
+    assert.equal(monday.consumption.averageKg, 70);
+    assert.equal(monday.prices.highlights[0].pricePerKg, 13.25);
+    assert.equal(monday.source.asOf, now.toISOString());
+    assert.equal(monday.source.coverageStatus, "partial");
+  } finally {db.close();}
+});
+
 test("The Lab protects source data and edits with a current Stock Take session and the dashboard origin", async () => {
   const db = localDatabase(":memory:");
   const env = { DB: db, SESSION_SECRET: "synthetic-roastery-lab-test-session-secret-1234567890" };

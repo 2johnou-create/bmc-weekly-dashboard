@@ -5,6 +5,7 @@ import { buildRunoutPools } from "./profile-runout.js";
 
 const signatureNames = ["Liberty", "Rhythm", "OH"];
 const parts = ["inventory", "recipes", "use", "loss"];
+const LIVE_CAPTURE_AGE_MS = 24 * 60 * 60 * 1000;
 const key = name => name.normalize("NFC").replace(/\s+/g, " ").trim().toLowerCase();
 const round = (value, digits = 2) => Number(value.toFixed(digits));
 const sum = values => values.reduce((total, value) => total + value, 0);
@@ -268,6 +269,7 @@ function priceReport(stock, recipeList = {}, measuredLoss = {}, today = sydneyDa
       lossBatchCount: observation?.batches ?? null,
       components,
       pricingNote: !components.length ? "" : unitPrice === null ? "Current lot price unavailable" :
+        components.some(component => component.pricingStatus === "previous-week") ? "Saved previous-week schedule price" :
         components.some(component => component.pricingBasis === "default-profile") ? "Default profile fallback" :
         components.some(component => component.pricingBasis === undefined) ? "Saved recipe price" : "Current-week schedule price",
     };
@@ -285,10 +287,14 @@ function priceReport(stock, recipeList = {}, measuredLoss = {}, today = sydneyDa
         Array.isArray(component.pricingLotIds) && component.pricingLotIds.length > 0 && component.pricingLotIds.every(validPricingLot) &&
         new Set(component.pricingLotIds).size === component.pricingLotIds.length && validPricingProfile(component.pricingProfileUrl);
       const pricePerKg = exactPrice ? component.currentPricePerKg : null;
-      const basis = component.pricingBasis === "current-week-schedule" ? "Scheduled lot" :
+      const previousWeek = component.pricingBasis === "current-week-schedule" && exactPrice &&
+        mondayOf(component.pricingDate) !== mondayOf(today);
+      const basis = previousWeek ? "Saved previous-week scheduled lot" : component.pricingBasis === "current-week-schedule" ? "Scheduled lot" :
         component.pricingBasis === "default-profile" ? "Default profile fallback" : "Unverified lot";
       const detail = [component.pricingDate, ...(Array.isArray(component.pricingLotIds) ? component.pricingLotIds : [])].filter(Boolean).join(" · ");
-      return { ...component, pricePerKg, pricingNote: basis + (pricePerKg === null ? " price unavailable" : " price") + (detail ? " · " + detail : "") };
+      return { ...component, pricePerKg,
+        pricingStatus: pricePerKg === null ? "unverified" : previousWeek ? "previous-week" : "verified",
+        pricingNote: basis + (pricePerKg === null ? " price unavailable" : " price") + (detail ? " · " + detail : "") };
     });
     const contributions = resolved.map(component => component.pricePerKg === null ? null : component.percent / 100 * component.pricePerKg);
     return report(label, recipe?.name ?? label,
@@ -575,15 +581,39 @@ export async function readRoasteryLab(db, now = new Date()) {
     return [part, Number.isFinite(record?.recorded_at) ? new Date(record.recorded_at).toISOString() : null];
   }));
   const oldest = parts.every(part => partAsOf[part]) ? Math.min(...Object.values(partAsOf).map(Date.parse)) : null;
+  const today = sydneyDate(now), currentWeek = mondayOf(today);
+  const partFreshness = Object.fromEntries(parts.map(part => {
+    const capturedAt = partAsOf[part];
+    const captureTime = capturedAt ? Date.parse(capturedAt) : NaN;
+    const ageMs = Number.isFinite(captureTime) ? Math.max(0, now.getTime() - captureTime) : null;
+    // Monthly use/loss remain historical measurements for their displayed period.
+    // Inventory and recipe prices are live inputs and must age independently.
+    const datedLiveInput = part === "inventory" || part === "recipes";
+    const previousWeek = datedLiveInput && validDate(data[part]?.asOf) && data[part].asOf < currentWeek;
+    const stale = datedLiveInput && (ageMs !== null && ageMs > LIVE_CAPTURE_AGE_MS || previousWeek);
+    return [part, { status: !capturedAt ? "unavailable" : stale ? "stale" : "recorded", capturedAt, ageMs,
+      previousWeek, period: datedLiveInput ? data[part]?.asOf ?? null : part === "loss" ? data.loss?.asOf ?? null :
+        data.use?.months?.map(month => month.month).join(", ") ?? null }];
+  }));
+  const stale = ["inventory", "recipes"].some(part => partFreshness[part].status === "stale");
   return {
-    ...report, settings,
+    ...report,
+    prices: { ...report.prices, inventoryCapturedAt: partAsOf.inventory, recipeCapturedAt: partAsOf.recipes,
+      stale: ["inventory", "recipes"].some(part => partFreshness[part].status === "stale") },
+    consumption: { ...report.consumption, stockCapturedAt: partAsOf.inventory, useCapturedAt: partAsOf.use,
+      stockStale: partFreshness.inventory.status === "stale" },
+    settings,
     source: {
-      status: latest === null ? "unavailable" : complete ? "recorded" : "partial",
+      status: latest === null ? "unavailable" : stale ? "stale" : complete ? "recorded" : "partial",
+      coverageStatus: complete ? "complete" : "partial",
+      stale,
       asOf: oldest === null ? null : new Date(oldest).toISOString(),
       latestAsOf: latest === null ? null : new Date(latest).toISOString(),
       partAsOf,
+      partFreshness,
       note: latest === null ? "A verified Cropster report needs to be recorded." :
-        complete ? "Latest verified Cropster reports." : "Latest verified Cropster reports. Unavailable figures are left blank.",
+        stale ? "Saved Cropster inventory or recipe prices are out of date. Capture dates are retained; completed-month averages still refer to their displayed historical period." :
+          complete ? "Verified Cropster reports at the capture times shown." : "Verified Cropster reports at the capture times shown. Unavailable figures are left blank.",
     },
   };
 }

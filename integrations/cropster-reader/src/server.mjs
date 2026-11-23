@@ -38,7 +38,7 @@ function authorised(request, token) {
   return timingSafeEqual(digest(received.slice(7)), digest(token));
 }
 
-async function readBody(request, allowScope = false) {
+async function readBody(request, allowScope = false, allowRequestId = false) {
   const length = request.headers.get("content-length");
   if (length && (!/^\d+$/.test(length) || Number(length) > MAX_BODY)) throw new ReaderError("INVALID_REQUEST", 400);
   if (!/^application\/json(?:\s*;|$)/i.test(request.headers.get("content-type") || "")) throw new ReaderError("INVALID_REQUEST", 400);
@@ -59,14 +59,16 @@ async function readBody(request, allowScope = false) {
   try { input = JSON.parse(text + decoder.decode()); }
   catch { throw new ReaderError("INVALID_REQUEST", 400); }
   if (!input || typeof input !== "object" || Array.isArray(input)
-    || !Object.hasOwn(input, "weekStart") || Object.keys(input).some(key => !["weekStart", ...(allowScope ? ["scope"] : [])].includes(key))
-    || input.scope !== undefined && !["weekly", "all"].includes(input.scope)) throw new ReaderError("INVALID_REQUEST", 400);
+    || !Object.hasOwn(input, "weekStart") || Object.keys(input).some(key => !["weekStart", ...(allowScope ? ["scope"] : []), ...(allowRequestId ? ["requestId"] : [])].includes(key))
+    || input.scope !== undefined && !["weekly", "all"].includes(input.scope)
+    || input.requestId !== undefined && (typeof input.requestId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(input.requestId))) throw new ReaderError("INVALID_REQUEST", 400);
   return input;
 }
 
 export function createHandler({ reader, token, now = () => new Date(), log = () => {}, callback = null, fetcher = fetch, sleep }) {
   let inFlight = null;
   const jobs = new Map();
+  const requestIds = new Map();
   const TTL = 10 * 60 * 1000, MAX_JOBS = 10;
   const cleanJobs = (reserveSlot = false) => {
     for (const [id, job] of jobs) if (job.status !== "running" && now().getTime() - job.finishedAt >= TTL) jobs.delete(id);
@@ -75,6 +77,7 @@ export function createHandler({ reader, token, now = () => new Date(), log = () 
       if (!oldest) break;
       jobs.delete(oldest[0]);
     }
+    for (const [requestId, jobId] of requestIds) if (!jobs.has(jobId)) requestIds.delete(requestId);
   };
   const run = (weekStart, scope, onProgress, onCapture) => {
     let preceding = null;
@@ -130,12 +133,21 @@ export function createHandler({ reader, token, now = () => new Date(), log = () 
     if (request.method !== "POST") return json({ error: { code: "METHOD_NOT_ALLOWED" } }, 405, { Allow: "POST" });
     const started = now().getTime();
     try {
-      const input = await readBody(request, pathname === "/v1/weekly");
+      const input = await readBody(request, pathname === "/v1/weekly", pathname === "/v1/sync");
       const range = weekRange(input.weekStart, now());
       if (pathname === "/v1/sync") {
         cleanJobs();
+        if (input.requestId && requestIds.has(input.requestId)) {
+          const repeated = jobs.get(requestIds.get(input.requestId));
+          if (repeated?.weekStart !== range.weekStart) throw new ReaderError("INVALID_REQUEST", 400);
+          return json(jobResponse(repeated), repeated.status === "running" ? 202 : 200);
+        }
+        if (input.requestId && requestIds.size >= 512) throw new ReaderError("CROPSTER_READER_BUSY");
         const existing = [...jobs.values()].find(job => job.weekStart === range.weekStart && job.status === "running" && job.refreshControl.isAccepting());
-        if (existing && existing.refreshControl.request()) return json(jobResponse(existing), 202);
+        if (existing && existing.refreshControl.request()) {
+          if (input.requestId) requestIds.set(input.requestId, existing.id);
+          return json(jobResponse(existing), 202);
+        }
         cleanJobs(true);
         if (jobs.size >= MAX_JOBS) throw new ReaderError("CROPSTER_READER_BUSY");
         let job;
@@ -155,6 +167,7 @@ export function createHandler({ reader, token, now = () => new Date(), log = () 
         });
         job = { id: randomUUID(), weekStart: range.weekStart, status: "running", createdAt: now().getTime(), refreshControl: inFlight.refreshControl, ...(inFlight?.progress ? { progress: inFlight.progress } : {}), ...(inFlight?.result ? { result: structuredClone(inFlight.result) } : {}) };
         jobs.set(job.id, job);
+        if (input.requestId) requestIds.set(input.requestId, job.id);
         // Attach failure handling immediately; no rejected background promise can
         // leak raw browser errors or terminate the process.
         void promise.then(async result => {

@@ -49,17 +49,25 @@ async function harness(action) {
   globalThis.fetch = async (address, init = {}) => {
     const url = new URL(address); state.addresses.push(url);
     if (url.hostname === readerHost) {
+      if (url.pathname === '/health') {
+        assert.equal(init.headers.Authorization, undefined);
+        assert.equal(init.method, 'GET');
+        return Response.json({status:'ok',service:'cropster-website-reader'});
+      }
       assert.equal(init.headers.Authorization, `Bearer ${token}`);
       assert.equal(init.redirect, "manual");
       if (init.method === "POST") {
         assert.equal(url.pathname, "/v1/sync");
-        assert.deepEqual(JSON.parse(init.body), { weekStart: week() });
+        const startBody=JSON.parse(init.body);
+        assert.equal(startBody.weekStart,week());
+        assert.match(startBody.requestId,/^[0-9a-f-]{36}$/);
         state.starts++;
         return Response.json({ schemaVersion: "1.0", status: "running", jobId: state.jobId, weekStart: week() }, { status: 202 });
       }
       assert.equal(init.method, "GET");
       assert.equal(url.pathname, "/v1/sync/" + state.jobId);
       state.polls++;
+      if (state.readerGate) await state.readerGate;
       state.observation = state.readerObservation || observation(week(), state.pendingKg);
       return Response.json({ schemaVersion: "1.0", status: state.readerStatus || "complete", jobId: state.jobId, weekStart: week(), result: state.observation });
     }
@@ -73,6 +81,9 @@ async function harness(action) {
   };
   const cookie = (await sealSession(new Request(origin), env, "bmc_stockroom_session=synthetic_source_sync_staff_session")).split(";")[0];
   const request = async (path, { method = "GET", authorized = true, requestOrigin = origin, authorization, body } = {}) => {
+    // Skip the real five-second polling cadence in this routing fixture; the
+    // coordinator's clock/backoff behavior has its own controlled-clock tests.
+    if (method === 'GET' && path.startsWith('/api/source-sync?')) await db.prepare('UPDATE dashboard_source_jobs SET next_attempt_at = 0').run();
     const headers = new Headers();
     if (authorized) headers.set("Cookie", cookie);
     if (authorization) headers.set("Authorization", authorization);
@@ -261,6 +272,26 @@ test("polling a finalized job reuses its diagnostic result while still checking 
     const revoked = await request(url);
     assert.equal(revoked.status, 401);
     assert.equal(state.polls, 1);
+  });
+});
+
+test('a manual click racing completion starts its keyed follow-up instead of trusting the older terminal log',async()=>{
+  await harness(async({db,state,request})=>{
+    const first=await request('/api/source-sync',{method:'POST'});const clientId=first.body.jobId;
+    let release;state.readerGate=new Promise(resolve=>{release=resolve;});
+    const url='/api/source-sync?week='+week()+'&jobId='+clientId;
+    const polling=request(url);
+    while(state.polls===0)await new Promise(resolve=>setImmediate(resolve));
+    const joined=await request('/api/source-sync',{method:'POST'});assert.equal(joined.body.status,'running');
+    release();const olderComplete=await polling;
+    assert.equal(olderComplete.body.status,'running');
+    const row=await db.prepare('SELECT phase, manual_request_id FROM dashboard_source_jobs').first();
+    assert.equal(row.phase,'reading');assert.ok(row.manual_request_id);
+    state.readerGate=null;state.jobId=crypto.randomUUID();
+    const followup=await request(url);
+    assert.equal(followup.body.status,'running');assert.equal(followup.body.jobId,clientId);assert.equal(state.starts,2);
+    const stored=await db.prepare('SELECT reader_job_id, manual_request_id FROM dashboard_source_jobs').first();
+    assert.equal(stored.reader_job_id,state.jobId);assert.equal(stored.manual_request_id,null);
   });
 });
 

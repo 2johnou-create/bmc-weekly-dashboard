@@ -1,11 +1,16 @@
 const source = (id, label, status, asOf = null, note = "") => ({ id, label, status, asOf, note });
 const readable = metric => metric && ["live", "recorded", "estimated", "delayed", "available"].includes(metric.status);
+const waitingForTally = metric => !Number.isFinite(metric?.kg) &&
+  /The dated ROAST TALLY for this week is missing from the shared folder\./.test(metric?.note || "");
+const waitingForExpenses = metric => metric?.status === "unavailable" &&
+  metric.note === "No expenses have been entered for the selected week.";
 
 export function sourceSyncSummary({ weekly, lab, packing, weather }, { historical = false } = {}) {
   const metrics = weekly?.metrics || {};
   const cropster = weekly?.cropsterRefresh || {};
   const state = success => success ? "updated" : "failed";
-  const metricState = metric => metric?.status === "partial" ? "partial" : state(readable(metric));
+  const metricState = metric => metric?.status === "stale" || metric?.stale ? "stale" :
+    metric?.status === "partial" ? "partial" : state(readable(metric));
   const cropsterState = flag => historical ? "archive" : flag ? "updated" :
     cropster.mode === "saved-readings" ? "not-connected" : cropster.status === "pending" ? "pending" : cropster.status === "saved" ? "saved" : "failed";
   const production = metrics.production;
@@ -19,7 +24,8 @@ export function sourceSyncSummary({ weekly, lab, packing, weather }, { historica
   const productionNote = productionState === "partial"
     ? [cropster.note, production?.note].filter(Boolean).join(" ") : cropster.note;
   const sources = Object.keys(metrics).length ? [
-    source("demand", "Roast tally", state(readable(metrics.demand)), metrics.demand?.asOf, metrics.demand?.note),
+    source("demand", "Roast tally", waitingForTally(metrics.demand) ? "awaiting-data" :
+      !Number.isFinite(metrics.demand?.kg) ? "failed" : metricState(metrics.demand), metrics.demand?.asOf, metrics.demand?.note),
     source("production", "Cropster production and schedule", productionState, production?.asOf, productionNote),
     source("monday", "Cropster Monday output", cropsterState(cropster.mondayFetched), null),
     source("previous-production", "Cropster previous-week comparison", cropsterState(cropster.previousFetched), cropster.previousAsOf || null),
@@ -27,16 +33,20 @@ export function sourceSyncSummary({ weekly, lab, packing, weather }, { historica
       [metrics.green?.kg, metrics.green?.value].every(Number.isFinite)), metrics.green?.asOf),
     source("stocktake", "Stock Take inventory", metricState(metrics.stock), metrics.stock?.asOf, metrics.stock?.note),
     source("dispatch", "Wholesale dispatch", metricState(metrics.wholesale), metrics.wholesale?.asOf, metrics.wholesale?.note),
-    source("expenses", "Warehouse expenses sheet", metrics.expenses?.status === "live" ? "updated" :
-      ["recorded", "stale"].includes(metrics.expenses?.status) ? "not-connected" : "failed", metrics.expenses?.asOf, metrics.expenses?.note),
+    source("expenses", "Warehouse expenses sheet", waitingForExpenses(metrics.expenses) ? "awaiting-data" :
+      metrics.expenses?.status === "live" ? "updated" : metrics.expenses?.status === "stale" ? "stale" :
+        metrics.expenses?.status === "recorded" ? "saved" : "failed", metrics.expenses?.asOf, metrics.expenses?.note),
   ] : [];
   if (!lab && metrics.expenses?.greenForecast) sources.push(source("planning", "Green buy forecast workbook",
     metricState(metrics.expenses.greenForecast), metrics.expenses.greenForecast.asOf, metrics.expenses.greenForecast.note));
   if (lab) {
     for (const part of ["inventory", "recipes", "use", "loss"]) {
       const item = cropster.labParts?.[part];
+      const savedPart = lab.source?.partFreshness?.[part];
       sources.push(source("lab-" + part, "Cropster Lab " + ({ inventory: "inventory and prices", recipes: "blend profiles", use: "consumption", loss: "roast loss" })[part],
-        historical ? "archive" : item?.status === "updated" ? "updated" : cropster.mode === "saved-readings" ? "not-connected" : cropster.status === "pending" ? "pending" : cropster.status === "saved" ? "saved" : "failed",
+        historical ? "archive" : item?.status === "updated" ? "updated" : cropster.status === "pending" ? "pending" :
+          savedPart?.status === "stale" && cropster.status !== "failed" ? "stale" :
+            cropster.mode === "saved-readings" ? "not-connected" : cropster.status === "saved" ? "saved" : "failed",
         item?.asOf || lab.source?.partAsOf?.[part] || null));
     }
     const planning = [
@@ -59,14 +69,23 @@ export function sourceSyncSummary({ weekly, lab, packing, weather }, { historica
 }
 
 function summarizeSources(sources, checkedAt, historical = false) {
-  const failed = sources.filter(item => ["failed", "partial", "not-connected", "pending", "saved"].includes(item.status));
-  const checked = sources.length - failed.length;
+  const attention = sources.filter(item => !["updated", "archive"].includes(item.status));
+  const checked = sources.length - attention.length;
+  const counts = status => sources.filter(item => item.status === status).length;
+  const messages = [
+    counts("failed") && `${counts("failed")} ${counts("failed") === 1 ? "connection failed" : "connections failed"}`,
+    counts("pending") && `${counts("pending")} updating`,
+    counts("awaiting-data") && `${counts("awaiting-data")} awaiting source entries`,
+    counts("partial") && `${counts("partial")} with partial data`,
+    counts("stale") && `${counts("stale")} with out-of-date readings`,
+    counts("saved") + counts("not-connected") && `${counts("saved") + counts("not-connected")} using saved readings`,
+  ].filter(Boolean);
   return {
-    status: failed.length ? "partial" : "complete",
+    status: attention.length ? "partial" : "complete",
     checkedAt,
     sources,
-    message: failed.length
-      ? `Updated ${checked} of ${sources.length} sources. ${failed.length} ${failed.length === 1 ? "source needs" : "sources need"} attention; saved readings keep their capture dates.`
+    message: attention.length
+      ? `Updated ${checked} of ${sources.length} sources. ${messages.join("; ")}. Saved readings keep their capture dates.`
       : historical ? "Historical sources rechecked. Friday archives retained." : "All card sources updated.",
   };
 }

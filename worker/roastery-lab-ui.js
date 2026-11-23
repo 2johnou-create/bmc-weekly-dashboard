@@ -501,6 +501,7 @@ export const roasteryLabPage = String.raw`<!doctype html>
     </div>
   </main>
   <script>
+    const uiBuildId = '__BMC_UI_BUILD_ID__';
     const el = id => document.getElementById(id);
     const numbers = new Intl.NumberFormat('en-AU', { maximumFractionDigits: 2 });
     const currency = new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD' });
@@ -746,7 +747,10 @@ export const roasteryLabPage = String.raw`<!doctype html>
       const lossFrom = dateText(prices.lossFrom);
       const lossAsOf = dateText(prices.lossAsOf);
       const lossWindow = lossFrom && lossAsOf ? lossFrom + ' to ' + lossAsOf : lossAsOf && 'through ' + lossAsOf;
-      const dates = [priceAsOf && 'Inventory prices as of ' + priceAsOf + '.', lossWindow && 'Roast loss ' + lossWindow + '.'].filter(Boolean).join(' ');
+      const captured = dateText(prices.recipeCapturedAt || prices.inventoryCapturedAt, timeFormat);
+      const dates = [priceAsOf && 'Inventory prices as of ' + priceAsOf + '.',
+        captured && (prices.stale ? 'Saved prices captured ' : 'Prices captured ') + captured + ' Sydney time.',
+        lossWindow && 'Roast loss ' + lossWindow + '.'].filter(Boolean).join(' ');
       el('priceDates').textContent = dates;
       el('priceDates').hidden = !dates;
       el('lossNote').textContent = prices.lossNote || '';
@@ -1043,8 +1047,12 @@ export const roasteryLabPage = String.raw`<!doctype html>
       el('lastMonthRows').replaceChildren(...latestRows.map(row => makeTableRow(row.name, format(row.kg), format(row.bags))));
       const inventoryDate = dateText(consumption.stockAsOf);
       const total = Number.isFinite(consumption.stockTotalKg) ? withUnit(consumption.stockTotalKg, 'kg') + ' across all locations. ' : '';
+      const stockCaptured = dateText(consumption.stockCapturedAt, timeFormat);
+      const useCaptured = dateText(consumption.useCapturedAt, timeFormat);
       el('stockAsOf').textContent = total + (inventoryDate
-        ? 'Inventory as of ' + inventoryDate + '.' : 'Stock readings cover all green coffee locations.');
+        ? 'Inventory as of ' + inventoryDate + '.' : 'Stock readings cover all green coffee locations.') +
+        (stockCaptured ? ' Stock captured ' + stockCaptured + ' Sydney time' + (consumption.stockStale ? ' · out of date.' : '.') : '') +
+        (useCaptured ? ' Consumption reports captured ' + useCaptured + ' Sydney time.' : '');
       renderCoverage(consumption.coverage, consumption);
     }
 
@@ -1161,7 +1169,7 @@ export const roasteryLabPage = String.raw`<!doctype html>
       const policy = report?.cropsterRefresh || {};
       if (policy.mode === 'friday-archive' || report?.week?.isCurrent === false) return 'Cropster: saved Friday archive.';
       const captured = dateText(policy.labAsOf || report?.source?.asOf, timeFormat);
-      if (sourceSyncIsRunning(report)) return captured ? 'Cropster updating in background · last captured ' + captured + ' Sydney time.' : 'Cropster updating in background · saved readings shown.';
+      if (sourceSyncIsRunning(report)) return sourceSyncProgressText({ phase: policy.phase }) + (captured ? ' · last captured ' + captured + ' Sydney time.' : ' · saved readings shown.');
       if (policy.mode !== 'website-reader') return 'Cropster: saved readings · automatic sync not connected.';
       if (policy.status === 'failed') return captured
         ? 'Cropster could not update · previous reading shown, captured ' + captured + ' Sydney time.'
@@ -1182,6 +1190,7 @@ export const roasteryLabPage = String.raw`<!doctype html>
     }
     const sourceSyncStorageKey = 'bmc-dashboard-cropster-source-job-v1';
     let pendingSourceSync = null;
+    let sourceSyncPollTimer = null, sourceSyncPollDelay = 10000, latestSourceSyncPhase = null;
     function validSourceSyncWeek(value) {
       return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) &&
         Number.isFinite(Date.parse(value + 'T00:00:00Z')) && new Date(value + 'T00:00:00Z').toISOString().slice(0, 10) === value &&
@@ -1201,6 +1210,9 @@ export const roasteryLabPage = String.raw`<!doctype html>
     function clearPendingSourceSync(jobId) {
       if (jobId && readPendingSourceSync()?.jobId !== jobId) return;
       pendingSourceSync = null;
+      latestSourceSyncPhase = null;
+      clearTimeout(sourceSyncPollTimer);
+      sourceSyncPollTimer = null;
       try { sessionStorage.removeItem(sourceSyncStorageKey); } catch {}
     }
     function readPendingSourceSync() {
@@ -1239,19 +1251,20 @@ export const roasteryLabPage = String.raw`<!doctype html>
     async function coordinateSourceSync(weekStart, signal, onProgress, { fresh = true } = {}) {
       if (signal.aborted) throw new DOMException('Source update stopped.', 'AbortError');
       const pending = pendingSourceSyncForWeek(weekStart);
-      if (!fresh && !pending) return null;
+      if (weekStart && weekStart !== currentSourceSyncWeek()) return null;
+      const polling = Boolean(pending && !fresh);
       const unavailable = () => {
         const retained = pendingSourceSyncForWeek(weekStart);
         return { ...(retained || {}), status: retained ? 'running' : 'unavailable',
           weekStart: retained?.weekStart || weekStart || currentSourceSyncWeek(), checkUnavailable: true };
       };
       const options = { cache: 'no-store', credentials: 'same-origin', signal };
-      const query = pending && !fresh ? '?' + new URLSearchParams({ jobId: pending.jobId, week: pending.weekStart }) : '';
+      const query = polling ? '?' + new URLSearchParams({ jobId: pending.jobId, week: pending.weekStart }) : '';
       let response;
       try {
-        response = await fetch('/api/source-sync' + query, fresh ? {
+        response = await fetch('/api/source-sync' + query, !polling ? {
           ...options, method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(weekStart ? { weekStart } : {}),
+          body: JSON.stringify({ mode: fresh ? 'manual' : 'auto', ...(weekStart ? { weekStart } : {}) }),
         } : options);
       } catch (error) {
         if (signal.aborted || error?.name === 'AbortError' || error?.status === 401) throw error;
@@ -1267,26 +1280,49 @@ export const roasteryLabPage = String.raw`<!doctype html>
       const state = await readJson(response);
       if (signal.aborted) throw new DOMException('Source update stopped.', 'AbortError');
       if (!response.ok) throw new Error(state.error || 'The source update could not be checked.');
-      const expectedWeek = fresh ? weekStart : pending.weekStart;
-      const allowed = fresh ? ['running', 'complete', 'not-connected', 'archive', 'failed'] : ['running', 'complete', 'failed'];
+      const expectedWeek = polling ? pending.weekStart : weekStart || currentSourceSyncWeek();
+      const allowed = polling ? ['running', 'complete', 'failed'] : ['running', 'complete', 'not-connected', 'archive', 'failed'];
       if (!allowed.includes(state.status) || !validSourceSyncWeek(state.weekStart) ||
-          expectedWeek && state.weekStart !== expectedWeek || !fresh && state.jobId !== undefined && state.jobId !== pending.jobId) {
+          expectedWeek && state.weekStart !== expectedWeek || polling && state.jobId !== undefined && state.jobId !== pending.jobId) {
         throw new Error('The source update returned an unexpected reporting week or job.');
       }
-      const jobId = state.jobId ?? (!fresh ? pending.jobId : undefined);
+      const jobId = state.jobId ?? (polling ? pending.jobId : undefined);
       if (jobId !== undefined && !validSourceSyncJob(jobId)) throw new Error('The source update returned an invalid job reference.');
+      const phases = ['warming', 'starting', 'reading', 'complete', 'failed', 'saved', 'outside-hours'];
+      const phase = phases.includes(state.phase) ? state.phase : null;
+      const safeCode = typeof state.safeCode === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(state.safeCode) ? state.safeCode : null;
+      const retryAfterMs = Number.isFinite(state.retryAfterMs) ? Math.min(15000, Math.max(5000, state.retryAfterMs)) : 10000;
+      latestSourceSyncPhase = phase;
+      sourceSyncPollDelay = retryAfterMs;
+      const details = { phase, safeCode, retryAfterMs };
       if (state.status === 'running') {
         if (!jobId) throw new Error('The source update returned an invalid job reference.');
         const saved = storePendingSourceSync(jobId, state.weekStart);
-        onProgress();
-        return { ...saved, status: 'running', note: state.note };
+        onProgress(sourceSyncProgressText(details));
+        return { ...saved, ...details, status: 'running', note: state.note };
       }
       if (state.weekStart === readPendingSourceSync()?.weekStart) clearPendingSourceSync();
-      return { status: state.status, weekStart: state.weekStart, ...(jobId ? { jobId } : {}), note: state.note };
+      return { ...details, status: state.status, weekStart: state.weekStart, ...(jobId ? { jobId } : {}), note: state.note };
+    }
+    function sourceSyncProgressText(sync = {}) {
+      const phase = sync.phase || latestSourceSyncPhase;
+      if (phase === 'warming') return 'Waking Cropster connection in background';
+      if (phase === 'starting') return 'Starting Cropster website update in background';
+      return 'Cropster updating in background';
+    }
+    function scheduleSourceSyncPoll(reload, weekStart) {
+      clearTimeout(sourceSyncPollTimer);
+      sourceSyncPollTimer = null;
+      if (!pendingSourceSyncForWeek(weekStart)) return;
+      sourceSyncPollTimer = setTimeout(() => {
+        sourceSyncPollTimer = null;
+        if (!document.hidden) reload();
+      }, sourceSyncPollDelay);
     }
     function sourceSyncResultText(report, cropsterReport = report, sync) {
       if (sync?.checkUnavailable) return 'Cropster update status could not be checked. Other sources were rechecked.';
-      if (sync?.status === 'running' || sourceSyncIsRunning(cropsterReport)) return 'Cropster updating in background. Other sources were rechecked.';
+      if (sync?.status === 'running' || sourceSyncIsRunning(cropsterReport)) return sourceSyncProgressText(sync) + '. Other sources were rechecked.';
+      if (sync?.phase === 'saved' || sync?.phase === 'outside-hours') return (sync.note || 'Saved Cropster readings retain their capture times.') + ' Other sources were rechecked.';
       const summary = report?.sourceSync || report?.weekly?.sourceSync;
       if (sync?.status === 'failed' && !sync.jobId) return 'Cropster could not update. Previous readings are shown. Other sources were rechecked.';
       if (summary && ['complete', 'partial'].includes(summary.status) && typeof summary.message === 'string' && summary.message.trim()) return summary.message;
@@ -1294,8 +1330,8 @@ export const roasteryLabPage = String.raw`<!doctype html>
     }
     function sourceStatus(source = {}) {
       const timestamp = dateText(source.asOf, timeFormat);
-      if (timestamp && source.status === 'stale') return 'Last Cropster update ' + timestamp + ' Sydney time. Data may be out of date.';
-      if (timestamp) return 'Cropster updated ' + timestamp + ' Sydney time.' +
+      if (timestamp && source.status === 'stale') return 'Saved Cropster capture ' + timestamp + ' Sydney time. Inventory or prices are out of date.';
+      if (timestamp) return 'Cropster captured ' + timestamp + ' Sydney time.' +
         (source.status === 'partial' ? ' Some readings are unavailable.' : '');
       return 'Cropster data is unavailable.';
     }
@@ -1375,6 +1411,43 @@ export const roasteryLabPage = String.raw`<!doctype html>
       message('loginMessage', 'Sign in again to open Roastery Lab.', true);
       el('password').focus();
     }
+    const uiResumeKey = 'bmc-roastery-lab-ui-refresh-v1';
+    let checkingUiBuild = false;
+    function consumeUiRefreshIntent() {
+      try {
+        const raw = sessionStorage.getItem(uiResumeKey);
+        sessionStorage.removeItem(uiResumeKey);
+        const value = raw && JSON.parse(raw);
+        return value?.buildId === uiBuildId && Number.isFinite(value.at) && value.at <= Date.now() && Date.now() - value.at < 120000;
+      } catch { return false; }
+    }
+    async function manualRefresh() {
+      if (!signedIn || busy || activeRequest || checkingUiBuild) return;
+      checkingUiBuild = true;
+      el('refresh').disabled = true;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 8000);
+      let draftMessage = '';
+      try {
+        const response = await fetch('/api/ui-build?view=roastery-lab', {cache: 'no-store', signal: controller.signal});
+        const next = response.ok ? await readJson(response) : {};
+        if (/^[0-9a-f]{64}$/.test(next.buildId || '') && next.buildId !== uiBuildId) {
+          if (dirty.size > 0 || busy || el('cropsterInput').value.trim() !== '') draftMessage = 'A newer dashboard version is ready. Your draft is still here. Save or clear it, then select Refresh to reload.';
+          else {
+            try { sessionStorage.setItem(uiResumeKey, JSON.stringify({buildId: next.buildId, at: Date.now()})); } catch {}
+            location.reload();
+            return;
+          }
+        }
+      } catch {} finally {
+        clearTimeout(timer);
+        checkingUiBuild = false;
+        if (!activeRequest) el('refresh').disabled = busy;
+      }
+      if (!signedIn) return;
+      await load(true, {fresh: true});
+      if (draftMessage && signedIn) message('status', draftMessage);
+    }
     async function load(showLoading = true, { fresh = false } = {}) {
       if (!signedIn || busy || activeRequest && !fresh) return;
       abortLoad();
@@ -1386,7 +1459,7 @@ export const roasteryLabPage = String.raw`<!doctype html>
       el('refresh').textContent = fresh ? 'Refreshing…' : 'Refresh';
       if (showLoading) message('status', fresh ? 'Refreshing Roastery Lab…' : 'Loading Roastery Lab…');
       try {
-        const sync = await coordinateSourceSync(undefined, controller.signal, () => message('status', 'Cropster updating in background…'), { fresh });
+        const sync = await coordinateSourceSync(undefined, controller.signal, text => message('status', text + '…'), { fresh });
         if (controller !== activeRequest || generation !== sessionGeneration || !signedIn) return;
         const query = new URLSearchParams();
         if (fresh) query.set('refresh', '1');
@@ -1414,6 +1487,7 @@ export const roasteryLabPage = String.raw`<!doctype html>
           activeRequest = undefined;
           el('refresh').disabled = busy;
           el('refresh').textContent = 'Refresh';
+          scheduleSourceSyncPoll(() => load(false));
         }
       }
     }
@@ -1555,10 +1629,10 @@ export const roasteryLabPage = String.raw`<!doctype html>
         el('logout').disabled = false;
       }
     });
-    el('refresh').addEventListener('click', () => load(true, { fresh: true }));
+    el('refresh').addEventListener('click', manualRefresh);
     fetch('/api/auth', { cache: 'no-store' }).then(readJson).then(data => {
       showSession(data.authenticated === true);
-      if (signedIn) load();
+      if (signedIn) load(true, {fresh: consumeUiRefreshIntent()});
     }).catch(() => {
       showSession(false);
       message('loginMessage', 'The sign-in service could not be reached. Try signing in again.', true);

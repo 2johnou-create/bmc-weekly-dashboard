@@ -611,7 +611,7 @@ export const weeklyPage = String.raw`<!doctype html>
       const historical = policy.mode === 'friday-archive' || report.week?.isCurrent === false;
       if (historical) return 'Cropster: saved Friday archive.';
       const captured = formatTimestamp(policy.productionAsOf || report.metrics?.production?.asOf);
-      if (sourceSyncIsRunning(report)) return captured ? 'Cropster updating in background · last captured ' + captured + ' Sydney time.' : 'Cropster updating in background · saved readings shown.';
+      if (sourceSyncIsRunning(report)) return sourceSyncProgressText({ phase: policy.phase }) + (captured ? ' · last captured ' + captured + ' Sydney time.' : ' · saved readings shown.');
       if (policy.mode !== 'website-reader') return 'Cropster: saved readings · automatic sync not connected.';
       if (policy.status === 'failed') return captured
         ? 'Cropster could not update · previous reading shown, captured ' + captured + ' Sydney time.'
@@ -632,6 +632,7 @@ export const weeklyPage = String.raw`<!doctype html>
     }
     const sourceSyncStorageKey = 'bmc-dashboard-cropster-source-job-v1';
     let pendingSourceSync = null;
+    let sourceSyncPollTimer = null, sourceSyncPollDelay = 10000, latestSourceSyncPhase = null;
     function validSourceSyncWeek(value) {
       return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) &&
         Number.isFinite(Date.parse(value + 'T00:00:00Z')) && new Date(value + 'T00:00:00Z').toISOString().slice(0, 10) === value &&
@@ -651,6 +652,9 @@ export const weeklyPage = String.raw`<!doctype html>
     function clearPendingSourceSync(jobId) {
       if (jobId && readPendingSourceSync()?.jobId !== jobId) return;
       pendingSourceSync = null;
+      latestSourceSyncPhase = null;
+      clearTimeout(sourceSyncPollTimer);
+      sourceSyncPollTimer = null;
       try { sessionStorage.removeItem(sourceSyncStorageKey); } catch {}
     }
     function readPendingSourceSync() {
@@ -689,19 +693,20 @@ export const weeklyPage = String.raw`<!doctype html>
     async function coordinateSourceSync(weekStart, signal, onProgress, { fresh = true } = {}) {
       if (signal.aborted) throw new DOMException('Source update stopped.', 'AbortError');
       const pending = pendingSourceSyncForWeek(weekStart);
-      if (!fresh && !pending) return null;
+      if (weekStart && weekStart !== currentSourceSyncWeek()) return null;
+      const polling = Boolean(pending && !fresh);
       const unavailable = () => {
         const retained = pendingSourceSyncForWeek(weekStart);
         return { ...(retained || {}), status: retained ? 'running' : 'unavailable',
           weekStart: retained?.weekStart || weekStart || currentSourceSyncWeek(), checkUnavailable: true };
       };
       const options = { cache: 'no-store', credentials: 'same-origin', signal };
-      const query = pending && !fresh ? '?' + new URLSearchParams({ jobId: pending.jobId, week: pending.weekStart }) : '';
+      const query = polling ? '?' + new URLSearchParams({ jobId: pending.jobId, week: pending.weekStart }) : '';
       let response;
       try {
-        response = await fetch('/api/source-sync' + query, fresh ? {
+        response = await fetch('/api/source-sync' + query, !polling ? {
           ...options, method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(weekStart ? { weekStart } : {}),
+          body: JSON.stringify({ mode: fresh ? 'manual' : 'auto', ...(weekStart ? { weekStart } : {}) }),
         } : options);
       } catch (error) {
         if (signal.aborted || error?.name === 'AbortError' || error?.status === 401) throw error;
@@ -717,26 +722,49 @@ export const weeklyPage = String.raw`<!doctype html>
       const state = await readJson(response);
       if (signal.aborted) throw new DOMException('Source update stopped.', 'AbortError');
       if (!response.ok) throw new Error(state.error || 'The source update could not be checked.');
-      const expectedWeek = fresh ? weekStart : pending.weekStart;
-      const allowed = fresh ? ['running', 'complete', 'not-connected', 'archive', 'failed'] : ['running', 'complete', 'failed'];
+      const expectedWeek = polling ? pending.weekStart : weekStart || currentSourceSyncWeek();
+      const allowed = polling ? ['running', 'complete', 'failed'] : ['running', 'complete', 'not-connected', 'archive', 'failed'];
       if (!allowed.includes(state.status) || !validSourceSyncWeek(state.weekStart) ||
-          expectedWeek && state.weekStart !== expectedWeek || !fresh && state.jobId !== undefined && state.jobId !== pending.jobId) {
+          expectedWeek && state.weekStart !== expectedWeek || polling && state.jobId !== undefined && state.jobId !== pending.jobId) {
         throw new Error('The source update returned an unexpected reporting week or job.');
       }
-      const jobId = state.jobId ?? (!fresh ? pending.jobId : undefined);
+      const jobId = state.jobId ?? (polling ? pending.jobId : undefined);
       if (jobId !== undefined && !validSourceSyncJob(jobId)) throw new Error('The source update returned an invalid job reference.');
+      const phases = ['warming', 'starting', 'reading', 'complete', 'failed', 'saved', 'outside-hours'];
+      const phase = phases.includes(state.phase) ? state.phase : null;
+      const safeCode = typeof state.safeCode === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(state.safeCode) ? state.safeCode : null;
+      const retryAfterMs = Number.isFinite(state.retryAfterMs) ? Math.min(15000, Math.max(5000, state.retryAfterMs)) : 10000;
+      latestSourceSyncPhase = phase;
+      sourceSyncPollDelay = retryAfterMs;
+      const details = { phase, safeCode, retryAfterMs };
       if (state.status === 'running') {
         if (!jobId) throw new Error('The source update returned an invalid job reference.');
         const saved = storePendingSourceSync(jobId, state.weekStart);
-        onProgress();
-        return { ...saved, status: 'running', note: state.note };
+        onProgress(sourceSyncProgressText(details));
+        return { ...saved, ...details, status: 'running', note: state.note };
       }
       if (state.weekStart === readPendingSourceSync()?.weekStart) clearPendingSourceSync();
-      return { status: state.status, weekStart: state.weekStart, ...(jobId ? { jobId } : {}), note: state.note };
+      return { ...details, status: state.status, weekStart: state.weekStart, ...(jobId ? { jobId } : {}), note: state.note };
+    }
+    function sourceSyncProgressText(sync = {}) {
+      const phase = sync.phase || latestSourceSyncPhase;
+      if (phase === 'warming') return 'Waking Cropster connection in background';
+      if (phase === 'starting') return 'Starting Cropster website update in background';
+      return 'Cropster updating in background';
+    }
+    function scheduleSourceSyncPoll(reload, weekStart) {
+      clearTimeout(sourceSyncPollTimer);
+      sourceSyncPollTimer = null;
+      if (!pendingSourceSyncForWeek(weekStart)) return;
+      sourceSyncPollTimer = setTimeout(() => {
+        sourceSyncPollTimer = null;
+        if (!document.hidden) reload();
+      }, sourceSyncPollDelay);
     }
     function sourceSyncResultText(report, cropsterReport = report, sync) {
       if (sync?.checkUnavailable) return 'Cropster update status could not be checked. Other sources were rechecked.';
-      if (sync?.status === 'running' || sourceSyncIsRunning(cropsterReport)) return 'Cropster updating in background. Other sources were rechecked.';
+      if (sync?.status === 'running' || sourceSyncIsRunning(cropsterReport)) return sourceSyncProgressText(sync) + '. Other sources were rechecked.';
+      if (sync?.phase === 'saved' || sync?.phase === 'outside-hours') return (sync.note || 'Saved Cropster readings retain their capture times.') + ' Other sources were rechecked.';
       const summary = report?.sourceSync || report?.weekly?.sourceSync;
       if (sync?.status === 'failed' && !sync.jobId) return 'Cropster could not update. Previous readings are shown. Other sources were rechecked.';
       if (summary && ['complete', 'partial'].includes(summary.status) && typeof summary.message === 'string' && summary.message.trim()) return summary.message;
@@ -758,7 +786,8 @@ export const weeklyPage = String.raw`<!doctype html>
       else if (demand.previousKg === 0) fallback = 'Previous week had zero demand';
       renderComparison('demandChange', change && change[0].toUpperCase() + change.slice(1), fallback);
       renderCarryForward(demand, week);
-      showText('demandFlag', statusText(demand, 'Demand unavailable'));
+      const waiting = !Number.isFinite(demand.kg) && /The dated ROAST TALLY for this week is missing from the shared folder\./.test(demand.note || '');
+      showText('demandFlag', waiting ? 'Awaiting this week’s roast tally' : statusText(demand, 'Demand unavailable'));
       set('demandCurrentLabel', week.isCurrent ? 'This week' : 'Selected week');
       set('demandPreviousLabel', 'Previous week (' + previousRange + ')');
       set('demandDetail', weight(demand.kg, detailKg));
@@ -853,7 +882,7 @@ export const weeklyPage = String.raw`<!doctype html>
       else if (sync?.status === 'failed' || refresh.status === 'failed' && refresh.fetched !== true || productionSource?.status === 'failed') {
         state = 'failed'; message = 'Cropster update failed · ' + (captured ? 'previous reading shown · ' + stamp : 'no saved production reading available');
       } else if (sync?.status === 'running' || refresh.status === 'pending' || report.sourceSync?.jobStatus === 'running') {
-        state = 'pending'; message = 'Cropster updating in background · ' + stamp;
+        state = 'pending'; message = sourceSyncProgressText(sync || refresh) + ' · ' + stamp;
       }
       showText('productionCapture', message);
       el('productionCapture').dataset.state = state;
@@ -1009,7 +1038,8 @@ export const weeklyPage = String.raw`<!doctype html>
       set('expensesPeriod', week.isCurrent ? 'Week to date' : 'Week of ' + dateLabel(week.start));
       set('expensesValue', expenseMoney(value, expenses));
       el('expensesValue').classList.toggle('over-limit', overLimit);
-      showText('expensesFlag', overLimit ? 'Over $18,900' : !Number.isFinite(value) ? 'Expenses unavailable' : '');
+      showText('expensesFlag', overLimit ? 'Over $18,900' : !Number.isFinite(value)
+        ? expenses.note === 'No expenses have been entered for the selected week.' ? 'Not entered for this week' : 'Expenses unavailable' : '');
       el('expensesFlag').classList.toggle('over-limit', overLimit);
       set('expensesMonday', 'Monday · ' + dateLabel(week.start));
       set('expensesCurrency', expenses.currency === 'AUD' ? 'Amounts in AUD.' : 'Amounts use $ as recorded in the sheet.');
@@ -1339,7 +1369,7 @@ export const weeklyPage = String.raw`<!doctype html>
         el('status').classList.remove('error');
       }
       try {
-        const sync = await coordinateSourceSync(weekToLoad || undefined, controller.signal, () => set('status', 'Cropster updating in background…'), { fresh });
+        const sync = await coordinateSourceSync(weekToLoad || undefined, controller.signal, text => set('status', text + '…'), { fresh });
         if (currentRequest !== controller || !signedIn) return;
         const query = new URLSearchParams();
         if (weekToLoad) query.set('week', weekToLoad);
@@ -1392,6 +1422,7 @@ export const weeklyPage = String.raw`<!doctype html>
           el('refresh').disabled = false;
           set('refresh', 'Refresh');
           currentRequest = null;
+          scheduleSourceSyncPoll(() => load(false), weekToLoad || undefined);
         }
       }
     }

@@ -103,12 +103,49 @@ function runtime(view, fetcher, timer = clock(), selectedWeek = "", storage = ne
 }
 
 for (const view of views) {
+  test(view.name + " discovers a shared cold-start job on an ordinary page load without a local reference", async () => {
+    const app = runtime(view, async (address, options) => {
+      const url = new URL(address, "https://dashboard.test");
+      if (url.pathname === "/api/source-sync") {
+        assert.equal(options.method, "POST");
+        assert.deepEqual(JSON.parse(options.body), {mode: "auto"});
+        return response({status: "running", phase: "warming", jobId, weekStart: week, retryAfterMs: 5000});
+      }
+      assert.equal(url.pathname, view.path);
+      assert.equal(url.searchParams.get("sourceSyncJob"), jobId);
+      assert.equal(url.searchParams.has("refresh"), false, "An automatic discovery must not force every other cache");
+      return response(fixtureReport(view));
+    });
+    await app.load(false);
+    assert.equal(app.state.rendered, 1);
+    assert.equal(app.pending().jobId, jobId);
+    assert.match(app.el("status").textContent, /Waking Cropster connection/);
+    assert.deepEqual([...app.timer.pending.values()].map(item => item.duration), [5000]);
+    assert.equal(app.el("qa").value, "Unsaved meeting draft");
+  });
+
+  test(view.name + " accepts an automatic not-due result without attaching a reader job or claiming a new capture", async () => {
+    const app = runtime(view, async (address, options) => {
+      const url = new URL(address, "https://dashboard.test");
+      if (url.pathname === "/api/source-sync") return response({status: "complete", phase: "saved", weekStart: week,
+        note: "Saved Cropster readings retain their capture times."});
+      assert.equal(url.searchParams.has("sourceSyncJob"), false);
+      return response(fixtureReport(view));
+    });
+    await app.load(false);
+    assert.equal(app.state.rendered, 1);
+    assert.equal(app.pending(), null);
+    assert.equal(app.timer.pending.size, 0);
+    assert.match(app.el("status").textContent, /Saved Cropster readings retain their capture times/);
+    assert.doesNotMatch(app.el("status").textContent, /All connected sources were updated/);
+  });
+
   test(view.name + " immediately reads cards after starting a background job", async () => {
     const app = runtime(view, async (address, options, context) => {
       const url = new URL(address, "https://dashboard.test");
       if (options.method === "POST") {
         assert.equal(url.pathname, "/api/source-sync");
-        assert.deepEqual(JSON.parse(options.body), view.kind === "weekly" ? {weekStart: week} : {});
+        assert.deepEqual(JSON.parse(options.body), view.kind === "weekly" ? {mode: "manual", weekStart: week} : {mode: "manual"});
         return response({status: "running", jobId, weekStart: week, pollUrl: "https://untrusted.test/ignore"});
       }
       assert.equal(url.pathname, view.path);
@@ -120,7 +157,7 @@ for (const view of views) {
     }, clock(), view.kind === "weekly" ? week : "");
     await app.load(true, {fresh: true});
     assert.equal(app.calls.length, 2, "No blocking GET polling before the first report");
-    assert.deepEqual(app.timer.durations, [90000]);
+    assert.deepEqual(app.timer.durations, [90000, 10000]);
     assert.ok(app.calls.every(call => call.options.signal === app.calls[0].options.signal));
     assert.equal(app.state.rendered, 1);
     assert.equal(app.el("refresh").disabled, false);
@@ -237,7 +274,7 @@ for (const view of views) {
     assert.equal(app.calls.length, 2);
     assert.equal(app.state.rendered, 1);
     assert.equal(app.el("refresh").disabled, false);
-    assert.equal(timer.pending.size, 0);
+    assert.deepEqual([...timer.pending.values()].map(item => item.duration), [10000], "Only the bounded next-job poll remains");
   });
 
   test(view.name + " lets manual Refresh supersede a slow automatic pending-job request", async () => {
@@ -263,7 +300,7 @@ for (const view of views) {
     assert.match(app.el("status").textContent, /updating in background/);
     assert.equal(app.el("weekNoteInput").value, "Unsaved meeting draft");
     assert.equal(app.el("refresh").disabled, false);
-    assert.equal(timer.pending.size, 0);
+    assert.deepEqual([...timer.pending.values()].map(item => item.duration), [10000], "Only the bounded next-job poll remains");
   });
 
   test(view.name + " rechecks other cards and retains the Cropster reference when the pending status connection fails", async () => {
@@ -383,7 +420,7 @@ test("all three pages use the same background job reference validation and coord
   assert.doesNotMatch(implementations[0], /while\s*\(/);
 });
 
-test("malformed, expired and future-dated stored references never cause a status request", async () => {
+test("malformed, expired and future-dated stored references are rediscovered safely without polling their untrusted IDs", async () => {
   const timer = clock();
   const valid = {jobId, weekStart: week, startedAt: timer.Date.now()};
   for (const raw of [
@@ -395,12 +432,19 @@ test("malformed, expired and future-dated stored references never cause a status
     JSON.stringify({...valid, extra: "unexpected"}),
   ]) {
     const storage = new Map([["bmc-dashboard-cropster-source-job-v1", raw]]);
-    const app = runtime(views[0], async address => {
-      assert.equal(new URL(address, "https://dashboard.test").pathname, views[0].path);
+    const app = runtime(views[0], async (address, options) => {
+      const url = new URL(address, "https://dashboard.test");
+      if (url.pathname === "/api/source-sync") {
+        assert.equal(options.method, "POST");
+        assert.equal(url.searchParams.has("jobId"), false);
+        assert.deepEqual(JSON.parse(options.body), {mode: "auto"});
+        return response({status: "complete", phase: "saved", weekStart: week});
+      }
+      assert.equal(url.pathname, views[0].path);
       return response(fixtureReport(views[0]));
     }, timer, "", storage);
     await app.load(false);
-    assert.equal(app.calls.length, 1);
+    assert.equal(app.calls.length, 2);
     assert.equal(app.pending(), null);
     assert.equal(storage.size, 0);
     assert.deepEqual(app.timer.durations.slice(-1), [30000]);

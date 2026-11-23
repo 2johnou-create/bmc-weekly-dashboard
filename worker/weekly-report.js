@@ -218,7 +218,7 @@ export async function collectWeeklyReport({ weekStart, stockroomCookie, env, now
   // Check Stockroom access before reading other business data.
   const inventory = await fetchSourceJson(SOURCE_ORIGINS.stockroom + "/api/inventory", stockroomHeaders, fetcher);
   const demandOptions = { fetch: fetcher, now: () => now.getTime(), fresh };
-  const cropsterReading = cropsterResult ? Promise.resolve(cropsterResult) : historical ? readCropsterFriday(env.DB, week.start) :
+  const cropsterReading = cropsterResult ? Promise.resolve(typeof cropsterResult === 'function' ? cropsterResult() : cropsterResult) : historical ? readCropsterFriday(env.DB, week.start) :
     readCurrentCropster({ env, weekStart: week.start, followingWeekStart: addDays(week.start, 7), now, fetcher, fresh: syncWebsite && (fresh || Boolean(sourceSyncJob)), jobId: sourceSyncJob });
   const [{ production, green, refresh: cropsterRefresh }, mondayReading, stock, expenses, purchases, [weekDemand, previousDemand, dispatch, previousDispatch]] = await Promise.all([
     cropsterReading,

@@ -15,6 +15,22 @@ test("readable partial app data is distinguished from a failed connection", () =
   assert.doesNotMatch(summary.message, /All card sources updated/);
 });
 
+test("missing tally and unentered expenses await source input while transport errors still fail", () => {
+  const report = note => sourceSyncSummary({weekly: {metrics: {
+    demand: {status: "partial", kg: null, previousKg: 100, note},
+    expenses: {status: "unavailable", value: null, note: "No expenses have been entered for the selected week."},
+  }}});
+  const waiting = report("The dated ROAST TALLY for this week is missing from the shared folder.");
+  assert.equal(waiting.sources.find(source => source.id === "demand").status, "awaiting-data");
+  assert.equal(waiting.sources.find(source => source.id === "expenses").status, "awaiting-data");
+  assert.match(waiting.message, /2 awaiting source entries/);
+  const unreachable = report("The shared roast tally folder could not be reached. Try refreshing.");
+  assert.equal(unreachable.sources.find(source => source.id === "demand").status, "failed");
+  const failed = sourceSyncSummary({weekly: {metrics: {demand: {status: "unavailable", kg: null,
+    note: "The shared roast tally folder could not be reached. Try refreshing."}}}});
+  assert.equal(failed.sources.find(source => source.id === "demand").status, "failed");
+});
+
 test("late progress and transport failures cannot regress a completed sync log", async () => {
   const db = localDatabase(":memory:");
   const id = crypto.randomUUID(), week = "2026-11-16", now = new Date("2026-11-20T00:00:00Z");
