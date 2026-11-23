@@ -52,15 +52,21 @@ function quoteResult(data, strip, now) {
   const matches = data.filter(row => row?.marketStrip === strip);
   if (matches.length !== 1) throw new Error("Missing exchange front quote.");
   const row = matches[0];
-  if (!Number.isFinite(row.lastPrice) || row.lastPrice <= 0 || row.lastPrice > 1_000_000 || !Number.isSafeInteger(row.marketId) || row.marketId <= 0) throw new Error("Invalid exchange quote.");
+  if (!Number.isSafeInteger(row.marketId) || row.marketId <= 0) throw new Error("Invalid exchange market.");
+  const year = strip.slice(3);
+  const contract = `KC${monthCodes[strip.slice(0, 3)]}${year} · ${strip.slice(0, 3)} 20${year}`;
+  const sourceUrl = `${SOURCE_URL}?marketId=${row.marketId}`;
+  if (row.lastPrice === null && row.lastTime === null && row.volume === 0) {
+    return { ...unavailable(), status:"awaiting-trade", contract, sourceUrl,
+      note:"ICE reports zero trading volume and has not published a last trade for this contract in the current session." };
+  }
+  if (!Number.isFinite(row.lastPrice) || row.lastPrice <= 0 || row.lastPrice > 1_000_000) throw new Error("Invalid exchange quote.");
   const timestamp = quoteTimestamp(row.lastTime);
   if (timestamp > now.getTime() + 60_000) throw new Error("Exchange quote is in the future.");
-  const year = strip.slice(3);
   return {
     status: now.getTime() - timestamp > STALE_MS ? "stale" : "delayed",
     price: row.lastPrice, currency: "USD", unit: "US¢/lb", asOf: new Date(timestamp).toISOString(),
-    contract: `KC${monthCodes[strip.slice(0, 3)]}${year} · ${strip.slice(0, 3)} 20${year}`,
-    delayMinutes: 15, marketStatus: "unknown", sourceUrl: `${SOURCE_URL}?marketId=${row.marketId}`,
+    contract, delayMinutes: 15, marketStatus: "unknown", sourceUrl,
     change: null, changePercent: Number.isFinite(row.change) ? row.change : null,
     note: "ICE quote delayed at least 15 minutes. The front contract rolls after its New York last trading date. Market-open status is unavailable.",
   };
@@ -100,6 +106,7 @@ export async function readCoffeeC({ now = new Date(), fetcher = fetch, fresh = f
   if (!state) { state = { sequence: 0, entry: null }; cache.set(fetcher, state); }
   const cached = state.entry;
   if (!fresh && cached && cached.tradeDate === newYorkDay.format(now) && now.getTime() >= cached.fetchedAt && now.getTime() - cached.fetchedAt < CACHE_MS) {
+    if (cached.value.status === 'awaiting-trade') return {...cached.value};
     return { ...cached.value, status: now.getTime() - Date.parse(cached.value.asOf) > STALE_MS ? "stale" : "delayed" };
   }
   const sequence = ++state.sequence;

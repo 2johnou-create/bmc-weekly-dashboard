@@ -591,7 +591,7 @@ export const roasteryLabPage = String.raw`<!doctype html>
         : 'Last traded price. Quote delay unconfirmed.';
       const market = quote.marketStatus === 'closed' ? 'Market closed. ' : '';
       const stale = quote.status === 'stale' ? 'Last available quote. ' : '';
-      el('coffeeCTiming').textContent = available ? market + stale + delay : 'Quote unavailable';
+      el('coffeeCTiming').textContent = available ? market + stale + delay : quote.status === 'awaiting-trade' ? 'Awaiting first trade' : 'Quote unavailable';
       const timestamp = dateText(quote.asOf, timeFormat);
       el('coffeeCAsOf').textContent = timestamp ? 'As of ' + timestamp + ' Sydney time' : 'Trade time unavailable';
       el('coffeeCNote').textContent = quote.note || '';

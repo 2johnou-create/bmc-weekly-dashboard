@@ -913,7 +913,7 @@ export const warehousePage = String.raw`<!doctype html>
       const movements = [];
       if (Number.isFinite(q.change)) movements.push((q.change > 0 ? "+" : "") + precise.format(q.change) + " US¢/lb");
       if (Number.isFinite(q.changePercent)) movements.push(change(q.changePercent));
-      const timing = q.status === "unavailable" ? "Quote unavailable." : (q.marketStatus === "closed" ? "Market closed. " : "") + (q.status === "stale" ? "Last available quote. " : "") + (Number.isFinite(q.delayMinutes) && q.delayMinutes > 0 ? "Delayed at least " + num(q.delayMinutes) + " minutes." : "Quote delay unconfirmed.");
+      const timing = q.status === "awaiting-trade" ? "Awaiting first trade." : q.status === "unavailable" ? "Quote unavailable." : (q.marketStatus === "closed" ? "Market closed. " : "") + (q.status === "stale" ? "Last available quote. " : "") + (Number.isFinite(q.delayMinutes) && q.delayMinutes > 0 ? "Delayed at least " + num(q.delayMinutes) + " minutes." : "Quote delay unconfirmed.");
       return section("ICE Coffee C", quote, note(movements.join(" / ")), q.contract ? note("Contract " + q.contract) : null, note(timing), source(q, "Last traded quote", q.sourceUrl), metricNote(q));
     }
     function purchaseAmount(event) {

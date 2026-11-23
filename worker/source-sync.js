@@ -60,7 +60,7 @@ export function sourceSyncSummary({ weekly, lab, packing, weather }, { historica
         ? "Calendar loaded; rows with missing or invalid order dates are excluded."
         : metric?.note || "This part of the planning workbook is unavailable.")).join(" ");
     sources.push(source("planning", "Green buy, purchases and contracts workbook", planningStatus, lab.purchases?.asOf, planningNote));
-    sources.push(source("coffee-c", "Coffee C market quote", state(readable(lab.coffeeC)), lab.coffeeC?.asOf));
+    sources.push(source("coffee-c", "Coffee C market quote", lab.coffeeC?.status === "awaiting-trade" ? "awaiting-data" : metricState(lab.coffeeC), lab.coffeeC?.asOf));
     sources.push(source("qa-releases", "QA notes and release plan", state(Boolean(lab.settings) && lab.settings.status !== "unavailable"), lab.settings?.updatedAt));
   }
   if (packing) sources.push(source("packing", "Stock Take packing rate", metricState(packing), packing.asOf, packing.note));

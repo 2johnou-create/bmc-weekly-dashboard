@@ -132,3 +132,20 @@ test("An old Coffee C request's success or failure cannot overwrite a newer forc
     assert.equal(quoteCalls, 2);
   }
 });
+
+test('the verified front contract can be awaiting a trade, including on cache hits, without a zero price',async()=>{
+  const empty={...quote,lastPrice:null,lastTime:null,volume:0,change:0};
+  const {fetcher,calls}=fixture([empty]);
+  for (let i=0;i<2;i++) {
+    const q=await readCoffeeC({now,fetcher});
+    assert.equal(q.status,'awaiting-trade');assert.equal(q.price,null);assert.equal(q.changePercent,null);
+    assert.equal(q.asOf,null);assert.match(q.contract,/KCZ26/);
+    const {sourceSyncSummary}=await import('../worker/source-sync.js');
+    const status=sourceSyncSummary({lab:{coffeeC:q}}).sources.find(x=>x.id==='coffee-c');
+    assert.equal(status.status,'awaiting-data');
+  }
+  assert.equal(calls.length,2);
+  for (const wrong of [{volume:1},{lastTime:quote.lastTime},{marketId:null}]) {
+    assert.equal((await readCoffeeC({now,fetcher:fixture([{...empty,...wrong}]).fetcher})).status,'unavailable');
+  }
+});
