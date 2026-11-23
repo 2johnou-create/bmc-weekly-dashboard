@@ -35,6 +35,46 @@ test("timeout diagnostics return only structural classifications and bounded fla
   } finally { globalThis.document = originalDocument; globalThis.location = originalLocation; }
 });
 
+test("schedule failure diagnostics count status structure without exposing source text or classes", () => {
+  const originalDocument = globalThis.document, originalLocation = globalThis.location;
+  const tile = statuses => ({ innerText: "private coffee 49 kg", closest: () => statuses === null ? null : ({
+    className: "private-class-must-not-be-returned",
+    classList: { contains: value => statuses.some(status => value === "calendar__item--" + status) },
+  }) });
+  const tiles = [tile(["scheduled"]), tile(["synced", "roasted"]), tile(["inconsistent"]), tile([]), tile(null)];
+  const cells = [{}, ...[2, 3, 0, 0, 0, 0, 0].map(count => ({ querySelectorAll: () => tiles.slice(0, count) }))];
+  try {
+    globalThis.document = {
+      readyState: "complete", body: { innerText: "Scheduled coffees Summary per green lot Show 1 - 5 of 5 private coffee 49 kg" },
+      querySelector: () => null,
+      querySelectorAll: selector => selector === "table thead" ? [{ innerText: "To roast" }]
+        : selector === "table" ? [{}, {}, {}]
+        : selector === ".calendar__item__main" ? tiles
+        : selector === ".calendar--week__row--main" ? [{ children: cells }] : [],
+    };
+    globalThis.location = { origin: "https://c-sar.cropster.com", pathname: "/apps/roast/schedule/calendar/week" };
+    const diagnostics = viewDiagnostics({ kind: "schedule", expectedPath: location.pathname });
+    assert.equal(diagnostics.scheduleTileCount, 5);
+    assert.equal(diagnostics.scheduleUnknownStatusCount, 2);
+    assert.equal(diagnostics.scheduleMissingParentCount, 1);
+    assert.equal(diagnostics.scheduleMultipleStatusCount, 1);
+    assert.deepEqual(diagnostics.scheduleStatusCounts, { unpublished: 0, scheduled: 1, synced: 1, roasted: 1, inconsistent: 1 });
+    assert.deepEqual(diagnostics.calendarCellCounts, [8]);
+    assert.deepEqual(diagnostics.calendarDayTileCounts, [[2, 3, 0, 0, 0, 0, 0]]);
+    const safe = safeProgress({ stage: "weekly_schedule_week", state: "failed", phase: "parse", diagnostics: {
+      ...diagnostics, scheduleStatusCounts: { ...diagnostics.scheduleStatusCounts, secret: "private" },
+    } });
+    assert.deepEqual(safe.diagnostics.scheduleStatusCounts, diagnostics.scheduleStatusCounts);
+    assert.deepEqual(safe.diagnostics.calendarDayTileCounts, diagnostics.calendarDayTileCounts);
+    assert.doesNotMatch(JSON.stringify(safe), /private|49|kg|className|https:/);
+    assert.equal(safeProgress({ stage: "weekly_monday", state: "failed", phase: "parse", diagnostics }).diagnostics.scheduleTileCount, undefined);
+    const invalid = safeProgress({ stage: "weekly_schedule_0", state: "failed", phase: "parse", diagnostics: {
+      scheduleTileCount: 10001, scheduleStatusCounts: { roasted: -1 }, calendarCellCounts: [31], calendarDayTileCounts: [["secret"]],
+    } });
+    assert.equal(invalid.diagnostics, undefined);
+  } finally { globalThis.document = originalDocument; globalThis.location = originalLocation; }
+});
+
 test("readiness and diagnostics agree on multiline rendered body and table headings", () => {
   const originalDocument = globalThis.document, originalLocation = globalThis.location;
   const cases = [

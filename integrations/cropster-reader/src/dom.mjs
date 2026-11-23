@@ -25,7 +25,8 @@ export function renderedViewReady(kind) {
 }
 
 // Structural failure evidence only. Never return titles, URLs, body strings,
-// field values or any source quantities from this diagnostic.
+// field values or any business quantities from this diagnostic. Bounded counts
+// describe rendered elements and known status classes only.
 export function viewDiagnostics({ kind, expectedPath }) {
   const compact = value => (value || "").replace(/\s+/g, " ").trim();
   const body = compact(document.body?.innerText);
@@ -42,6 +43,30 @@ export function viewDiagnostics({ kind, expectedPath }) {
   else if (kind === "stock") { expectedBody = /Values refer to (?:the )?inventory on/.test(body); expectedHeaders = /Location/.test(headings) && /Total value/.test(headings); }
   else if (kind === "schedule") { expectedBody = /Scheduled coffees/.test(body) && /Summary per green lot/.test(body); expectedHeaders = /To roast/.test(headings); }
   else { expectedBody = /Production report/.test(body); expectedHeaders = /Amount of green/.test(headings); }
+  let scheduleStructure;
+  if (kind === "schedule") {
+    const statuses = ["unpublished", "scheduled", "synced", "roasted", "inconsistent"];
+    const tiles = Array.from(document.querySelectorAll(".calendar__item__main")).slice(0, 10000);
+    const counts = Object.fromEntries(statuses.map(status => [status, 0]));
+    let missingParent = 0, unknown = 0, multiple = 0;
+    for (const tile of tiles) {
+      const item = tile.closest?.(".calendar__item");
+      if (!item) missingParent++;
+      const found = statuses.filter(status => item?.classList?.contains("calendar__item--" + status));
+      for (const status of found) counts[status]++;
+      if (!found.length) unknown++;
+      if (found.length > 1) multiple++;
+    }
+    const rows = Array.from(document.querySelectorAll(".calendar--week__row--main")).slice(0, 20);
+    scheduleStructure = {
+      scheduleTileCount: tiles.length, scheduleMissingParentCount: missingParent,
+      scheduleUnknownStatusCount: unknown, scheduleMultipleStatusCount: multiple,
+      scheduleStatusCounts: counts, calendarRowCount: rows.length,
+      calendarCellCounts: rows.map(row => Math.min(row.children.length, 30)),
+      calendarDayTileCounts: rows.map(row => Array.from(row.children).slice(1, 9)
+        .map(cell => Math.min(cell.querySelectorAll(".calendar__item__main").length, 10000))),
+    };
+  }
   return {
     urlClass, sameOrigin,
     readyState: document.readyState,
@@ -54,6 +79,7 @@ export function viewDiagnostics({ kind, expectedPath }) {
     emptySchedule: ["No coffees scheduled", "No profiles scheduled", "No green lots scheduled"].every(marker => body.includes(marker)),
     challenge: Boolean(document.querySelector('iframe[src*="recaptcha"],iframe[src*="hcaptcha"]')) || /checking your browser|verify you are human/i.test(body),
     accessDenied: /access denied|you have been blocked|not authorized|forbidden/i.test(body),
+    ...scheduleStructure,
   };
 }
 

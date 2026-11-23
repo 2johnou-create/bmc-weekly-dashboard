@@ -16,6 +16,24 @@ export function safeProgress(input, now = () => new Date()) {
     for (const key of ["tableCount", "loadingCount", "errorPanelCount", "pageErrorCount", "failedScriptCount"]) {
       if (Number.isInteger(input.diagnostics[key]) && input.diagnostics[key] >= 0 && input.diagnostics[key] <= 30) flags[key] = input.diagnostics[key];
     }
+    if (/^weekly_schedule(?:_verify)?_/.test(input.stage)) {
+      const bounded = (value, max) => Number.isInteger(value) && value >= 0 && value <= max;
+      for (const key of ["scheduleTileCount", "scheduleMissingParentCount", "scheduleUnknownStatusCount", "scheduleMultipleStatusCount"]) {
+        if (bounded(input.diagnostics[key], 10000)) flags[key] = input.diagnostics[key];
+      }
+      if (bounded(input.diagnostics.calendarRowCount, 20)) flags.calendarRowCount = input.diagnostics.calendarRowCount;
+      if (input.diagnostics.scheduleStatusCounts && typeof input.diagnostics.scheduleStatusCounts === "object") {
+        const counts = {};
+        for (const status of ["unpublished", "scheduled", "synced", "roasted", "inconsistent"]) {
+          if (bounded(input.diagnostics.scheduleStatusCounts[status], 10000)) counts[status] = input.diagnostics.scheduleStatusCounts[status];
+        }
+        if (Object.keys(counts).length) flags.scheduleStatusCounts = counts;
+      }
+      const cells = input.diagnostics.calendarCellCounts;
+      if (Array.isArray(cells) && cells.length <= 20 && cells.every(count => bounded(count, 30))) flags.calendarCellCounts = [...cells];
+      const days = input.diagnostics.calendarDayTileCounts;
+      if (Array.isArray(days) && days.length <= 20 && days.every(row => Array.isArray(row) && row.length <= 8 && row.every(count => bounded(count, 10000)))) flags.calendarDayTileCounts = days.map(row => [...row]);
+    }
     if (Object.keys(flags).length) event.diagnostics = flags;
   }
   return event;

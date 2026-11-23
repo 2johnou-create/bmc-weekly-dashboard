@@ -165,7 +165,7 @@ function batchRows(tiles, states, date) {
   if (!Array.isArray(tiles) || !Array.isArray(states) || tiles.length !== states.length) throw new ReaderError("CROPSTER_BATCH_STATUS_UNVERIFIED");
   return tiles.map((tile, index) => {
     const status = states[index];
-    if (!["unpublished", "scheduled", "synced", "roasted"].includes(status)) throw new ReaderError("CROPSTER_BATCH_STATUS_UNVERIFIED");
+    if (!["unpublished", "scheduled", "synced", "roasted", "inconsistent"].includes(status)) throw new ReaderError("CROPSTER_BATCH_STATUS_UNVERIFIED");
     const lines = trim(tile).split(/\n+/).map(compact).filter(Boolean);
     const weight = lines.shift()?.match(new RegExp("^(.+)\\s+(" + numeric + ")\\s*kg$"));
     const kg = weight ? number(weight[2]) : null;
@@ -174,6 +174,12 @@ function batchRows(tiles, states, date) {
     return { kg, status, lotIds: ids, profileName: weight[1], date };
   });
 }
+
+// Cropster defines Inconsistent as already roasted with a different lot or
+// weight than scheduled. Keep that status for provenance; actual production
+// still comes only from the Production report, never these schedule weights.
+// https://help.cropster.com/en_US/order-and-production-management/setting-up-a-roast-schedule
+const completedBatch = row => row.status === "roasted" || row.status === "inconsistent";
 
 function parsePendingTables(snapshot, remainingHeader, totalHeader, outputHeader, batches) {
   const coffees = tableWith(snapshot, ["profile", "type", remainingHeader, totalHeader]);
@@ -221,7 +227,7 @@ function parsePendingTables(snapshot, remainingHeader, totalHeader, outputHeader
     lotKg.set(id, (lotKg.get(id) || 0) + kg);
   }
   if (!close(greenKg, sum([...lotKg.values()]))) throw new ReaderError("CROPSTER_SCHEDULE_AMBIGUOUS");
-  const batchGreenKg = sum(batches.filter(row => row.status !== "roasted").map(row => row.kg));
+  const batchGreenKg = sum(batches.filter(row => !completedBatch(row)).map(row => row.kg));
   const totalGreenKg = sum(batches.map(row => row.kg));
   const summaryTotal = coffees.rows.map(row => kilograms(row[coffees.index(totalHeader)]));
   // A repeating schedule's coffee-level Total # of batches is a lifetime
@@ -229,12 +235,22 @@ function parsePendingTables(snapshot, remainingHeader, totalHeader, outputHeader
   const profiles = tableWith(snapshot, ["profile", "# of batches", remainingHeader, totalHeader]);
   if (!completeTable(snapshot, profiles)) throw new ReaderError("CROPSTER_TABLE_INCOMPLETE");
   const profileTotal = profiles.rows.map(row => kilograms(row[profiles.index(totalHeader)]));
-  const profilePending = new Map();
+  const profilePending = new Map(), profileUsed = new Map(), profileScheduled = new Map();
+  const inconsistentProfiles = new Set(batches.filter(row => row.status === "inconsistent").map(row => row.profileName));
+  const usedHeader = remainingHeader.replace(/to roast$/i, "used");
+  if (inconsistentProfiles.size && profiles.index(usedHeader) < 0) throw new ReaderError("CROPSTER_BATCH_STATUS_UNVERIFIED");
   for (const row of profiles.rows) {
     const name = compact(row[profiles.index("profile")]).replace(/\s+\(\d+(?:\.\d+)?\)(?:\s*-\s*[^()]+)?$/, "");
     const pendingText = trim(row[profiles.index(remainingHeader)]), pendingKg = pendingText ? kilograms(pendingText) : 0;
     if (!name || pendingKg === null) throw new ReaderError("CROPSTER_SCHEDULE_AMBIGUOUS");
     profilePending.set(name, (profilePending.get(name) || 0) + pendingKg);
+    if (inconsistentProfiles.has(name)) {
+      const usedText = trim(row[profiles.index(usedHeader)]), usedKg = usedText ? kilograms(usedText) : 0;
+      const totalKg = kilograms(row[profiles.index(totalHeader)]);
+      if (usedKg === null || totalKg === null || !close(usedKg + pendingKg, totalKg)) throw new ReaderError("CROPSTER_SCHEDULE_AMBIGUOUS");
+      profileUsed.set(name, (profileUsed.get(name) || 0) + usedKg);
+      profileScheduled.set(name, (profileScheduled.get(name) || 0) + totalKg);
+    }
   }
   const summaryCounts = profiles.rows.map(row => {
     const counts = trim(row[profiles.index("# of batches")]).split(/\n+/).map(line => compact(line).match(new RegExp("^(\\d+)\\s*x\\s*" + numeric + "\\s*kg$"))?.[1]);
@@ -243,7 +259,12 @@ function parsePendingTables(snapshot, remainingHeader, totalHeader, outputHeader
   if (summaryCounts.some(count => !Number.isSafeInteger(count)) || sum(summaryCounts) !== batches.length
     || profileTotal.some(kg => kg === null) || !close(sum(profileTotal), totalGreenKg)
     || summaryTotal.some(kg => kg === null) || !close(sum(summaryTotal), totalGreenKg) || !close(greenKg, batchGreenKg)) throw new ReaderError("CROPSTER_SCHEDULE_AMBIGUOUS");
-  const pending = batches.filter(row => row.status !== "roasted"), known = new Map();
+  const pending = batches.filter(row => !completedBatch(row)), known = new Map();
+  for (const name of inconsistentProfiles) {
+    const matching = batches.filter(row => row.profileName === name);
+    if (!profileUsed.has(name) || !close(profileUsed.get(name), sum(matching.filter(completedBatch).map(row => row.kg)))
+      || !close(profileScheduled.get(name), sum(matching.map(row => row.kg)))) throw new ReaderError("CROPSTER_SCHEDULE_AMBIGUOUS");
+  }
   for (const [name, kg] of profilePending) if (!close(kg, sum(pending.filter(row => row.profileName === name).map(row => row.kg)))) throw new ReaderError("CROPSTER_SCHEDULE_AMBIGUOUS");
   if (pending.some(row => !profilePending.has(row.profileName))) throw new ReaderError("CROPSTER_SCHEDULE_AMBIGUOUS");
   for (const [name, kg] of componentKg) if (!close(kg, sum(pending.filter(row => row.profileName === name).map(row => row.kg)))) throw new ReaderError("CROPSTER_SCHEDULE_AMBIGUOUS");

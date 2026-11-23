@@ -2,6 +2,8 @@
 
 This is a **separate Apps Script project** from the existing read-only Expenses bridge. It does not change that bridge or its permissions. It runs as `roaster@blackmarketroasters.com.au`, checks matching Roast Schedule messages every five minutes, and makes their verified weekly tally available in the dashboard's fixed shared folder.
 
+Prepared project: [BMC Roast Schedule Intake](https://script.google.com/home/projects/1NMdtubP9JyRAQU3Y1HB_Dp689b4LMKBwZEpCAYOVnuh0D4qx8jeqQVng/edit). On23November, Code.gs was saved, but the manifest, OAuth grant and trigger were **not activated**. Approval review stopped the manifest save pending the user's explicit approval for the scopes below and the existing folder's sharing. Reuse this project after approval; do not create another one or change the Expenses project.
+
 The actual verified source flow is **Black Market Coffee `<info@blackmarketroasters.com.au>`**, subject **`Roast Schedule - 16/11/2026`**, with a **HERE link to a Google Sheet**. Other attachments in that message are client orders. The intake therefore supports the linked-sheet flow and ignores unrelated order attachments. It does not assume the display name “Emily” identifies a sender.
 
 ## What it does
