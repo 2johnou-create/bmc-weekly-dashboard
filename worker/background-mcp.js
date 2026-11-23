@@ -1,4 +1,5 @@
 import { coordinateDashboardSync } from './source-coordinator.js';
+import { privateTallyTool, saveVerifiedTally } from './private-tally.js';
 import { dashboardWeek, validDate, mondayOf } from './metrics.js';
 
 // Sites verifies MCP identity before forwarding these headers. Public dashboard
@@ -17,6 +18,7 @@ const tools = [
   {name: 'check_dashboard_sync', description: 'Advance and check a saved dashboard update. Reuse its jobId and weekStart until status is complete or failed. Completed results remain available after the temporary reader record expires. Returns progress only.',
     inputSchema: {type:'object', properties:{jobId:{type:'string', pattern:uuid.source}, weekStart:{type:'string', pattern:'^20[0-9]{2}-[0-9]{2}-[0-9]{2}$'}}, required:['jobId'], additionalProperties:false},
     annotations: {readOnlyHint:false, destructiveHint:false, idempotentHint:true, openWorldHint:true}},
+  privateTallyTool,
 ];
 
 async function inputJson(request) {
@@ -59,8 +61,8 @@ export async function handleDashboardMcp(request, env, {coordinate = coordinateD
   const fail = (code, message, status = 200) => response({jsonrpc:'2.0', id, error:{code,message}}, status);
   const ok = result => response({jsonrpc:'2.0', id, result});
   if (!plain(input) || input.jsonrpc !== '2.0' || typeof input.method !== 'string') return fail(-32600,'Invalid MCP request.',400);
-  if (input.method === 'server/discover') return ok({supportedVersions:versions, capabilities:{tools:{}}, serverInfo:{name:'BMC Weekly Dashboard',version:'42'}});
-  if (input.method === 'initialize') return ok({protocolVersion:versions.includes(input.params?.protocolVersion) ? input.params.protocolVersion : versions[0], capabilities:{tools:{}}, serverInfo:{name:'BMC Weekly Dashboard',version:'42'}});
+  if (input.method === 'server/discover') return ok({supportedVersions:versions, capabilities:{tools:{}}, serverInfo:{name:'BMC Weekly Dashboard',version:'45'}});
+  if (input.method === 'initialize') return ok({protocolVersion:versions.includes(input.params?.protocolVersion) ? input.params.protocolVersion : versions[0], capabilities:{tools:{}}, serverInfo:{name:'BMC Weekly Dashboard',version:'45'}});
   if (input.method === 'notifications/initialized') return new Response(null,{status:204});
   if (input.method === 'ping') return ok({});
   if (input.method === 'tools/list') return ok({tools});
@@ -69,6 +71,12 @@ export async function handleDashboardMcp(request, env, {coordinate = coordinateD
   if (!owner || owner.trim().toLowerCase() !== OWNER_EMAIL) return fail(-32001,'Only the dashboard owner can run source updates.',403);
   if (id === null || !plain(input.params) || !tools.some(tool=>tool.name===input.params.name)) return fail(-32602,'Choose a supported source-update tool.');
   const args = input.params.arguments ?? {};
+  if (input.params.name === privateTallyTool.name) {
+    try {
+      const saved=await saveVerifiedTally(env.DB,input.params.arguments,now);
+      return ok({content:[{type:'text',text:JSON.stringify(saved)}],structuredContent:saved});
+    } catch { return ok({content:[{type:'text',text:'The dated workbook reading could not be verified or saved.'}],isError:true}); }
+  }
   const check = input.params.name === 'check_dashboard_sync';
   if (!plain(args) || Object.keys(args).some(key=>!(check ? ['jobId','weekStart'] : []).includes(key)) ||
     check && !uuid.test(args.jobId || '') || args.weekStart !== undefined && (!validDate(args.weekStart) || mondayOf(args.weekStart) !== args.weekStart)) return fail(-32602,'Enter a valid saved update reference.');

@@ -225,7 +225,7 @@ export default {
         // Stock Take remains a visitor-authorized read. Dispatch also supports
         // its dedicated server read token, so its feed can be rechecked here.
         const [demand, priorDemand, expenses, purchases, coffeeC, lab, dispatch] = await Promise.all([
-          readWeeklyDemand(week.start, { fresh: true }), readWeeklyDemand(addDays(week.start, -7), { fresh: true }),
+          readWeeklyDemand(week.start, { DB:env.DB, fresh: true }), readWeeklyDemand(addDays(week.start, -7), { DB:env.DB, fresh: true }),
           readExpenses({ db: env.DB, env, week, now, fresh: true }), readPurchases({ now, fresh: true }),
           readCoffeeC({ now, fresh: true }), readRoasteryLab(env.DB, now),
           readDispatchStatus({ weekStart: week.start, env, now }),

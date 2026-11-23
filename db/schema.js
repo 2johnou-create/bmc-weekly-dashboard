@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, real, index, check } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, real, index, uniqueIndex, check } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
 
 export const dashboardIssues = sqliteTable("dashboard_issues", {
@@ -126,3 +126,29 @@ export const dashboardSourceSyncLog = sqliteTable("dashboard_source_sync_log", {
   status: text("status").notNull(),
   sourceStatus: text("source_status_json").notNull(),
 }, table => [index("dashboard_source_sync_checked").on(table.checkedAt)]);
+
+export const dashboardSourceJobs = sqliteTable("dashboard_source_jobs", {
+  id:text("id").primaryKey(),publicId:text("public_id").unique(),weekStart:text("week_start").notNull(),
+  phase:text("phase").notNull(),readerJobId:text("reader_job_id"),requestId:text("request_id").notNull(),
+  manualRequestId:text("manual_request_id"),startedAt:integer("started_at").notNull(),updatedAt:integer("updated_at").notNull(),
+  finishedAt:integer("finished_at"),nextAttemptAt:integer("next_attempt_at").notNull().default(0),
+  leaseOwner:text("lease_owner"),leaseUntil:integer("lease_until").notNull().default(0),
+  attempts:integer("attempts").notNull().default(0),safeCode:text("safe_code"),summaryJson:text("summary_json"),
+}, table => [
+  uniqueIndex("dashboard_source_jobs_active_week").on(table.weekStart).where(sql`${table.phase} IN ('warming','starting','reading')`),
+  index("dashboard_source_jobs_latest_week").on(table.weekStart,sql`${table.startedAt} DESC`),
+  index("dashboard_source_jobs_reader").on(table.readerJobId),
+  check("dashboard_source_jobs_phase",sql`${table.phase} IN ('warming','starting','reading','complete','failed')`),
+]);
+
+export const dashboardPrivateRoastTallies = sqliteTable("dashboard_private_roast_tallies", {
+  weekStart: text("week_start").primaryKey(),
+  fileId: text("file_id").notNull(),
+  modifiedAt: integer("modified_at").notNull(),
+  checkedAt: integer("checked_at").notNull(),
+  demandKg: real("demand_kg").notNull(),
+  brownStockKg: real("brown_stock_kg"),
+}, table => [
+  check("dashboard_private_tally_kg", sql`${table.demandKg} >= 0 AND ${table.demandKg} <= 1000000`),
+  check("dashboard_private_tally_stock", sql`${table.brownStockKg} >= 0 AND ${table.brownStockKg} <= 1000000`),
+]);

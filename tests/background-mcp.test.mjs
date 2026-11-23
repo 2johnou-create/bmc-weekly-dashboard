@@ -9,7 +9,7 @@ const make = (method, params, owner, id = 1) => new Request('https://dashboard.t
 test('background source tools disclose only tool metadata until the trusted Sites owner identity is present', async () => {
   const coordinate = () => assert.fail('Other viewers must never start the source reader');
   const listed = await handleDashboardMcp(make('tools/list'),{}, {coordinate,now});
-  assert.deepEqual((await listed.json()).result.tools.map(tool=>tool.name),['refresh_dashboard_sources','check_dashboard_sync']);
+  assert.deepEqual((await listed.json()).result.tools.map(tool=>tool.name),['refresh_dashboard_sources','check_dashboard_sync','save_verified_roast_tally']);
   for (const owner of [undefined,'someone@example.com']) {
     const reply = await handleDashboardMcp(make('tools/call',{name:'refresh_dashboard_sources',arguments:{}},owner),{}, {coordinate,now});
     assert.equal(reply.status,403);
@@ -49,4 +49,27 @@ test('background failures remain safe and never expose raw source URLs or privat
   const value=await reply.json();
   assert.equal(value.result.isError,true);
   assert.doesNotMatch(JSON.stringify(value),/PRIVATE_SOURCE_TOKEN/);
+});
+
+test('the private tally requires the owner and exact Monday title, serial and twelve stock cells', async () => {
+  const {localDatabase}=await import('../scripts/local-db.mjs');
+  const {readWeeklyDemand}=await import('../worker/demand.js');
+  const DB=localDatabase(':memory:');
+  const values={weekStart:'2026-11-23',fileTitle:'ROAST TALLY 23 NOV 2026',fileId:'synthetic_private_weekly_workbook',
+    modifiedAt:'2026-11-22T23:55:00Z',weekCommencingSerial:46349,demandKg:800.25,brownStockRows:[10,20,null,0,0,0,0,0,0,0,0,0]};
+  const write=(args,email='2johnou@gmail.com')=>handleDashboardMcp(make('tools/call',{name:'save_verified_roast_tally',arguments:args},email),{DB},{now});
+  try {
+    assert.equal((await write(values,'different@example.com')).status,403);
+    for (const change of [{weekCommencingSerial:46342},{brownStockRows:[1,2]},{fileTitle:'ROAST TALLY 16 NOV 2026'}])
+      assert.ok((await (await write({...values,...change})).json()).result.isError);
+    const saved=(await (await write(values)).json()).result.structuredContent;
+    assert.equal(saved.status,'saved');assert.equal(saved.demandKg,undefined);
+    for(const change of [{modifiedAt:'2026-11-21T00:00:00Z'},{fileId:'a_different_verified_sheet_id'}])
+      assert.ok((await (await write({...values,...change})).json()).result.isError);
+    const options={DB,fetch:async()=>new Response('',{status:503}),now:()=>now.getTime()};
+    const current=await readWeeklyDemand(values.weekStart,options);
+    assert.equal(current.kg,800.25);assert.equal(current.brownOnHandKg,30);assert.equal(current.asOf,values.modifiedAt.replace('Z','.000Z'));
+    assert.equal((await readWeeklyDemand('2026-11-16',options)).kg,null);
+    assert.equal((await readWeeklyDemand(values.weekStart,{...options,now:()=>now.getTime()+2*86400000})).status,'partial');
+  } finally {DB.close();}
 });

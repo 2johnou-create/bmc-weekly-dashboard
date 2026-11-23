@@ -93,6 +93,17 @@ async function websiteJob(config, env, weekStart, jobId, fetcher, requestId = nu
         const delay = /^\d+$/.test(header || "") ? Number(header) * 1000 : Date.parse(header) - Date.now();
         if (Number.isSafeInteger(delay) && delay > 0 && delay <= 8.64e15 - Date.now()) error.retryAfterMs = delay;
       }
+      if (response.status === 429) {
+        // Operational fingerprints only. Never record authorization, URLs or upstream response bodies.
+        const routing = response.headers.get('x-render-routing');
+        console.warn('Cropster reader HTTP 429', JSON.stringify({
+          path:jobId ? 'status' : 'start',
+          retrySeconds:error.retryAfterMs ? Math.ceil(error.retryAfterMs/1000) : null,
+          routing:routing && /^[a-z][a-z0-9-]{0,48}$/i.test(routing) ? routing : null,
+          renderRequest:Boolean(response.headers.get('rndr-id')),
+          cloudflare:Boolean(response.headers.get('cf-ray')),
+        }));
+      }
       throw error;
     }
     if (!response.headers.get("content-type")?.includes("application/json")) { const unexpected = new Error("Reader returned an unexpected response."); unexpected.safeCode = "READER_CONTENT_TYPE"; throw unexpected; }

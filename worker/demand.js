@@ -276,7 +276,7 @@ export async function readBytes(url, fetcher, signal, { fresh = false } = {}) {
   throw new Error("Source redirected too many times.");
 }
 
-export async function readWeeklyDemand(weekStart, env = {}) {
+async function readFolderDemand(weekStart, env) {
   const unavailable = note => ({ status: "unavailable", kg: null, source: "Weekly roast tally", asOf: null, note, url: FOLDER_URL });
   if (!/^20\d{2}-\d{2}-\d{2}$/.test(weekStart || "") || !Number.isFinite(Date.parse(`${weekStart}T00:00:00Z`)) || new Date(`${weekStart}T00:00:00Z`).toISOString().slice(0, 10) !== weekStart || new Date(`${weekStart}T00:00:00Z`).getUTCDay() !== 1) return unavailable("Choose a Monday to read weekly demand.");
   const fetcher = typeof env.fetch === "function" ? env.fetch : globalThis.fetch;
@@ -340,4 +340,19 @@ export async function readWeeklyDemand(weekStart, env = {}) {
     clearTimeout(timer);
     if (state.sequence === sequence && state.entry?.time !== now) state.entry = null;
   }
+}
+
+export async function readWeeklyDemand(weekStart, env = {}) {
+  const folder = await readFolderDemand(weekStart,env);
+  if (!env.DB?.prepare) return folder;
+  const row = await env.DB.prepare('SELECT * FROM dashboard_private_roast_tallies WHERE week_start = ?').bind(weekStart).first();
+  if (!row || folder.kg !== null && Date.parse(folder.asOf) >= row.modified_at) return folder;
+  const checked = new Date(row.checked_at).toISOString();
+  const now = typeof env.now === 'function' ? env.now() : Date.now();
+  const age = now-row.checked_at;
+  return {status:age >= 0 && age < 24*3600000 ? 'live' : 'partial',
+    kg:row.demand_kg,brownOnHandKg:row.brown_stock_kg,source:'Weekly roast tally',
+    asOf:new Date(row.modified_at).toISOString(),checkedAt:checked,
+    note:'Saved reading of 3. Roast Planning!C18 and D6:D17 in the dated private workbook. Checked '+checked+'.',
+    url:'https://docs.google.com/spreadsheets/d/'+row.file_id+'/edit'};
 }
