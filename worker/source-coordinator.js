@@ -137,7 +137,10 @@ async function advance(env, row, now, fetcher) {
     if (!row.manual_request_id && ['complete','failed'].includes(persisted?.jobStatus)) {
       nextPhase=persisted.jobStatus;summary=persisted;finished=time;next=0;
     } else {
-      if (time-row.started_at > (readerId ? RUN_WINDOW_MS : START_WINDOW_MS)) {
+      // A 429 explicitly rejected the previous start. After its cooldown, try
+      // the same key once, even if the next viewer arrived after the startup window.
+      const rateLimitedStart = !readerId && row.safe_code === 'READER_HTTP_429';
+      if (!rateLimitedStart && time-row.started_at > (readerId ? RUN_WINDOW_MS : START_WINDOW_MS)) {
         const error=new Error('Reader update deadline passed.');
         error.safeCode=row.safe_code || (readerId?'READER_RUN_TIMEOUT':'READER_WAKE_TIMEOUT');
         error.deadlinePassed=true;

@@ -73,3 +73,11 @@ test('the private tally requires the owner and exact Monday title, serial and tw
     assert.equal((await readWeeklyDemand(values.weekStart,{...options,now:()=>now.getTime()+2*86400000})).status,'partial');
   } finally {DB.close();}
 });
+
+test('a valid check of a failed job returns its status and cooldown as ordinary tool metadata',async()=>{
+  const coordinate=async()=>({status:'failed',phase:'failed',jobId,weekStart:'2026-11-23',safeCode:'READER_HTTP_429',retryAfterMs:600000});
+  const reply=await handleDashboardMcp(make('tools/call',{name:'check_dashboard_sync',arguments:{jobId}},'2johnou@gmail.com'),{},{coordinate,now});
+  const {result}=await reply.json();
+  assert.equal(result.structuredContent.safeCode,'READER_HTTP_429');
+  assert.equal(result.structuredContent.retryAfterMs,600000);assert.notEqual(result.isError,true);
+});

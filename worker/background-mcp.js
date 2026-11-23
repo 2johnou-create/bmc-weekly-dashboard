@@ -61,8 +61,8 @@ export async function handleDashboardMcp(request, env, {coordinate = coordinateD
   const fail = (code, message, status = 200) => response({jsonrpc:'2.0', id, error:{code,message}}, status);
   const ok = result => response({jsonrpc:'2.0', id, result});
   if (!plain(input) || input.jsonrpc !== '2.0' || typeof input.method !== 'string') return fail(-32600,'Invalid MCP request.',400);
-  if (input.method === 'server/discover') return ok({supportedVersions:versions, capabilities:{tools:{}}, serverInfo:{name:'BMC Weekly Dashboard',version:'45'}});
-  if (input.method === 'initialize') return ok({protocolVersion:versions.includes(input.params?.protocolVersion) ? input.params.protocolVersion : versions[0], capabilities:{tools:{}}, serverInfo:{name:'BMC Weekly Dashboard',version:'45'}});
+  if (input.method === 'server/discover') return ok({supportedVersions:versions, capabilities:{tools:{}}, serverInfo:{name:'BMC Weekly Dashboard',version:'46'}});
+  if (input.method === 'initialize') return ok({protocolVersion:versions.includes(input.params?.protocolVersion) ? input.params.protocolVersion : versions[0], capabilities:{tools:{}}, serverInfo:{name:'BMC Weekly Dashboard',version:'46'}});
   if (input.method === 'notifications/initialized') return new Response(null,{status:204});
   if (input.method === 'ping') return ok({});
   if (input.method === 'tools/list') return ok({tools});
@@ -84,7 +84,7 @@ export async function handleDashboardMcp(request, env, {coordinate = coordinateD
   if (args.weekStart > current.start) return fail(-32602,'Choose this week or an earlier reporting week.');
   try {
     const result = metadata(await coordinate({env, weekStart:args.weekStart || current.start, ...(check ? {jobId:args.jobId} : {mode:'auto'}), now}));
-    return ok({content:[{type:'text',text:JSON.stringify(result)}],structuredContent:result,...(result.status==='failed' ? {isError:true} : {})});
+    return ok({content:[{type:'text',text:JSON.stringify(result)}],structuredContent:result});
   } catch {
     return ok({content:[{type:'text',text:'The dashboard update could not be checked. No completion is confirmed.'}],isError:true});
   }

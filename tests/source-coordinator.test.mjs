@@ -70,7 +70,19 @@ test('a cold-start deadline preserves the throttling reason and manual refresh h
   const ended=await coordinateDashboardSync({env,weekStart,jobId:first.jobId,now:clock(9*60_000),fetcher});
   assert.equal(ended.status,'failed');assert.equal(ended.safeCode,'READER_HTTP_429');
   const manual=await coordinateDashboardSync({env,weekStart,mode:'manual',now:clock(10*60_000),fetcher});
-  assert.equal(manual.jobId,ended.jobId);assert.equal(state.posts.length,1);
+  assert.equal(manual.jobId,ended.jobId);assert.equal(state.posts.length,2);
+  assert.equal(state.posts[0],state.posts[1]);
+}));
+
+test('a recovered reader starts on the first eligible check after a long upstream cooldown',async()=>setup(async({env})=>{
+  const {state,fetcher}=fakeReader({post:state=>state.posts.length===1
+    ? new Response(null,{status:429,headers:{'Retry-After':'720'}}) : null});
+  const first=await coordinateDashboardSync({env,weekStart,mode:'auto',now:clock(0),fetcher});
+  const early=await coordinateDashboardSync({env,weekStart,jobId:first.jobId,now:clock(719000),fetcher});
+  assert.equal(early.safeCode,'READER_HTTP_429');assert.equal(state.posts.length,1);
+  const recovered=await coordinateDashboardSync({env,weekStart,jobId:first.jobId,now:clock(721000),fetcher});
+  assert.equal(recovered.phase,'reading');assert.equal(recovered.jobId,first.jobId);
+  assert.deepEqual(state.posts,[state.posts[0],state.posts[0]]);
 }));
 
 test('several viewers join one atomic week lease instead of starting duplicate jobs',async()=>setup(async({db,env})=>{
