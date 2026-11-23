@@ -611,7 +611,7 @@ export const weeklyPage = String.raw`<!doctype html>
       const historical = policy.mode === 'friday-archive' || report.week?.isCurrent === false;
       if (historical) return 'Cropster: saved Friday archive.';
       const captured = formatTimestamp(policy.productionAsOf || report.metrics?.production?.asOf);
-      if (sourceSyncIsRunning(report)) return sourceSyncProgressText({ phase: policy.phase }) + (captured ? ' · last captured ' + captured + ' Sydney time.' : ' · saved readings shown.');
+      if (sourceSyncIsRunning(report)) return sourceSyncProgressText(policy) + (captured ? ' · last captured ' + captured + ' Sydney time.' : ' · saved readings shown.');
       if (policy.mode !== 'website-reader') return 'Cropster: saved readings · automatic sync not connected.';
       if (policy.status === 'failed') return captured
         ? 'Cropster could not update · previous reading shown, captured ' + captured + ' Sydney time.'
@@ -733,7 +733,7 @@ export const weeklyPage = String.raw`<!doctype html>
       const phases = ['warming', 'starting', 'reading', 'complete', 'failed', 'saved', 'outside-hours'];
       const phase = phases.includes(state.phase) ? state.phase : null;
       const safeCode = typeof state.safeCode === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(state.safeCode) ? state.safeCode : null;
-      const retryAfterMs = Number.isFinite(state.retryAfterMs) ? Math.min(15000, Math.max(5000, state.retryAfterMs)) : 10000;
+      const retryAfterMs = Number.isFinite(state.retryAfterMs) ? Math.min(86400000, Math.max(5000, state.retryAfterMs)) : 10000;
       latestSourceSyncPhase = phase;
       sourceSyncPollDelay = retryAfterMs;
       const details = { phase, safeCode, retryAfterMs };
@@ -747,7 +747,8 @@ export const weeklyPage = String.raw`<!doctype html>
       return { ...details, status: state.status, weekStart: state.weekStart, ...(jobId ? { jobId } : {}), note: state.note };
     }
     function sourceSyncProgressText(sync = {}) {
-      const phase = sync.phase || latestSourceSyncPhase;
+      const phase = sync?.phase || latestSourceSyncPhase;
+      if (sync?.safeCode === 'READER_HTTP_429') return 'Cropster reader rate-limited. Waiting to retry';
       if (phase === 'warming') return 'Waking Cropster connection in background';
       if (phase === 'starting') return 'Starting Cropster website update in background';
       return 'Cropster updating in background';

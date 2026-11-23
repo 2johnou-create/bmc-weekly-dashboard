@@ -47,7 +47,7 @@ function metadata(value) {
     if (typeof value[key] === 'string') result[key] = value[key].replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, key === 'note' ? 600 : 80);
   }
   if (/^[A-Z][A-Z0-9_]{0,79}$/.test(value.safeCode || '')) result.safeCode = value.safeCode;
-  if (Number.isSafeInteger(value.retryAfterMs) && value.retryAfterMs >= 0 && value.retryAfterMs <= 120000) result.retryAfterMs = value.retryAfterMs;
+  if (Number.isSafeInteger(value.retryAfterMs) && value.retryAfterMs >= 0 && value.retryAfterMs <= Number.MAX_SAFE_INTEGER) result.retryAfterMs = value.retryAfterMs;
   return result;
 }
 

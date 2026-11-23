@@ -76,7 +76,7 @@ export const validSyncJobId = value => typeof value === "string" && /^[0-9a-f]{8
 
 async function websiteJob(config, env, weekStart, jobId, fetcher, requestId = null) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), DEADLINE_MS);
+  const timer = setTimeout(() => controller.abort(), requestId && !jobId ? 24_000 : DEADLINE_MS);
   try {
     if (jobId && !validSyncJobId(jobId)) throw new Error();
     const response = await fetcher(config.url + (jobId ? "/" + jobId : ""), {
@@ -85,7 +85,16 @@ async function websiteJob(config, env, weekStart, jobId, fetcher, requestId = nu
       ...(jobId ? {} : { body: JSON.stringify({ weekStart, ...(requestId ? { requestId } : {}) }) }),
     });
     if (jobId && response.status === 404) { const expired = new Error("The background job has expired."); expired.jobExpired = true; throw expired; }
-    if (!response.ok) { const unavailable = new Error("Reader returned an unsuccessful response."); unavailable.safeCode = "READER_HTTP_" + response.status; throw unavailable; }
+    if (!response.ok) {
+      const error = new Error("Reader returned an unsuccessful response.");
+      error.safeCode = "READER_HTTP_" + response.status;
+      if ([429, 503].includes(response.status)) {
+        const header = response.headers.get("retry-after")?.trim();
+        const delay = /^\d+$/.test(header || "") ? Number(header) * 1000 : Date.parse(header) - Date.now();
+        if (Number.isSafeInteger(delay) && delay > 0 && delay <= 8.64e15 - Date.now()) error.retryAfterMs = delay;
+      }
+      throw error;
+    }
     if (!response.headers.get("content-type")?.includes("application/json")) { const unexpected = new Error("Reader returned an unexpected response."); unexpected.safeCode = "READER_CONTENT_TYPE"; throw unexpected; }
     const length = Number(response.headers.get("content-length"));
     if (length > MAX_BODY) throw new Error();
@@ -127,30 +136,6 @@ export async function requestCropsterWebsiteJob({ env, weekStart, jobId = null, 
   }
   try { return await websiteJob(config, env, weekStart, jobId, fetcher, requestId); }
   catch (error) { error.safeCode = safeReaderCode(error); throw error; }
-}
-
-// A timed-out health GET still wakes Render. A later coordinator poll continues
-// readiness instead of treating a sleeping Free instance as a failed roast read.
-export async function probeCropsterReader({ env, fetcher = fetch }) {
-  const config = cropsterReaderConnection(env);
-  if (!config.valid) { const error = new Error("Reader configuration is unavailable."); error.safeCode = "READER_CONFIGURATION"; throw error; }
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), DEADLINE_MS);
-  try {
-    const response = await fetcher(new URL("/health", config.url).href, {
-      method: "GET", redirect: "manual", cache: "no-store", signal: controller.signal,
-      headers: { Accept: "application/json" },
-    });
-    if (!response.ok) { const error = new Error("Reader readiness is unavailable."); error.safeCode = "READER_HTTP_" + response.status; throw error; }
-    const length = Number(response.headers.get("content-length"));
-    if (length > 1024 || !response.headers.get("content-type")?.includes("application/json")) throw new Error("Invalid readiness reply.");
-    const text = await response.text();
-    if (text.length > 1024) throw new Error("Invalid readiness reply.");
-    const state = JSON.parse(text);
-    if (state?.status !== "ok" || state?.service !== "cropster-website-reader") throw new Error("Invalid readiness reply.");
-    return true;
-  } catch (error) { error.safeCode = safeReaderCode(error); throw error; }
-  finally { clearTimeout(timer); }
 }
 
 async function mergeRecipeAssignments(db, fresh, env) {

@@ -18,13 +18,14 @@ test('background source tools disclose only tool metadata until the trusted Site
 
 test('owner background calls share the current-week coordinator and strip unexpected business fields', async () => {
   const calls=[];
-  const coordinate = async args => {calls.push(args); return {status:'running',jobId,weekStart:'2026-11-23',phase:'waking',note:'Waking Cropster reader.',retryAfterMs:5000,production:{roastedKg:123},token:'PRIVATE_FIXTURE'};};
+  const coordinate = async args => {calls.push(args); return {status:'running',jobId,weekStart:'2026-11-23',phase:'waking',note:'Waking Cropster reader.',retryAfterMs:180000,production:{roastedKg:123},token:'PRIVATE_FIXTURE'};};
   const reply=await handleDashboardMcp(make('tools/call',{name:'refresh_dashboard_sources',arguments:{}},'2johnou@gmail.com'),{sample:true},{coordinate,now});
   const value=await reply.json();
   assert.equal(calls.length,1);
   assert.equal(calls[0].mode,'auto');
   assert.equal(calls[0].weekStart,'2026-11-23');
   assert.equal(value.result.structuredContent.jobId,jobId);
+  assert.equal(value.result.structuredContent.retryAfterMs,180000);
   assert.doesNotMatch(JSON.stringify(value),/roastedKg|PRIVATE_FIXTURE|production/);
 });
 

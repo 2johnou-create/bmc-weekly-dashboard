@@ -1,11 +1,11 @@
 import { dashboardWeek, addDays } from './metrics.js';
-import { cropsterReaderConnection, probeCropsterReader, requestCropsterWebsiteJob, ingestCropsterSync,
+import { cropsterReaderConnection, requestCropsterWebsiteJob, ingestCropsterSync,
   readCurrentCropster, readSavedCropsterJob, validSyncJobId, safeReaderCode } from './cropster-reader.js';
 import { readSourceSyncLog, saveSourceSyncLog, sourceSyncSummary } from './source-sync.js';
 
 const ACTIVE = new Set(['warming', 'starting', 'reading']);
 const FRESH_MS = 30 * 60_000;
-const START_WINDOW_MS = 120_000;
+const START_WINDOW_MS = 8 * 60_000;
 const RUN_WINDOW_MS = 40 * 60_000;
 const LEASE_MS = 45_000;
 const SOFT_RETRY_MS = 10 * 60_000;
@@ -42,6 +42,7 @@ async function automaticSourcesFresh(db, weekStart, time) {
 }
 
 function phaseNote(row) {
+  if (row.safe_code === 'READER_HTTP_429') return 'The Cropster reader connection is rate-limited. The dashboard will wait before trying again. Saved figures retain their capture times.';
   if (row.phase === 'warming') return 'Waking the free Cropster reader. Saved figures retain their capture times.';
   if (row.phase === 'starting') return 'Starting the Cropster website update. A repeated check reuses the same request.';
   if (row.phase === 'reading') return 'Cropster is updating in the background. Verified sections save as they finish.';
@@ -51,7 +52,7 @@ function phaseNote(row) {
 
 function metadata(row, publicId, now = new Date()) {
   return {status: ACTIVE.has(row.phase) ? 'running' : row.phase, jobId:publicId || row.public_id || row.reader_job_id || row.id,
-    weekStart:row.week_start, phase:row.phase, note:phaseNote(row), retryAfterMs:ACTIVE.has(row.phase) ? 5_000 : Math.max(0,row.next_attempt_at-now.getTime()),
+    weekStart:row.week_start, phase:row.phase, note:phaseNote(row), retryAfterMs:Math.max(ACTIVE.has(row.phase) ? 5_000 : 0, row.next_attempt_at-now.getTime()),
     ...(row.safe_code ? {safeCode:row.safe_code} : {}), ...(sourceSummary(row) ? {sourceSync:sourceSummary(row)} : {})};
 }
 
@@ -121,26 +122,28 @@ export async function acknowledgeDashboardSync({env,readerJobId,weekStart,status
 }
 
 async function advance(env, row, now, fetcher) {
-  const db=env.DB, time=now.getTime();
+  const db=env.DB, time=now.getTime(), wallStart=Date.now();
   if (!ACTIVE.has(row.phase) || row.next_attempt_at > time) return row;
   const owner=crypto.randomUUID();
   const leased=await db.prepare(`UPDATE dashboard_source_jobs SET lease_owner = ?, lease_until = ?
-    WHERE id = ? AND phase IN ('warming','starting','reading') AND lease_until <= ? RETURNING *`)
-    .bind(owner,time+LEASE_MS,row.id,time).first();
+    WHERE id = ? AND phase IN ('warming','starting','reading') AND lease_until <= ? AND next_attempt_at <= ? RETURNING *`)
+    .bind(owner,time+LEASE_MS,row.id,time,time).first();
   if (!leased) return await db.prepare('SELECT * FROM dashboard_source_jobs WHERE id = ?').bind(row.id).first();
   row=leased;
   let nextPhase=row.phase, readerId=row.reader_job_id, requestId=row.request_id, manualId=row.manual_request_id;
-  let code=null, next=time+5_000, finished=null, summary=sourceSummary(row), attempts=row.attempts;
+  let code=null, next=time+30_000, finished=null, summary=sourceSummary(row), attempts=row.attempts;
   try {
     const persisted=readerId ? await readSourceSyncLog(db,readerId,row.week_start) : null;
     if (!row.manual_request_id && ['complete','failed'].includes(persisted?.jobStatus)) {
       nextPhase=persisted.jobStatus;summary=persisted;finished=time;next=0;
     } else {
       if (time-row.started_at > (readerId ? RUN_WINDOW_MS : START_WINDOW_MS)) {
-        const error=new Error('Reader update deadline passed.');error.safeCode=readerId?'READER_RUN_TIMEOUT':'READER_WAKE_TIMEOUT';throw error;
+        const error=new Error('Reader update deadline passed.');
+        error.safeCode=row.safe_code || (readerId?'READER_RUN_TIMEOUT':'READER_WAKE_TIMEOUT');
+        error.deadlinePassed=true;
+        throw error;
       }
       if (!readerId) {
-        if (row.phase === 'warming') await probeCropsterReader({env,fetcher});
         nextPhase='starting';
         // requestId is persisted before the POST. Unknown transport outcomes
         // are retried with that same ID, never an unkeyed duplicate start.
@@ -161,10 +164,18 @@ async function advance(env, row, now, fetcher) {
     }
   } catch (error) {
     code=safeReaderCode(error);attempts++;
-    const terminal=hardFailure(code) || ['READER_JOB_EXPIRED','READER_OBSERVATION_REJECTED','READER_RUN_TIMEOUT','READER_WAKE_TIMEOUT'].includes(code)
+    const terminal=error.deadlinePassed || hardFailure(code) || ['READER_JOB_EXPIRED','READER_OBSERVATION_REJECTED','READER_RUN_TIMEOUT','READER_WAKE_TIMEOUT'].includes(code)
       || (!readerId && time-row.started_at >= START_WINDOW_MS);
-    if (terminal) {nextPhase='failed';finished=time;next=time+(hardFailure(code)?HARD_RETRY_MS:SOFT_RETRY_MS);}
-    else {nextPhase=readerId?'reading':nextPhase === 'starting'?'starting':'warming';next=time+Math.min(15_000,5_000*attempts);}
+    const receivedAt=time+Math.max(0,Date.now()-wallStart);
+    const throttleDelay=code==='READER_HTTP_429' ? Math.min(240_000,30_000 * 2 ** Math.min(attempts-1,3)) : 0;
+    const retryDelay=Math.max(error.retryAfterMs || 0, throttleDelay);
+    if (terminal) {
+      nextPhase='failed';finished=receivedAt;
+      next=receivedAt+Math.max(hardFailure(code)?HARD_RETRY_MS:SOFT_RETRY_MS,retryDelay);
+    } else {
+      nextPhase=readerId?'reading':'starting';
+      next=receivedAt+Math.max(retryDelay,Math.min(15_000,5_000*attempts));
+    }
   }
   // A verified callback may have completed the job while this network read ran.
   const pendingManual="manual_request_id IS NOT NULL AND manual_request_id IS NOT ?";
@@ -172,9 +183,9 @@ async function advance(env, row, now, fetcher) {
     phase = CASE WHEN ${pendingManual} THEN 'reading' ELSE ? END, reader_job_id = ?,
     manual_request_id = CASE WHEN manual_request_id IS ? THEN ? ELSE manual_request_id END,
     updated_at = ?, finished_at = CASE WHEN ${pendingManual} THEN NULL ELSE ? END,
-    next_attempt_at = CASE WHEN ${pendingManual} THEN 0 ELSE ? END, attempts = ?, safe_code = ?, summary_json = ?,
+    next_attempt_at = CASE WHEN ${pendingManual} AND ? IS NOT 'READER_HTTP_429' AND ? IS NOT 'READER_HTTP_503' THEN 0 ELSE ? END, attempts = ?, safe_code = ?, summary_json = ?,
     lease_owner = NULL, lease_until = 0 WHERE id = ? AND lease_owner = ? AND phase IN ('warming','starting','reading')`)
-    .bind(row.manual_request_id,nextPhase,readerId,row.manual_request_id,manualId,time,row.manual_request_id,finished,row.manual_request_id,next,
+    .bind(row.manual_request_id,nextPhase,readerId,row.manual_request_id,manualId,time,row.manual_request_id,finished,row.manual_request_id,code,code,next,
       attempts,code,summary?JSON.stringify(summary):null,row.id,owner).run();
   return await db.prepare('SELECT * FROM dashboard_source_jobs WHERE id = ?').bind(row.id).first();
 }
@@ -191,8 +202,10 @@ export async function coordinateDashboardSync({env,weekStart,jobId=null,mode='au
   let row=jobId ? await findDashboardSyncJob(env,jobId,week.start) : await db.prepare(`SELECT * FROM dashboard_source_jobs
     WHERE week_start = ? ORDER BY CASE WHEN phase IN ('warming','starting','reading') THEN 0 ELSE 1 END, started_at DESC LIMIT 1`).bind(week.start).first();
   if (jobId && !row) return null; // Compatibility with pre-coordinator Reader UUIDs.
+  if (!jobId && row?.phase === 'failed' && ['READER_HTTP_429','READER_HTTP_503'].includes(row.safe_code) && row.next_attempt_at > time) return publicResult(db,row,null,now);
   if (!jobId && row && ACTIVE.has(row.phase) && mode === 'manual' && row.reader_job_id) {
-    await db.prepare(`UPDATE dashboard_source_jobs SET manual_request_id = COALESCE(manual_request_id, ?), next_attempt_at = 0
+    await db.prepare(`UPDATE dashboard_source_jobs SET manual_request_id = COALESCE(manual_request_id, ?),
+      next_attempt_at = CASE WHEN safe_code IN ('READER_HTTP_429','READER_HTTP_503') THEN next_attempt_at ELSE 0 END
       WHERE id = ? AND phase = 'reading'`).bind(crypto.randomUUID(),row.id).run();
     row=await db.prepare('SELECT * FROM dashboard_source_jobs WHERE id = ?').bind(row.id).first();
   }

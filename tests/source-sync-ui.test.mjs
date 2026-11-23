@@ -124,6 +124,15 @@ for (const view of views) {
     assert.equal(app.el("qa").value, "Unsaved meeting draft");
   });
 
+  test(view.name + " shows the rate limit and waits for the requested retry interval", async () => {
+    const app = runtime(view, async address => new URL(address, "https://dashboard.test").pathname === "/api/source-sync"
+      ? response({status:"running",phase:"starting",safeCode:"READER_HTTP_429",weekStart:week,jobId,retryAfterMs:180000})
+      : response(fixtureReport(view)));
+    await app.load(false);
+    assert.match(app.el("status").textContent,/rate-limited/);
+    assert.deepEqual([...app.timer.pending.values()].map(item=>item.duration),[180000]);
+  });
+
   test(view.name + " accepts an automatic not-due result without attaching a reader job or claiming a new capture", async () => {
     const app = runtime(view, async (address, options) => {
       const url = new URL(address, "https://dashboard.test");
