@@ -1,3 +1,4 @@
+import { coordinateCropsterQueue, queueEnabled } from './cropster-queue.js';
 import { dashboardWeek, addDays } from './metrics.js';
 import { cropsterReaderConnection, requestCropsterWebsiteJob, ingestCropsterSync,
   readCurrentCropster, readSavedCropsterJob, validSyncJobId, safeReaderCode } from './cropster-reader.js';
@@ -76,8 +77,9 @@ export async function findDashboardSyncJob(env, jobId, weekStart) {
 
 export async function readCoordinatedCropster({env, row, jobId = null, now = new Date()}) {
   let summary = sourceSummary(row);
+  if (row.provider === 'pull' && !summary) summary = await readSourceSyncLog(env.DB,row.id,row.week_start);
   if (row.reader_job_id) summary = await readSourceSyncLog(env.DB,row.reader_job_id,row.week_start) || summary;
-  if (!summary && row.phase === 'failed') summary={jobStatus:'failed',sources:[]};
+  if (row.phase === 'failed') summary={...summary,jobStatus:'failed',sources:summary?.sources || []};
   return readSavedCropsterJob({env,weekStart:row.week_start,followingWeekStart:addDays(row.week_start,7),now,
     jobId:jobId || row.public_id || row.id,summary,pending:ACTIVE.has(row.phase),phase:row.phase,safeCode:row.safe_code});
 }
@@ -194,6 +196,7 @@ async function advance(env, row, now, fetcher) {
 }
 
 export async function coordinateDashboardSync({env,weekStart,jobId=null,mode='auto',now=new Date(),fetcher=fetch}) {
+  if (queueEnabled(env)) return coordinateCropsterQueue({env,weekStart,jobId,mode,now});
   const week=dashboardWeek(weekStart,now), time=now.getTime();
   if (!week.isCurrent) return {status:'archive',weekStart:week.start,phase:'saved',note:'Historical Friday archives are retained.'};
   if (!['auto','manual'].includes(mode) || jobId !== null && !validSyncJobId(jobId)) throw new Error('Invalid source sync request.');

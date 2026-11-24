@@ -1,0 +1,52 @@
+name: Cropster dashboard refresh
+
+on:
+  schedule:
+    - cron: '3,13,23,33,43,53 * * * *'
+  workflow_dispatch:
+    inputs:
+      refresh_now:
+        description: 'Request a new capture immediately'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bmc-cropster-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    if: github.repository == '2johnou-create/bmc-weekly-dashboard' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 36
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Claim a dashboard job
+        id: claim
+        env:
+          CROPSTER_RUNNER_TOKEN: ${{ secrets.CROPSTER_RUNNER_TOKEN }}
+          CROPSTER_REFRESH_NOW: ${{ github.event_name == 'workflow_dispatch' && inputs.refresh_now }}
+        run: node integrations/cropster-reader/src/runner.mjs claim
+      - name: Install the pinned reader and Chromium
+        if: steps.claim.outputs.claimed == 'true'
+        working-directory: integrations/cropster-reader
+        run: |
+          npm ci --ignore-scripts --omit=dev
+          npx --no-install playwright install --with-deps chromium
+      - name: Read Cropster and save verified snapshots
+        if: steps.claim.outputs.claimed == 'true'
+        env:
+          CROPSTER_RUNNER_TOKEN: ${{ secrets.CROPSTER_RUNNER_TOKEN }}
+          CROPSTER_EMAIL: ${{ secrets.CROPSTER_EMAIL }}
+          CROPSTER_PASSWORD: ${{ secrets.CROPSTER_PASSWORD }}
+        run: node integrations/cropster-reader/src/runner.mjs capture
+      - name: Release the job if setup or capture failed
+        if: failure() && steps.claim.outputs.claimed == 'true'
+        env:
+          CROPSTER_RUNNER_TOKEN: ${{ secrets.CROPSTER_RUNNER_TOKEN }}
+        run: node integrations/cropster-reader/src/runner.mjs abandon

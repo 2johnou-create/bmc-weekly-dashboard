@@ -134,10 +134,12 @@ export const dashboardSourceJobs = sqliteTable("dashboard_source_jobs", {
   finishedAt:integer("finished_at"),nextAttemptAt:integer("next_attempt_at").notNull().default(0),
   leaseOwner:text("lease_owner"),leaseUntil:integer("lease_until").notNull().default(0),
   attempts:integer("attempts").notNull().default(0),safeCode:text("safe_code"),summaryJson:text("summary_json"),
+  provider:text("provider").notNull().default("render"),claimedAt:integer("claimed_at"),
 }, table => [
   uniqueIndex("dashboard_source_jobs_active_week").on(table.weekStart).where(sql`${table.phase} IN ('warming','starting','reading')`),
   index("dashboard_source_jobs_latest_week").on(table.weekStart,sql`${table.startedAt} DESC`),
   index("dashboard_source_jobs_reader").on(table.readerJobId),
+  check("dashboard_source_jobs_provider",sql`${table.provider} IN ('render','pull')`),
   check("dashboard_source_jobs_phase",sql`${table.phase} IN ('warming','starting','reading','complete','failed')`),
 ]);
 

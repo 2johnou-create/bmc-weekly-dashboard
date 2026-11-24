@@ -436,7 +436,7 @@ test("malformed, expired and future-dated stored references are rediscovered saf
     "{invalid", "x".repeat(251), JSON.stringify([]),
     JSON.stringify({...valid, jobId: "https://untrusted.test/private"}),
     JSON.stringify({...valid, weekStart: "2026-11-17"}),
-    JSON.stringify({...valid, startedAt: timer.Date.now() - 2100000}),
+    JSON.stringify({...valid, startedAt: timer.Date.now() - 3600000}),
     JSON.stringify({...valid, startedAt: timer.Date.now() + 1}),
     JSON.stringify({...valid, extra: "unexpected"}),
   ]) {
@@ -460,7 +460,7 @@ test("malformed, expired and future-dated stored references are rediscovered saf
   }
 });
 
-test("the original start time is preserved across manual taps on a coalesced job and expires at35minutes", async () => {
+test("the original start time is preserved across manual taps on a coalesced job and expires at 60 minutes", async () => {
   const app = runtime(views[0], async (_address, options) => options.method === "POST"
     ? response({status: "running", jobId, weekStart: week}) : response(fixtureReport(views[0])));
   await app.load(true, {fresh: true});
@@ -468,7 +468,7 @@ test("the original start time is preserved across manual taps on a coalesced job
   app.timer.advance(60000);
   await app.load(true, {fresh: true});
   assert.equal(app.pending().startedAt, startedAt);
-  app.timer.advance(2040000);
+  app.timer.advance(3540000);
   assert.equal(app.pending(), null);
   assert.equal(app.storage.size, 0);
 });

@@ -8,7 +8,7 @@ import { createRefreshControl } from "./refresh-control.mjs";
 import {
   CROPSTER_ORIGIN, aggregateScheduleRead, parseInventory, parseLegacyInventory, inventoryPrices, parseMarrickvilleStock,
   parseRoastedCost, parseRoastedOutput, parseScheduleDay, sameProduction, parseMonthlyUse, parseLoss,
-  parseBlend, parseProfileGroup, parseProfileInputs, assembleRecipes, blendLoss, parseScheduleWeek, sameScheduleReads, previousProduction,
+  parseBlend, parseSignatureBlendIds, parseProfileGroup, parseProfileInputs, assembleRecipes, blendLoss, parseScheduleWeek, sameScheduleReads, previousProduction,
 } from "./parse.mjs";
 
 const PAGE_LIMIT = 1;
@@ -393,7 +393,12 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
           return path;
         };
         const readRecipes = async () => {
-          const ids = configuration.profileIds || {};
+          const ids = {...configuration.profileIds};
+          if (!ids.libertyBlend || !ids.rhythmBlend) {
+            const discovered = await view("/app/roast/blend-profiles", "blendList", parseSignatureBlendIds, "lab_blend_list");
+            ids.libertyBlend ||= discovered.libertyBlend;
+            ids.rhythmBlend ||= discovered.rhythmBlend;
+          }
           if (![ids.libertyBlend, ids.rhythmBlend, ids.ohGroup, ids.decafGroup].every(id => typeof id === "string" && /^[A-Za-z0-9_-]{1,80}$/.test(id))) throw new ReaderError("CROPSTER_RECIPE_UNCONFIGURED");
           const blends = await sequential([[ids.libertyBlend, "Liberty"], [ids.rhythmBlend, "Rhythm"]], ([id, signature]) => {
             const path = "/app/roast/blend-profiles/" + id;

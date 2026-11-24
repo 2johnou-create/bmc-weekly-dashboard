@@ -5,6 +5,7 @@ export function renderedViewReady(kind) {
   const body = compact(document.body?.innerText);
   if (document.querySelector('input[type="password"]')) return true;
   const headings = compact(Array.from(document.querySelectorAll("table thead")).map(item => item.innerText).join(" "));
+  if (kind === "blendList") return /Post-roast blend profiles/.test(body) && Boolean(document.querySelector('table tbody a[href*="/blend-profiles/"]'));
   if (kind === "blend") return /Blend components/.test(body) && /% of blend/.test(headings) && Boolean(document.querySelector('table tbody a[href*="/profile-groups/"]'));
   if (kind === "group") return /Associated profiles/.test(body) && /Green inventory/.test(body) && Boolean(document.querySelector('a[href*="/apps/roast/profiles/"]'));
   if (kind === "profile") return /Components\s*\/\s*Green lots/i.test(body) && /Blend %/.test(headings) && /Green weight/.test(headings) && Boolean(document.querySelector('table tbody a[href*="/lots/"]'));

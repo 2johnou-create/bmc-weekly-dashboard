@@ -509,7 +509,7 @@ export const warehousePage = String.raw`<!doctype html>
       const age = Date.now() - candidate?.startedAt;
       if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate) ||
           Object.keys(candidate).length !== 3 || !validSourceSyncJob(candidate.jobId) || !validSourceSyncWeek(candidate.weekStart) ||
-          !Number.isSafeInteger(candidate.startedAt) || candidate.startedAt < 0 || age < 0 || age >= 2100000) {
+          !Number.isSafeInteger(candidate.startedAt) || candidate.startedAt < 0 || age < 0 || age >= 3600000) {
         pendingSourceSync = null;
         try { sessionStorage.removeItem(sourceSyncStorageKey); } catch {}
         return null;
@@ -579,7 +579,7 @@ export const warehousePage = String.raw`<!doctype html>
       const retryAfterMs = Number.isFinite(state.retryAfterMs) ? Math.min(86400000, Math.max(5000, state.retryAfterMs)) : 10000;
       latestSourceSyncPhase = phase;
       sourceSyncPollDelay = retryAfterMs;
-      const details = { phase, safeCode, retryAfterMs };
+      const details = { phase, safeCode, retryAfterMs, note:state.note };
       if (state.status === 'running') {
         if (!jobId) throw new Error('The source update returned an invalid job reference.');
         const saved = storePendingSourceSync(jobId, state.weekStart);
@@ -592,7 +592,7 @@ export const warehousePage = String.raw`<!doctype html>
     function sourceSyncProgressText(sync = {}) {
       const phase = sync?.phase || latestSourceSyncPhase;
       if (sync?.safeCode === 'READER_HTTP_429') return 'Cropster reader rate-limited. Waiting to retry';
-      if (phase === 'warming') return 'Waking Cropster connection in background';
+      if (phase === 'warming') return sync?.note?.startsWith('Cropster refresh queued') ? 'Cropster refresh queued' : 'Waking Cropster connection in background';
       if (phase === 'starting') return 'Starting Cropster website update in background';
       return 'Cropster updating in background';
     }

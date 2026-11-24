@@ -466,3 +466,36 @@ test("a failed sync check does not retry the reader or block the other report fe
     });
   }
 });
+
+test('the pull worker owns and persists its checkpoint without contacting Render', async () => {
+  await harness(async ({db,env,state,request})=>{
+    env.CROPSTER_RUNNER_ENABLED='true';
+    env.CROPSTER_RUNNER_TOKEN='synthetic-runner-token-1234567890123456789';
+    const path='/api/integrations/cropster-runner';
+    const runnerId=crypto.randomUUID();
+    const send=(body,key=env.CROPSTER_RUNNER_TOKEN)=>request(path,{method:'POST',authorized:false,
+      authorization:'Bearer '+key,body:{runnerId,...body}});
+    assert.equal((await send({action:'claim',force:true},'wrong')).status,401);
+    const result=await request('/api/source-sync',{method:'POST'});
+    assert.equal(result.body.status,'running');
+    assert.match(result.body.note,/queued/);
+    const first=await send({action:'claim',force:true});
+    assert.equal(first.body.job.jobId,result.body.jobId);
+    assert.equal((await send({action:'claim',force:true})).body.job.jobId,result.body.jobId);
+    assert.equal((await send({action:'claim',runnerId:crypto.randomUUID()})).body.job,null);
+    const jobId=first.body.job.jobId;
+    assert.equal((await send({action:'heartbeat',jobId,runnerId:crypto.randomUUID()})).status,409);
+    assert.equal((await send({action:'heartbeat',jobId})).status,200);
+    const capture={...observation(week(),40),scheduledBatches:{greenKg:40,batches:2}};
+    const checkpoint=await send({action:'checkpoint',jobId,result:capture});
+    assert.equal(checkpoint.status,200);
+    assert.equal((await db.prepare("SELECT green_kg FROM dashboard_cropster_scheduled_batches WHERE week_start=?").bind(week()).first()).green_kg,40);
+    const finished=await send({action:'complete',jobId,result:capture});
+    assert.equal(finished.status,200);
+    assert.equal(finished.body.status,'complete');
+    assert.equal((await send({action:'complete',jobId,result:capture})).status,200);
+    assert.equal((await db.prepare('SELECT phase FROM dashboard_source_jobs WHERE id=?').bind(jobId).first()).phase,'complete');
+    assert.equal(state.starts,0);
+    assert.equal(state.polls,0);
+  });
+});

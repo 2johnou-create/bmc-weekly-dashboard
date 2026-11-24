@@ -1,3 +1,4 @@
+import { claimCropsterRun, finishCropsterRun, findQueuedRun, queueEnabled, renewCropsterRun } from './cropster-queue.js';
 import { page } from "./ui.js";
 import { buildUiDocument } from "./ui-build.js";
 import { handleDashboardMcp } from "./background-mcp.js";
@@ -69,8 +70,7 @@ async function activeSession(request, env) {
   }
   return session;
 }
-async function requireCropsterWriter(request, env) {
-  const expected = env.CROPSTER_SYNC_WRITE_TOKEN;
+async function requireCropsterWriter(request, expected) {
   const header = request.headers.get("authorization") || "";
   if (typeof expected !== "string" || expected.length < 32 || expected.length > 256 ||
     !header.startsWith("Bearer ") || header.length > 263) throw new HttpError("Source writer authorization is required.", 401);
@@ -90,7 +90,7 @@ function requestedSyncJob(url, weekStart) {
 
 async function coordinatedReportOptions(env, jobId, weekStart, syncWebsite = true, now = new Date()) {
   const row=jobId ? await findDashboardSyncJob(env,jobId,weekStart) : null;
-  if (!row) return {sourceSyncJob:jobId,syncWebsite};
+  if (!row) return {sourceSyncJob:jobId,syncWebsite:syncWebsite && !queueEnabled(env)};
   return {sourceSyncJob:row.reader_job_id || row.public_id || row.id,syncWebsite:false,
     cropsterResult:() => readCoordinatedCropster({env,row,jobId,now})};
 }
@@ -184,9 +184,72 @@ export default {
         if (request.method === "DELETE") return json({ authenticated: false }, 200, { "Set-Cookie": await signOut(request, env) });
         return json({ error: "Method not allowed." }, 405, { Allow: "GET, POST, DELETE" });
       }
+      if (url.pathname === "/api/integrations/cropster-runner") {
+        if (request.method !== "POST") return json({error:"Method not allowed."},405,{Allow:"POST"});
+        await requireCropsterWriter(request,env.CROPSTER_RUNNER_TOKEN);
+        if (!queueEnabled(env)) return json({error:"The runner is paused."},503);
+        const input=await jsonInput(request,{...labCropsterBody,maximum:350_000});
+        const now=new Date();
+        const week=dashboardWeek(undefined,now);
+        if (!validSyncJobId(input?.runnerId)) throw new HttpError("Invalid runner reference.");
+        if (input.action==="claim") {
+          const job=await claimCropsterRun(env,input.runnerId,now,input.force===true);
+          if (!job) return json({ok:true,job:null});
+          const recipes=await env.DB.prepare("SELECT data_json FROM dashboard_roastery_lab_cropster WHERE part='recipes'").first();
+          const saved=JSON.parse(recipes?.data_json || "{}");
+          const profileIds={ohGroup:saved.rows?.find(row=>row.signature==="OH")?.components?.[0]?.profileGroupId || null,
+            decafGroup:saved.decafProfileGroupId || null};
+          return json({ok:true,job:{...job,profileIds}});
+        }
+        if (!validSyncJobId(input.jobId) || !["heartbeat","checkpoint","complete","failed"].includes(input.action)) throw new HttpError("Invalid runner event.");
+        const row=await findQueuedRun(env.DB,input.jobId,week.start);
+        if (row?.phase===input.action && ["complete","failed"].includes(input.action)) return json({ok:true,status:row.phase});
+        const lease=await renewCropsterRun(env.DB,input.jobId,input.runnerId,now);
+        if (!lease) return json({error:"The runner no longer owns this job."},409);
+        if (input.action==="heartbeat") return json({ok:true});
+        const status=input.action==="checkpoint" ? "running" : input.action;
+        let readings;
+        if (input.result) {
+          const observed=Date.parse(input.result?.productionObservedAt || input.result?.observedAt);
+          if (!Number.isFinite(observed) || observed<lease.claimed_at) throw new HttpError("This reading predates the capture job.");
+          readings=await ingestCropsterSync({env,weekStart:week.start,jobId:input.jobId,input:input.result,status,now});
+          if (!readings.refresh.accepted || !Number.isFinite(readings.production.scheduledGreenKg) || status==="complete" && readings.refresh.status!=="refreshed")
+            return json({error:"The source observation could not be saved."},422);
+        } else if (status!=="failed") throw new HttpError("A verified observation is required.");
+        let summary=await readSourceSyncLog(env.DB,input.jobId,week.start) || {sources:[]};
+        if (readings) {
+          summary=sourceSyncSummary({weekly:{generatedAt:now.toISOString(),cropsterRefresh:readings.refresh,
+            metrics:{production:readings.production,green:readings.green}},lab:{source:{}}});
+          summary.sources=summary.sources.filter(source=>["production","monday","previous-production","green"].includes(source.id)||source.id.startsWith("lab-"));
+        }
+        if (status==="complete") {
+          const results=await Promise.allSettled([
+            readWeeklyDemand(week.start,{DB:env.DB,fresh:true}),
+            readWeeklyDemand(addDays(week.start,-7),{DB:env.DB,fresh:true}),
+            readExpenses({db:env.DB,env,week,now,fresh:true}),readPurchases({now,fresh:true}),
+            readCoffeeC({now,fresh:true}),readRoasteryLab(env.DB,now),readDispatchStatus({weekStart:week.start,env,now}),
+          ]);
+          const [demand,priorDemand,expenses,purchases,coffeeC,lab,dispatch]=results.map(result=>result.status==="fulfilled" ? result.value : null);
+          summary=sourceSyncSummary({weekly:{generatedAt:now.toISOString(),cropsterRefresh:readings.refresh,
+            metrics:{production:readings.production,green:readings.green,wholesale:dispatch?.wholesale,
+              demand:weeklyDemandComparison(demand,priorDemand),expenses}},lab:{...lab,purchases,coffeeC}});
+          summary.sources=summary.sources.filter(source=>source.id!=="stocktake");
+        }
+        summary.jobStatus=status;
+        summary.status=summary.sources.length && summary.sources.every(source=>source.status==="updated") ? "complete" : "partial";
+        summary.message=status==="running" ? "Verified Cropster sections saved. The worker is reading the remaining reports."
+          : status==="failed" ? "The Cropster update stopped. Verified sections retain their capture times."
+          : "Cropster finished. Each dashboard source retains its own status and capture time.";
+        const finishedAt=new Date();
+        if (status!=="running" && !await finishCropsterRun(env.DB,input.jobId,input.runnerId,status,summary,input.code,finishedAt))
+          return json({error:"The runner no longer owns this job."},409);
+        await saveSourceSyncLog(env.DB,input.jobId,week.start,summary,finishedAt);
+        return json({ok:true,status,updated:summary.sources.filter(source=>source.status==="updated").map(source=>source.id)});
+      }
       if (url.pathname === "/api/integrations/cropster") {
         if (request.method !== "POST") return json({ error: "Method not allowed." }, 405, { Allow: "POST" });
-        await requireCropsterWriter(request, env);
+        await requireCropsterWriter(request, env.CROPSTER_SYNC_WRITE_TOKEN);
+        if (queueEnabled(env)) return json({error:"The new Cropster worker owns current captures."},409);
         const input = await jsonInput(request, { ...labCropsterBody, maximum: 350_000 });
         if (!input || typeof input !== "object" || Array.isArray(input) || input.schemaVersion !== "1.0" ||
           !validSyncJobId(input.jobId) || Object.keys(input).some(key => !["schemaVersion", "jobId", "weekStart", "result", "status"].includes(key)) ||

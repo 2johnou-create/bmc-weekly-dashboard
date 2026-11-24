@@ -606,6 +606,18 @@ function detailName(snapshot) {
   return name;
 }
 
+export function parseSignatureBlendIds(snapshot) {
+  sourceUrl(snapshot, "/app/roast/blend-profiles");
+  const find = expected => {
+    const matches = links(snapshot, /^\/(?:app|apps)\/roast\/blend-profiles\/[A-Za-z0-9_-]+$/)
+      .filter(link => compact(link.text).toLowerCase() === expected);
+    const ids = new Set(matches.map(link => new URL(link.href, CROPSTER_ORIGIN).pathname.split("/").at(-1)));
+    if (ids.size !== 1) throw new ReaderError("CROPSTER_RECIPE_UNCONFIGURED");
+    return [...ids][0];
+  };
+  return {libertyBlend:find("liberty blend"),rhythmBlend:find("rhythm blend")};
+}
+
 export function parseBlend(snapshot, id, signature) {
   sourceUrl(snapshot, "/app/roast/blend-profiles/" + id);
   const table = tableWith(snapshot, ["profile group", "% of blend"]);
