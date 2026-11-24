@@ -201,12 +201,41 @@ export default {
             decafGroup:saved.decafProfileGroupId || null};
           return json({ok:true,job:{...job,profileIds}});
         }
-        if (!validSyncJobId(input.jobId) || !["heartbeat","checkpoint","complete","failed"].includes(input.action)) throw new HttpError("Invalid runner event.");
+        if (!validSyncJobId(input.jobId) || !["heartbeat","components","checkpoint","complete","failed"].includes(input.action)) throw new HttpError("Invalid runner event.");
         const row=await findQueuedRun(env.DB,input.jobId,week.start);
         if (row?.phase===input.action && ["complete","failed"].includes(input.action)) return json({ok:true,status:row.phase});
         const lease=await renewCropsterRun(env.DB,input.jobId,input.runnerId,now);
         if (!lease) return json({error:"The runner no longer owns this job."},409);
         if (input.action==="heartbeat") return json({ok:true});
+        if (input.action==="components") {
+          const components=input.result;
+          if (!components || typeof components!=="object" || Array.isArray(components) ||
+            !Object.keys(components).length || Object.keys(components).some(key=>!["green","monday","inventory"].includes(key)))
+            throw new HttpError("Invalid independent Cropster reading.");
+          const sources=[];
+          for (const [name,reading] of Object.entries(components)) {
+            const time=Date.parse(reading?.at);
+            const sourceId=name==="inventory" ? "lab-inventory" : name;
+            if (!Number.isFinite(time) || time<Math.max(lease.claimed_at,now.getTime()-5*60_000) || time>now.getTime()+120_000) continue;
+            const observed=new Date(time);
+            try {
+              if (name==="green") {
+                if (reading.data?.location!=="Marrickville") continue;
+                await saveCropsterGreenStock(env.DB,{kg:reading.data.kg,value:reading.data.value},observed);
+              } else if (name==="monday") await saveCropsterMonday(env.DB,{weekStart:week.start,roastedKg:reading.data?.roastedKg},week.start,observed);
+              else await saveLabCropster(env.DB,{inventory:reading.data},observed);
+              sources.push({id:sourceId,label:name==="inventory" ? "Cropster Lab inventory" : name==="green" ? "Cropster Marrickville stock" : "Cropster Monday output",
+                status:"updated",asOf:observed.toISOString()});
+            } catch { /* A failed source section cannot overwrite its last trusted capture. */ }
+          }
+          if (!sources.length) return json({error:"No independent reading could be saved."},422);
+          const prior=await readSourceSyncLog(env.DB,input.jobId,week.start);
+          const merged=new Map((prior?.sources || []).map(source=>[source.id,source]));
+          for (const source of sources) merged.set(source.id,source);
+          await saveSourceSyncLog(env.DB,input.jobId,week.start,{status:"partial",jobStatus:"running",sources:[...merged.values()],
+            message:"Verified Cropster inventory and Monday figures are captured independently."},now);
+          return json({ok:true,updated:sources.map(source=>source.id)});
+        }
         const status=input.action==="checkpoint" ? "running" : input.action;
         let readings;
         if (input.result) {
@@ -392,7 +421,9 @@ export default {
         catch { return json({ error: "Choose this week or an earlier Monday." }, 400); }
         if (fresh && week.isCurrent) {
           await fetchSourceJson(SOURCE_ORIGINS.stockroom + "/api/inventory", { Cookie: session.stockroomCookie, Origin: SOURCE_ORIGINS.stockroom });
-          await readCurrentCropster({ env, weekStart: week.start, followingWeekStart: addDays(week.start, 7), fresh: true, jobId: requestedSyncJob(url, week.start) });
+          const jobId=requestedSyncJob(url,week.start);
+          if (queueEnabled(env)) await coordinateDashboardSync({env,weekStart:week.start,jobId,mode:'manual'});
+          else await readCurrentCropster({env,weekStart:week.start,followingWeekStart:addDays(week.start,7),fresh:true,jobId});
         }
         const [data, demand, notes, online] = await Promise.all([
           collectDashboard({ weekStart: week.start, stockroomCookie: session.stockroomCookie, env }),

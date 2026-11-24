@@ -110,6 +110,25 @@ test("daily scheduled output scales the current total to remaining green input a
   assert.deepEqual([...day.lotKg], [["PG-0901", 20]]);
 });
 
+test("an empty schedule definition cannot invalidate reconciled batch, profile and lot totals", () => {
+  const source = schedule("2026-02-06");
+  const coffee = source.tables[0];
+  const empty = coffee.headers.map(header => header === "Profile" ? "Empty seasonal schedule" :
+    header === "Type" ? "Pre-roast blend" : "");
+  coffee.rows.push(empty);
+  coffee.pagination = "Show 1 - 2 of 2";
+  const parsed = parseScheduleDay(source, "2026-02-06", range);
+  assert.equal(parsed.greenKg,20);
+  assert.equal(parsed.pendingBatchCount,1);
+  for (const label of ["Estimated output","To roast"]) {
+    const column=coffee.headers.findIndex(header=>header.toLowerCase().endsWith(label.toLowerCase()));
+    assert.ok(column>=0);
+    empty[column] = "3 kg";
+    assert.throws(() => parseScheduleDay(source,"2026-02-06",range),/CROPSTER_SCHEDULE_AMBIGUOUS/);
+    empty[column] = "";
+  }
+});
+
 test("partly completed post-roast blends apply each component's own output ratio", () => {
   const snapshot = schedule("2026-02-06", {
     pending: "30 kg\nComponent A: 10 kg\nComponent B: 20 kg",

@@ -487,6 +487,13 @@ test('the pull worker owns and persists its checkpoint without contacting Render
     assert.equal((await send({action:'heartbeat',jobId,runnerId:crypto.randomUUID()})).status,409);
     assert.equal((await send({action:'heartbeat',jobId})).status,200);
     const capture={...observation(week(),40),scheduledBatches:{greenKg:40,batches:2}};
+    const components=await send({action:'components',jobId,result:{
+      green:{at:capture.greenObservedAt,data:capture.green},monday:{at:capture.mondayObservedAt,data:{roastedKg:capture.mondayRoastedKg}},
+      inventory:{at:capture.labObservedAt.inventory,data:capture.lab.inventory},
+    }});
+    assert.equal(components.status,200);
+    assert.deepEqual(components.body.updated,['green','monday','lab-inventory']);
+    assert.equal(await db.prepare('SELECT recorded_at FROM dashboard_cropster_readings WHERE week_start=?').bind(week()).first(),null);
     const checkpoint=await send({action:'checkpoint',jobId,result:capture});
     assert.equal(checkpoint.status,200);
     assert.equal((await db.prepare("SELECT green_kg FROM dashboard_cropster_scheduled_batches WHERE week_start=?").bind(week()).first()).green_kg,40);

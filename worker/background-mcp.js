@@ -1,3 +1,4 @@
+import { auditCropsterSync, cropsterAuditTool } from './cropster-sync-audit.js';
 import { coordinateDashboardSync } from './source-coordinator.js';
 import { privateTallyTool, saveVerifiedTally } from './private-tally.js';
 import { dashboardWeek, validDate, mondayOf } from './metrics.js';
@@ -12,13 +13,13 @@ const response = (value, status = 200) => Response.json(value, {status, headers:
   'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff',
 }});
 const tools = [
-  {name: 'refresh_dashboard_sources', description: 'Start or join the current-week dashboard source update when it is due. Wakes the free Cropster website reader and saves verified source readings. Returns progress and per-source status without business figures. Only the dashboard owner can run this tool.',
+  {name: 'refresh_dashboard_sources', description: 'Start or join the current-week dashboard source update when it is due. Queues a capture for the Cropster website worker and reports its progress. Returns progress and per-source status without business figures. Only the dashboard owner can run this tool.',
     inputSchema: {type:'object', properties:{}, additionalProperties:false},
     annotations: {readOnlyHint:false, destructiveHint:false, idempotentHint:true, openWorldHint:true}},
   {name: 'check_dashboard_sync', description: 'Advance and check a saved dashboard update. Reuse its jobId and weekStart until status is complete or failed. Completed results remain available after the temporary reader record expires. Returns progress and per-source status without business figures.',
     inputSchema: {type:'object', properties:{jobId:{type:'string', pattern:uuid.source}, weekStart:{type:'string', pattern:'^20[0-9]{2}-[0-9]{2}-[0-9]{2}$'}}, required:['jobId'], additionalProperties:false},
     annotations: {readOnlyHint:false, destructiveHint:false, idempotentHint:true, openWorldHint:true}},
-  privateTallyTool,
+  privateTallyTool, cropsterAuditTool,
 ];
 
 async function inputJson(request) {
@@ -71,8 +72,8 @@ export async function handleDashboardMcp(request, env, {coordinate = coordinateD
   const fail = (code, message, status = 200) => response({jsonrpc:'2.0', id, error:{code,message}}, status);
   const ok = result => response({jsonrpc:'2.0', id, result});
   if (!plain(input) || input.jsonrpc !== '2.0' || typeof input.method !== 'string') return fail(-32600,'Invalid MCP request.',400);
-  if (input.method === 'server/discover') return ok({supportedVersions:versions, capabilities:{tools:{}}, serverInfo:{name:'BMC Weekly Dashboard',version:'47'}});
-  if (input.method === 'initialize') return ok({protocolVersion:versions.includes(input.params?.protocolVersion) ? input.params.protocolVersion : versions[0], capabilities:{tools:{}}, serverInfo:{name:'BMC Weekly Dashboard',version:'47'}});
+  if (input.method === 'server/discover') return ok({supportedVersions:versions, capabilities:{tools:{}}, serverInfo:{name:'BMC Weekly Dashboard',version:'50'}});
+  if (input.method === 'initialize') return ok({protocolVersion:versions.includes(input.params?.protocolVersion) ? input.params.protocolVersion : versions[0], capabilities:{tools:{}}, serverInfo:{name:'BMC Weekly Dashboard',version:'50'}});
   if (input.method === 'notifications/initialized') return new Response(null,{status:204});
   if (input.method === 'ping') return ok({});
   if (input.method === 'tools/list') return ok({tools});
@@ -86,6 +87,13 @@ export async function handleDashboardMcp(request, env, {coordinate = coordinateD
       const saved=await saveVerifiedTally(env.DB,input.params.arguments,now);
       return ok({content:[{type:'text',text:JSON.stringify(saved)}],structuredContent:saved});
     } catch { return ok({content:[{type:'text',text:'The dated workbook reading could not be verified or saved.'}],isError:true}); }
+  }
+  if (input.params.name === cropsterAuditTool.name) {
+    if (!plain(args) || Object.keys(args).length) return fail(-32602,'The audit takes no arguments.');
+    try {
+      const audit=await auditCropsterSync(env.DB,now);
+      return ok({content:[{type:'text',text:JSON.stringify(audit)}],structuredContent:audit});
+    } catch { return ok({content:[{type:'text',text:'The live source audit could not be read.'}],isError:true}); }
   }
   const check = input.params.name === 'check_dashboard_sync';
   if (!plain(args) || Object.keys(args).some(key=>!(check ? ['jobId','weekStart'] : []).includes(key)) ||

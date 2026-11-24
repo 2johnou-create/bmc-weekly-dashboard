@@ -144,7 +144,7 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
     } catch { throw new ReaderError("CROPSTER_AUTH_REQUIRED"); }
   }
 
-  async function read(weekStart, { scope = "weekly", onProgress, onCapture, refreshControl = createRefreshControl() } = {}) {
+  async function read(weekStart, { scope = "weekly", onProgress, onCapture, onIndependentCapture, refreshControl = createRefreshControl() } = {}) {
     if (!["weekly", "all"].includes(scope)) throw new ReaderError("INVALID_REQUEST", 400);
     const startedAt = now();
     const range = weekRange(weekStart, startedAt);
@@ -498,6 +498,14 @@ export function createBrowserReader(configuration, { now = () => new Date(), lau
           optional(async () => { const record = await view(mondayPath, "production", snapshot => parseRoastedOutput(snapshot, mondayRange), "weekly_monday"); mondayObservedAt = now().toISOString(); return record; }, "MONDAY_ROASTED_UNAVAILABLE"),
         ]);
         if (freshInventory) inventoryRecord = freshInventory;
+        if (onIndependentCapture) {
+          await onIndependentCapture({
+            ...(green ? {green:{at:greenObservedAt,data:green}} : {}),
+            ...(monday ? {monday:{at:mondayObservedAt,data:{roastedKg:monday.roastedKg}}} : {}),
+            ...(freshInventory && scope==="all" ? {inventory:{at:inventoryObservedAt,data:freshInventory}} : {}),
+          });
+        }
+
         for (let attempt = 0; attempt < 2; attempt++) {
           try {
             const before = await view(sourcePaths.production, "production", snapshot => parseRoastedOutput(snapshot, range), "weekly_production_before");

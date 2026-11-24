@@ -1,4 +1,4 @@
-const stagePattern = /^(?:capture|authenticate|browser_launch|browser_context|cleanup|inventory(?:_retry)?(?:_legacy)?|previous_output|previous_cost|lab_loss|lab_blend_(?:liberty|rhythm)|lab_profile_group_\d{1,2}|lab_profile_input_\d{1,2}|lab_consumption_month_[0-2]|weekly_refresh|weekly_production_(?:before|after)|weekly_schedule(?:_verify)?_(?:[0-4]|week)|weekly_roasted_cost|green_marrickville|weekly_monday)$/;
+const stagePattern = /^(?:capture|authenticate|browser_launch|browser_context|cleanup|inventory(?:_retry)?(?:_legacy)?|previous_output|previous_cost|lab_loss|lab_blend_(?:liberty|rhythm|list)|lab_profile_group_\d{1,2}|lab_profile_input_\d{1,2}|lab_consumption_month_[0-2]|weekly_refresh|weekly_production_(?:before|after)|weekly_schedule(?:_verify)?_(?:[0-4]|week)|weekly_roasted_cost|green_marrickville|weekly_monday)$/;
 const states = new Set(["running", "complete", "failed", "retry"]);
 const phases = new Set(["open", "navigate", "ready", "filters", "pagination", "parse", "close", "deadline"]);
 

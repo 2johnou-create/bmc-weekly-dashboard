@@ -9,7 +9,7 @@ const make = (method, params, owner, id = 1) => new Request('https://dashboard.t
 test('background source tools disclose only tool metadata until the trusted Sites owner identity is present', async () => {
   const coordinate = () => assert.fail('Other viewers must never start the source reader');
   const listed = await handleDashboardMcp(make('tools/list'),{}, {coordinate,now});
-  assert.deepEqual((await listed.json()).result.tools.map(tool=>tool.name),['refresh_dashboard_sources','check_dashboard_sync','save_verified_roast_tally']);
+  assert.deepEqual((await listed.json()).result.tools.map(tool=>tool.name),['refresh_dashboard_sources','check_dashboard_sync','save_verified_roast_tally','audit_dashboard_sync']);
   for (const owner of [undefined,'someone@example.com']) {
     const reply = await handleDashboardMcp(make('tools/call',{name:'refresh_dashboard_sources',arguments:{}},owner),{}, {coordinate,now});
     assert.equal(reply.status,403);

@@ -68,6 +68,12 @@ async function capture() {
       onProgress:event=>{
         if (['complete','failed'].includes(event.state)) console.log(JSON.stringify({stage:event.stage,state:event.state,code:event.code,at:event.at}));
       },
+      onIndependentCapture:async result=>{
+        if (leaseLost) throw new Error('RUNNER_LEASE_LOST');
+        if (!Object.keys(result).length) return;
+        const reply=await sendEvent('components',{result});
+        console.log('Independent Cropster readings saved: '+(reply.updated || []).join(', '));
+      },
       onCapture:async result=>{
         if (leaseLost) throw new Error('RUNNER_LEASE_LOST');
         const reply=await sendEvent('checkpoint',{result});

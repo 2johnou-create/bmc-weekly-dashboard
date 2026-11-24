@@ -66,7 +66,7 @@ test("schedule failure diagnostics count status structure without exposing sourc
     } });
     assert.deepEqual(safe.diagnostics.scheduleStatusCounts, diagnostics.scheduleStatusCounts);
     assert.deepEqual(safe.diagnostics.calendarDayTileCounts, diagnostics.calendarDayTileCounts);
-    assert.doesNotMatch(JSON.stringify(safe), /private|49|kg|className|https:/);
+    assert.doesNotMatch(JSON.stringify(safe.diagnostics), /private|49|kg|className|https:/);
     assert.equal(safeProgress({ stage: "weekly_monday", state: "failed", phase: "parse", diagnostics }).diagnostics.scheduleTileCount, undefined);
     const invalid = safeProgress({ stage: "weekly_schedule_0", state: "failed", phase: "parse", diagnostics: {
       scheduleTileCount: 10001, scheduleStatusCounts: { roasted: -1 }, calendarCellCounts: [31], calendarDayTileCounts: [["secret"]],

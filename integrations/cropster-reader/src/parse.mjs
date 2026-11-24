@@ -229,7 +229,13 @@ function parsePendingTables(snapshot, remainingHeader, totalHeader, outputHeader
   if (!close(greenKg, sum([...lotKg.values()]))) throw new ReaderError("CROPSTER_SCHEDULE_AMBIGUOUS");
   const batchGreenKg = sum(batches.filter(row => !completedBatch(row)).map(row => row.kg));
   const totalGreenKg = sum(batches.map(row => row.kg));
-  const summaryTotal = coffees.rows.map(row => kilograms(row[coffees.index(totalHeader)]));
+  // Cropster retains empty schedule definitions in Scheduled coffees even
+  // when that definition generated no batch for the selected period.
+  const summaryTotal = coffees.rows.map(row => {
+    const total = trim(row[coffees.index(totalHeader)]);
+    if (!total && !trim(row[coffees.index(remainingHeader)]) && !trim(row[coffees.index(outputHeader)])) return 0;
+    return kilograms(total);
+  });
   // A repeating schedule's coffee-level Total # of batches is a lifetime
   // count. The profile summary is scoped by the same dated period headers.
   const profiles = tableWith(snapshot, ["profile", "# of batches", remainingHeader, totalHeader]);
