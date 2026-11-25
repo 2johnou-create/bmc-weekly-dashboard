@@ -1,3 +1,5 @@
+import { adjustedRunoutMonth, maxDemandIncrease, quarterlyIncrease } from "./quarterly-demand.js";
+
 export const roasteryLabPage = String.raw`<!doctype html>
 <html lang="en-AU">
 <head>
@@ -122,6 +124,22 @@ export const roasteryLabPage = String.raw`<!doctype html>
     .coverage-matrix .coverage-origins th { top:2.6rem; font-weight:700; overflow-wrap:anywhere; }
     .coverage-matrix .month-corner { left:0; z-index:5; width:6.7rem; }
     .coverage-matrix tbody th { position:sticky; left:0; z-index:2; background:#fafbf7; font-weight:700; }
+    .demand-controls { display:grid; gap:.65rem; padding:.8rem; margin:.65rem 0; border:1px solid #b8c4b5; border-radius:.6rem; }
+    .demand-controls legend { padding:0 .3rem; font-weight:750; }
+    .demand-quarters,.demand-breakdown { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:.55rem; }
+    .demand-quarters label { min-width:0; display:grid; gap:.2rem; font-size:.82rem; }
+    .demand-quarters input { min-width:0; width:100%; }
+    .demand-actions { display:flex; flex-wrap:wrap; align-items:center; gap:.45rem; }
+    .demand-detail { margin:.65rem 0; padding:.8rem; border:1px solid #b8c4b5; border-radius:.6rem; background:#f5f7f2; }
+    .demand-detail h3 { margin:0 0 .35rem; }
+    .demand-detail p { margin:.35rem 0; }
+    .demand-breakdown { margin:.6rem 0; }
+    .demand-breakdown div { padding:.5rem; border-radius:.35rem; background:#fff; }
+    .demand-breakdown dt { color:var(--muted); font-size:.82rem; }
+    .demand-breakdown dd { margin:.2rem 0 0; font-weight:750; font-variant-numeric:tabular-nums; }
+    .month-demand-button { display:block; width:100%; min-height:2rem; text-align:left; padding:.25rem; border:1px solid transparent; border-radius:.3rem; background:transparent; color:var(--green); font:inherit; text-decoration:underline; text-underline-offset:.2em; cursor:pointer; }
+    .month-demand-button:hover,.month-demand-button[aria-pressed="true"] { border-color:#8c9d89; background:#e6eee1; }
+    @media (max-width:600px) { .demand-quarters,.demand-breakdown { grid-template-columns:repeat(2,minmax(0,1fr)); } }
     .coverage-matrix .group-end { border-inline-end:3px solid #8c9d89; }
     .coverage-rate { display:block; font-size:.875rem; font-weight:450; color:var(--muted); margin-top:.15rem; }
     .coverage-average { display:block; margin-top:.2rem; font-size:.8125rem; font-weight:650; line-height:1.3; color:#425749; font-variant-numeric:tabular-nums; }
@@ -346,6 +364,27 @@ export const roasteryLabPage = String.raw`<!doctype html>
               <div class="coverage-legend"><span><i class="coverage-key contracted" aria-hidden="true"></i>✓ Contracted</span><span><i class="coverage-key gap" aria-hidden="true"></i>Gap · uncontracted</span><span><i class="coverage-key unknown" aria-hidden="true"></i>? Unknown</span><span><i class="coverage-key stock-runout-key" aria-hidden="true"></i>Projected runout</span></div>
               <p id="coverageAverageNote" class="coverage-average-note"></p>
               <p id="coverageStatus" class="note" hidden></p>
+              <form id="quarterlyDemand" hidden>
+                <fieldset class="demand-controls">
+                  <legend>Quarterly demand increase (%)</legend>
+                  <p class="note" id="demandHelp">Enter an increase over the current average for each quarter. Leave a quarter blank to use the average. Changes recalculate future runout and are saved in this browser.</p>
+                  <div class="demand-quarters">
+                    <label>Q1 · Jan–Mar <input id="demandQ1" type="number" min="0" max="${maxDemandIncrease}" step="any" inputmode="decimal" aria-describedby="demandHelp"></label>
+                    <label>Q2 · Apr–Jun <input id="demandQ2" type="number" min="0" max="${maxDemandIncrease}" step="any" inputmode="decimal" aria-describedby="demandHelp"></label>
+                    <label>Q3 · Jul–Sep <input id="demandQ3" type="number" min="0" max="${maxDemandIncrease}" step="any" inputmode="decimal" aria-describedby="demandHelp"></label>
+                    <label>Q4 · Oct–Dec <input id="demandQ4" type="number" min="0" max="${maxDemandIncrease}" step="any" inputmode="decimal" aria-describedby="demandHelp"></label>
+                  </div>
+                  <div class="demand-actions"><button class="button" id="applyDemand" type="submit">Apply increases</button><button class="button" id="resetDemand" type="button">Reset year</button>
+                    <p id="demandStatus" class="note" role="status"></p></div>
+                </fieldset>
+              </form>
+              <p class="note" id="monthDemandHint" hidden>Select a month to see estimated roasted demand in kg.</p>
+              <section id="monthDemand" class="demand-detail" aria-labelledby="monthDemandTitle" hidden>
+                <h3 id="monthDemandTitle" tabindex="-1"></h3>
+                <p id="monthDemandScenario" class="note"></p>
+                <dl id="monthDemandRows" class="demand-breakdown"></dl>
+                <p id="monthDemandSource" class="note"></p>
+              </section>
               <p id="coverageEmpty" class="note" hidden>Contract coverage is unavailable.</p>
               <div id="coverageScroll" class="coverage-scroll" role="region" aria-label="Yearly contract calendar. Scroll to view all coffee lanes." tabindex="0" hidden>
                 <table id="coverageMatrix" class="coverage-matrix" aria-labelledby="coverageTitle">
@@ -501,6 +540,9 @@ export const roasteryLabPage = String.raw`<!doctype html>
     </div>
   </main>
   <script>
+    const maxDemandIncrease = ${maxDemandIncrease};
+    ${quarterlyIncrease.toString()}
+    ${adjustedRunoutMonth.toString()}
     const uiBuildId = '__BMC_UI_BUILD_ID__';
     const el = id => document.getElementById(id);
     const numbers = new Intl.NumberFormat('en-AU', { maximumFractionDigits: 2 });
@@ -525,6 +567,10 @@ export const roasteryLabPage = String.raw`<!doctype html>
     let priceVersion;
     let consumptionVersion;
     let coverageData = null, coverageYear = null;
+    let selectedDemandMonth = null, demandBaseline = null, displayedDemandYear = null;
+    const quarterNumbers = [1, 2, 3, 4];
+    const quarterlyDemandKey = 'bmc-lab-quarterly-demand-v1';
+    const demandIncreases = readDemandIncreases();
     let purchases;
     let purchaseRenderDay;
     let purchaseMonth = todaySydney().slice(0, 7);
@@ -809,7 +855,7 @@ export const roasteryLabPage = String.raw`<!doctype html>
     function projectedPoolMonth(pool) {
       return pool && ['recorded', 'partial'].includes(pool.status) && Number.isFinite(pool.totalKg) && pool.totalKg >= 0
         && Number.isFinite(pool.avgMonthlyKg) && pool.avgMonthlyKg > 0 && /^\d{4}-(0[1-9]|1[0-2])$/.test(pool.depletionMonth || '')
-        ? pool.depletionMonth : null;
+        ? adjustedRunoutMonth(pool, coverageData?.currentMonth, demandIncreases) : null;
     }
     function poolLocations(locations) {
       const list = node('ul', undefined, 'location-list');
@@ -833,7 +879,7 @@ export const roasteryLabPage = String.raw`<!doctype html>
       ]) {
         const item = node('div'); item.append(node('dt', label), node('dd', value)); inputs.append(item);
       }
-      root.append(inputs, node('p', 'Runout uses the last three completed months of pooled green use across linked lots. Recipe percentages do not allocate this shared quantity or consumption.', 'note'));
+      root.append(inputs, node('p', 'Runout starts with the last three completed months of pooled green use. Quarterly increases raise the projected use for linked pools during those months.', 'note'));
       if (pool.note) root.append(node('p', pool.note, 'note'));
       if (pool.profileNames?.length) root.append(node('p', 'Profile groups · ' + pool.profileNames.join(' · '), 'note'));
       if (pool.profileGroupIds?.length) root.append(node('p', 'Profile-group IDs · ' + pool.profileGroupIds.join(', '), 'note'));
@@ -890,6 +936,100 @@ export const roasteryLabPage = String.raw`<!doctype html>
         return details;
       }));
     }
+    function readDemandIncreases() {
+      try {
+        const saved = JSON.parse(localStorage.getItem(quarterlyDemandKey) || '{}');
+        return Object.fromEntries(Object.entries(saved || {}).filter(([key, value]) =>
+          /^\d{4}-Q[1-4]$/.test(key) && Number.isFinite(value) && value > 0 && value <= maxDemandIncrease));
+      } catch { return {}; }
+    }
+    function renderDemandYear() {
+      const groups = coverageData?.groups ?? [];
+      const forecastYears = groups.flatMap(group => group.columns.map(column => Number(projectedPoolMonth(column.runout)?.slice(0, 4))));
+      const years = [...new Set([...(coverageData?.years ?? []), ...forecastYears].filter(Number.isInteger))].sort((a, b) => a - b);
+      if (!years.includes(coverageYear)) {
+        coverageYear = years.includes(coverageData?.currentYear) ? coverageData.currentYear : years[0] ?? null;
+        selectedDemandMonth = null;
+      }
+      const year = el('coverageYear');
+      if ([...year.options].map(option => Number(option.value)).join(',') !== years.join(',')) {
+        year.replaceChildren(...years.map(value => {
+          const option = node('option', String(value)); option.value = String(value); return option;
+        }));
+      }
+      year.disabled = !years.length;
+      year.value = coverageYear === null ? '' : String(coverageYear);
+    }
+    function renderDemandControls(reset = false) {
+      const currentMonth = coverageData?.currentMonth;
+      const visible = Number.isInteger(coverageYear) && Boolean(currentMonth);
+      el('quarterlyDemand').hidden = !visible;
+      if (!visible) return;
+      const period = coverageYear + ':' + currentMonth;
+      if (!reset && displayedDemandYear === period) return;
+      displayedDemandYear = period;
+      let hasEditable = false;
+      for (const quarter of quarterNumbers) {
+        const input = el('demandQ' + quarter);
+        input.disabled = coverageYear + '-' + String(quarter * 3).padStart(2, '0') < currentMonth;
+        input.value = demandIncreases[coverageYear + '-Q' + quarter] ?? '';
+        hasEditable ||= !input.disabled;
+      }
+      el('applyDemand').disabled = !hasEditable;
+      el('resetDemand').disabled = !hasEditable;
+      el('demandStatus').textContent = hasEditable ? '' : 'Increases apply to current and future months.';
+    }
+    function renderMonthDemand() {
+      const month = selectedDemandMonth;
+      const available = Boolean(month && demandBaseline);
+      el('monthDemand').hidden = !available;
+      el('monthDemandHint').hidden = available || !coverageData?.groups?.length;
+      if (!available) return;
+      const historical = month < coverageData.currentMonth;
+      const increase = historical ? 0 : quarterlyIncrease(month, demandIncreases);
+      el('monthDemandTitle').textContent = monthText(month) + ' · Roasted demand';
+      el('monthDemandScenario').textContent = historical ? 'Baseline comparison for a past month' :
+        increase ? 'Quarterly increase of ' + percent(increase) : 'Current monthly average';
+      const rows = demandBaseline.rows || [];
+      el('monthDemandRows').replaceChildren(...rows.map(row => {
+        const item = node('div');
+        const kg = Number.isFinite(row.monthlyKg) ? row.monthlyKg * (1 + increase / 100) : null;
+        item.append(node('dt', row.name), node('dd', kg === null ? 'Unavailable' : withUnit(kg, 'kg')));
+        return item;
+      }));
+      const months = (demandBaseline.months || []).map(monthText);
+      el('monthDemandSource').textContent = 'Estimated brown coffee for the full month, based on measured Cropster output' +
+        (months.length === 3 ? ' from ' + months[0] + ' to ' + months[2] : '') + '.';
+    }
+    function selectDemandMonth(month) {
+      selectedDemandMonth = month;
+      for (const button of el('coverageMonths').querySelectorAll('.month-demand-button')) {
+        button.setAttribute('aria-pressed', String(button.dataset.demandMonth === month));
+      }
+      renderMonthDemand();
+      const heading = el('monthDemandTitle');
+      heading.focus({ preventScroll:true });
+      heading.scrollIntoView({ block:'nearest' });
+    }
+    function saveDemandIncreases(reset = false) {
+      if (!Number.isInteger(coverageYear)) return;
+      for (const quarter of quarterNumbers) {
+        const input = el('demandQ' + quarter);
+        if (input.disabled) continue;
+        const key = coverageYear + '-Q' + quarter;
+        if (reset || !input.valueAsNumber) delete demandIncreases[key];
+        else demandIncreases[key] = input.valueAsNumber;
+      }
+      let saved = true;
+      try { localStorage.setItem(quarterlyDemandKey, JSON.stringify(demandIncreases)); } catch { saved = false; }
+      renderDemandYear();
+      renderDemandControls(true);
+      renderCoverageCalendar();
+      renderMonthDemand();
+      renderRunoutPools(coverageData?.runoutPools);
+      el('demandStatus').textContent = reset ? 'Restored the current average for this year.' :
+        saved ? 'Increases applied and saved in this browser.' : 'Increases applied for this visit.';
+    }
     function renderCoverageCalendar() {
       const groups = (coverageData?.groups || []).filter(group => Array.isArray(group.columns) && group.columns.length);
       const columns = groups.flatMap(group => group.columns.map(column => ({ ...column, group: group.name })));
@@ -905,6 +1045,7 @@ export const roasteryLabPage = String.raw`<!doctype html>
       const open = new Set([...el('coverageMonths').querySelectorAll('details[open]')].map(item => item.dataset.coverageKey));
       const lotsOpen = new Set([...el('coverageMonths').querySelectorAll('details.runout-lots[open]')].map(item => item.dataset.poolId));
       const focused = document.activeElement?.closest('.coverage-cell')?.dataset.coverageKey;
+      const focusedMonth = document.activeElement?.closest('.month-demand-button')?.dataset.demandMonth;
       const groupRow = node('tr', undefined, 'coverage-group');
       const monthHeader = node('th', 'Month', 'month-corner');
       monthHeader.scope = 'col'; monthHeader.rowSpan = 2;
@@ -936,8 +1077,16 @@ export const roasteryLabPage = String.raw`<!doctype html>
         const current = month === coverageData.currentMonth;
         const row = node('tr', undefined, current ? 'coverage-current' : '');
         const label = new Intl.DateTimeFormat('en-AU', { timeZone: 'UTC', month: 'short' }).format(new Date(month + '-01T12:00:00Z'));
-        const header = node('th', label);
+        const header = node('th');
         header.scope = 'row';
+        const monthButton = node('button', label, 'month-demand-button');
+        monthButton.type = 'button';
+        monthButton.dataset.demandMonth = month;
+        monthButton.setAttribute('aria-label', 'Show roasted demand for ' + monthText(month));
+        monthButton.setAttribute('aria-controls', 'monthDemand');
+        monthButton.setAttribute('aria-pressed', String(selectedDemandMonth === month));
+        monthButton.addEventListener('click', () => selectDemandMonth(month));
+        header.append(monthButton);
         if (current) { header.append(node('small', 'Current')); header.setAttribute('aria-current', 'date'); }
         row.append(header);
         for (const group of groups) group.columns.forEach((column, columnIndex) => {
@@ -982,23 +1131,17 @@ export const roasteryLabPage = String.raw`<!doctype html>
       el('coverageScroll').scrollLeft = left;
       el('coverageScroll').scrollTop = top;
       if (focused) [...el('coverageMonths').querySelectorAll('.coverage-cell')].find(item => item.dataset.coverageKey === focused)?.querySelector('summary')?.focus({ preventScroll: true });
+      if (focusedMonth) [...el('coverageMonths').querySelectorAll('.month-demand-button')].find(item => item.dataset.demandMonth === focusedMonth)?.focus({ preventScroll:true });
     }
     function renderCoverage(coverage, consumption) {
       coverageData = coverage || {};
       const averageMonths = (coverageData.twoMonthAverageMonths || []).map(monthText).filter(Boolean);
       el('coverageAverageNote').textContent = 'Pooled Cropster 2-month average: ' + (averageMonths.length === 2 ? averageMonths.join(' and ') : 'last two completed months') + ', in kg/month. Shared pool rates repeat across blends. Projected runout uses the 3-month average.';
-      const years = [...new Set((coverageData.years || []).filter(Number.isInteger))].sort((a, b) => a - b);
-      if (!years.includes(coverageYear)) coverageYear = years.includes(coverageData.currentYear) ? coverageData.currentYear : years.at(0) ?? null;
-      const year = el('coverageYear');
-      const options = [...year.options].map(option => Number(option.value));
-      if (options.join(',') !== years.join(',')) {
-        year.replaceChildren(...years.map(value => {
-          const option = node('option', String(value)); option.value = String(value); return option;
-        }));
-      }
-      year.disabled = !years.length;
-      year.value = coverageYear === null ? '' : String(coverageYear);
+      demandBaseline = consumption.roastedDemand ?? null;
+      renderDemandYear();
+      renderDemandControls();
       renderCoverageCalendar();
+      renderMonthDemand();
       el('coverageStatus').textContent = coverageData.status === 'unavailable' ? 'Contract plan unavailable. Missing coverage appears in grey.'
         : coverageData.status === 'partial' ? 'Partial coverage · check the source notes.' : '';
       el('coverageStatus').hidden = !el('coverageStatus').textContent;
@@ -1387,6 +1530,11 @@ export const roasteryLabPage = String.raw`<!doctype html>
       consumptionVersion = undefined;
       coverageData = null;
       coverageYear = null;
+      selectedDemandMonth = null;
+      demandBaseline = null;
+      displayedDemandYear = null;
+      el('monthDemandRows').replaceChildren();
+      el('monthDemand').hidden = true;
       purchases = undefined;
       purchaseRenderDay = undefined;
       purchaseMonth = todaySydney().slice(0, 7);
@@ -1499,10 +1647,18 @@ export const roasteryLabPage = String.raw`<!doctype html>
     });
     el('coverageYear').addEventListener('change', event => {
       const year = Number(event.target.value);
-      if (!coverageData?.years?.includes(year)) return;
+      if (![...event.target.options].some(option => Number(option.value) === year)) return;
       coverageYear = year;
+      selectedDemandMonth = null;
+      renderDemandControls();
       renderCoverageCalendar();
+      renderMonthDemand();
     });
+    el('quarterlyDemand').addEventListener('submit', event => {
+      event.preventDefault();
+      saveDemandIncreases();
+    });
+    el('resetDemand').addEventListener('click', () => saveDemandIncreases(true));
     el('purchasePrevious').addEventListener('click', () => changePurchaseMonth(-1));
     el('purchaseNext').addEventListener('click', () => changePurchaseMonth(1));
     el('purchaseToday').addEventListener('click', () => {

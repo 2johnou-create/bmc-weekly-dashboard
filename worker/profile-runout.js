@@ -151,12 +151,14 @@ export function buildRunoutPools(data = {}, today) {
     if (avgMonthlyKg === null) notes.push("Three complete months with unambiguous consumption lot identities are needed.");
     else if (avgMonthlyKg === 0) notes.push("No related green use was recorded in the three-month window, so no runout month is projected.");
     if (availabilityUnknown) notes.push("This is a quantity coverage estimate. Additional contract arrival timing is unverified or future; timely delivery is not guaranteed.");
-    else notes.push("Assumes steady use; arrival timing and substitutions are not modeled. Contract calendar colours do not add kilograms.");
+    else notes.push("Baseline assumes steady use; arrival timing and substitutions are not modeled. Contract calendar colours do not add kilograms.");
     return {
       poolId: "pool:" + profileGroupIds[0], profileGroupIds, profileNames: group.sort((left, right) => left.id.localeCompare(right.id)).map(profile => profile.name), usedFor: [...usedFor].sort(),
       status: completeLinks && validInventory && completeContracts && avgMonthlyKg !== null && !availabilityUnknown && !partialOverlap ? "recorded" : "partial",
       totalKg: round(totalKg), inventoryKg: round(inventoryKg), additionalContractKg: round(additionalContractKg),
-      avgMonthlyKg: round(avgMonthlyKg), twoMonthAverageKg: round(twoMonthAverageKg), lotCount: lotIds.length, lotRows,
+      avgMonthlyKg: round(avgMonthlyKg),
+      ...(totalKg !== null && avgMonthlyKg !== null ? { projectionInputs: { quantityKg: totalKg, monthlyKg: avgMonthlyKg } } : {}),
+      twoMonthAverageKg: round(twoMonthAverageKg), lotCount: lotIds.length, lotRows,
       locations: [...locations.values()].sort((left, right) => left.name.localeCompare(right.name, "en-AU")).map(position => ({ ...position, kg: round(position.kg) })),
       depletionMonth: partialOverlap ? null : finishMonth(stock.asOf, totalKg, avgMonthlyKg), note: notes.join(" "), asOf: validDate(stock.asOf) ? stock.asOf : null,
     };

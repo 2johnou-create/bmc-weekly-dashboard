@@ -487,6 +487,38 @@ export function mergeGreenCoverage(consumption = {}, prices = {}, contracts = {}
   };
 }
 
+function roastedDemandBaseline(recipes = {}, loss = {}, period, today) {
+  const end = new Date(today.slice(0, 7) + "-01T00:00:00Z");
+  end.setUTCDate(0);
+  const completePeriod = loss.from === period[0] + "-01" && loss.asOf === end.toISOString().slice(0, 10);
+  const groupNames = new Map((recipes.runoutProfiles ?? []).map(profile => [profile.id, key(profile.name)]));
+  const measurements = new Map();
+  for (const row of loss.rows ?? []) {
+    const name = key(row.name);
+    measurements.set(name, measurements.has(name) ? null : knownQuantity(row.roastedKg));
+  }
+
+  const assignments = new Map([...signatureNames, "Decaf"].map(name => {
+    const recipe = (recipes.rows ?? []).find(row => row.signature === name);
+    const ids = name === "Decaf" ? [recipes.decafProfileGroupId] : (recipe?.components ?? []).map(component => component.profileGroupId);
+    return [name, ids.map(id => groupNames.get(id))];
+  }));
+  const owners = new Map();
+  for (const groups of assignments.values()) {
+    for (const group of groups) owners.set(group, (owners.get(group) ?? 0) + 1);
+  }
+  return {
+    months: period,
+    rows: [...assignments].map(([name, groups]) => {
+      // Use measured group output once. A recipe total in the same report
+      // duplicates its components, and a shared group cannot be allocated.
+      const values = groups.map(group => owners.get(group) === 1 ? measurements.get(group) : null);
+      const known = completePeriod && values.length && values.every(Number.isFinite);
+      return { name, monthlyKg: known ? sum(values) / period.length : null };
+    }),
+  };
+}
+
 export function labReport(data = {}, today = sydneyDate()) {
   const stock = groupStock(data.inventory);
   const prices = priceReport(stock, data.recipes, data.loss, today);
@@ -556,6 +588,7 @@ export function labReport(data = {}, today = sydneyDate()) {
       forecasts,
       origins,
       runoutPools: buildRunoutPools(data, today),
+      roastedDemand: roastedDemandBaseline(data.recipes, data.loss, period, today),
       decafProfileGroupId: data.recipes?.decafProfileGroupId ?? null,
       twoMonthAverageMonths: period.slice(-2),
       note: sumKg === null ? "Three completed Cropster months are needed for the average." :
